@@ -45,6 +45,17 @@ body{
 }
 .pill.ok{color:var(--long);background:var(--okbg);border-color:rgba(34,197,94,.35)}
 .pill.bad{color:var(--short);background:var(--badbg);border-color:rgba(239,68,68,.35)}
+.pill.link{
+  color:#cdd6e3;
+  text-decoration:none;
+  display:inline-flex;
+  align-items:center;
+}
+.pill.link:hover{
+  border-color:#58a6ff;
+  color:#ffffff;
+  background:rgba(37,99,235,.18);
+}
 
 .regime-row{
   display:flex;gap:12px;align-items:center;flex-wrap:wrap;
@@ -255,6 +266,7 @@ body{
     <div class="top">
       <div class="title"><span>BTC</span> Quant Terminal <span style="display:inline-block; width:10px; height:10px; background:#00c853; border-radius:50%; margin-left:12px; animation: livePulse 1.5s ease-in-out infinite;"></span></div>
       <div class="pills">
+        <a class="pill link" href="/terminal">Multi-Asset Terminal</a>
         <div id="ws-pill" class="pill">WS: connecting</div>
         <div id="sig-pill" class="pill">Signal API: checking</div>
         <div class="pill ok">Update: 15s</div>
@@ -416,6 +428,9 @@ body{
       <div style="padding:10px 16px; font-size:14px; font-weight:600; color:#e6edf3; border-bottom:1px solid #30363d;">
         Signal History
       </div>
+      <div id="multi-open-warning" style="display:none; padding:8px 16px; font-size:12px; color:#ffb74d; background:rgba(255,152,0,.08); border-bottom:1px solid #30363d;">
+        ⚠️ Multiple open positions detected — check cooldown settings
+      </div>
       <div style="overflow-x:auto; max-height:300px; overflow-y:auto;">
         <table style="width:100%; border-collapse:collapse; font-size:12px; font-family:'JetBrains Mono',monospace;">
           <thead>
@@ -482,9 +497,51 @@ let openTradeSignal = "LONG";
 let sessionDayKey = null;
 let sessionHigh = null;
 let sessionLow = null;
+const API_CACHE = new Map();
+const API_INFLIGHT = new Map();
 const sparkPrices = [];
 const sparkCanvas = document.getElementById("price-spark");
 const sparkCtx = sparkCanvas ? sparkCanvas.getContext("2d") : null;
+
+function apiTtl(url){
+  if(url.includes("/api/btc/signal/history")) return 7000;
+  if(url.includes("/api/btc/signal?")) return 5000;
+  if(url.includes("/api/btc/candles")) return 15000;
+  if(url.includes("/api/btc/markers")) return 60000;
+  if(url.includes("/api/btc/news")) return 120000;
+  return 8000;
+}
+async function fetchJSON(url, opts = {}){
+  const ttl = Number(opts.ttlMs ?? apiTtl(String(url)));
+  const timeoutMs = Number(opts.timeoutMs ?? 8000);
+  const useCache = !opts.noCache;
+  const key = `GET:${url}`;
+  const now = Date.now();
+  if(useCache){
+    const c = API_CACHE.get(key);
+    if(c && (now - c.ts) < ttl) return c.data;
+    const pending = API_INFLIGHT.get(key);
+    if(pending) return pending;
+  }
+  const p = (async()=>{
+    const ctrl = new AbortController();
+    const timer = setTimeout(()=>ctrl.abort(), timeoutMs);
+    try{
+      const res = await fetch(url, { signal: ctrl.signal });
+      if(!res.ok) return null;
+      const data = await res.json();
+      if(useCache && ttl > 0) API_CACHE.set(key, { ts: Date.now(), data });
+      return data;
+    }catch{
+      return null;
+    }finally{
+      clearTimeout(timer);
+      API_INFLIGHT.delete(key);
+    }
+  })();
+  if(useCache) API_INFLIGHT.set(key, p);
+  return p;
+}
 
 function normalizeSignal(s){
   const x=(s||"HOLD").toUpperCase();
@@ -852,9 +909,8 @@ function updateLiveSignalMarker(signalPayload){
 
 async function loadCandles(){
   const limit = LIMIT_MAP[activeTF] || 200;
-  const res = await fetch(`/api/btc/candles?interval=${encodeURIComponent(activeTF)}&limit=${limit}`, {cache:"no-store"});
-  if(!res.ok) throw new Error(`candles HTTP ${res.status}`);
-  const json = await res.json();
+  const json = await fetchJSON(`/api/btc/candles?interval=${encodeURIComponent(activeTF)}&limit=${limit}`, { ttlMs: 15000, timeoutMs: 9000 });
+  if(!json) throw new Error("candles fetch failed");
   const data=(json.data||[]).map(d=>({
     time:Number(d.time),
     open:Number(d.open),
@@ -876,9 +932,8 @@ async function loadSignalMarkers(){
   try{
     const markerCfg = MARKER_FETCH_MAP[activeTF] || { interval: activeTF, limit: 500 };
     markerSourceInterval = markerCfg.interval;
-    const res=await fetch(`/api/btc/markers?interval=${encodeURIComponent(markerCfg.interval)}&limit=${markerCfg.limit}`,{cache:"no-store"});
-    if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    const data=await res.json();
+    const data=await fetchJSON(`/api/btc/markers?interval=${encodeURIComponent(markerCfg.interval)}&limit=${markerCfg.limit}`, { ttlMs: 60000, timeoutMs: 9000 });
+    if(!data) throw new Error("markers fetch failed");
     const minT = points.length ? Number(points[0].time) : 0;
     const maxT = points.length ? Number(points[points.length-1].time) : Number.MAX_SAFE_INTEGER;
     let filtered=(Array.isArray(data)?data:[])
@@ -1108,12 +1163,11 @@ async function loadSignal(){
   try{
     hasOpenTrade = false;
     openTradeSignal = "LONG";
-    const [res, histResp] = await Promise.all([
-      fetch(`/api/btc/signal?interval=${encodeURIComponent(activeTF)}`,{cache:"no-store"}),
-      fetch('/api/btc/signal/history?limit=20', {cache:"no-store"}),
+    const [s, histJson] = await Promise.all([
+      fetchJSON(`/api/btc/signal?interval=${encodeURIComponent(activeTF)}`, { ttlMs: 5000, timeoutMs: 9000 }),
+      fetchJSON('/api/btc/signal/history?limit=20', { ttlMs: 7000, timeoutMs: 8000 }),
     ]);
-    if(histResp.ok){
-      const histJson = await histResp.json();
+    if(histJson){
       const signals = Array.isArray(histJson?.signals) ? histJson.signals : [];
       const open = signals.find(x => String(x?.status || "").toUpperCase() === "OPEN");
       hasOpenTrade = Boolean(open);
@@ -1121,8 +1175,7 @@ async function loadSignal(){
         openTradeSignal = normalizeSignal(open.signal || "LONG");
       }
     }
-    if(!res.ok) throw new Error(`HTTP ${res.status}`);
-    const s=await res.json();
+    if(!s) throw new Error("signal fetch failed");
     applySignalPayload(s, "btc_service");
     setPill("sig-pill","Signal API: /api/btc/signal",true);
   }catch(err){
@@ -1133,9 +1186,8 @@ async function loadSignal(){
 
 async function loadSignalHistory(){
   try{
-    const resp = await fetch('/api/btc/signal/history?limit=20');
-    if(!resp.ok) return;
-    const data = await resp.json();
+    const data = await fetchJSON('/api/btc/signal/history?limit=20', { ttlMs: 7000, timeoutMs: 8000 });
+    if(!data) return;
 
     const s = data.stats || {};
     const el = (id) => document.getElementById(id);
@@ -1152,6 +1204,14 @@ async function loadSignalHistory(){
       el('stat-pnl').style.color = pnl >= 0 ? '#00c853' : '#ff1744';
     }
     if (el('stat-open')) el('stat-open').textContent = s.open_signals || 0;
+
+    const openSignals = Array.isArray(data.signals)
+      ? data.signals.filter(sig => String(sig?.status || "").toUpperCase() === "OPEN")
+      : [];
+    const multiOpenWarning = document.getElementById('multi-open-warning');
+    if (multiOpenWarning) {
+      multiOpenWarning.style.display = openSignals.length > 2 ? 'block' : 'none';
+    }
 
     const tbody = document.getElementById('history-tbody');
     if (tbody && data.signals && data.signals.length > 0) {
@@ -1197,9 +1257,8 @@ async function loadSignalHistory(){
 
 async function fetchNews() {
   try {
-    const resp = await fetch('/api/btc/news?limit=8');
-    if(!resp.ok) return;
-    const data = await resp.json();
+    const data = await fetchJSON('/api/btc/news?limit=8', { ttlMs: 120000, timeoutMs: 9000 });
+    if(!data) return;
     const feed = document.getElementById('news-feed');
     if (feed && data.news && data.news.length > 0) {
       feed.innerHTML = data.news.map(n => {

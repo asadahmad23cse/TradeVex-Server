@@ -32,15 +32,30 @@ def record_signal(signal_data: dict):
         return
 
     history = _load()
-    # Block duplicate: skip if same direction + same entry within 4 hours
-    if history:
-        last = history[-1]
-        if (
-            last["signal"] == signal_data["signal"]
-            and last.get("entry") == signal_data.get("entry_price")
-            and time.time() - last.get("open_timestamp", 0) < 4 * 3600
-        ):
-            return
+    now = time.time()
+    signal_side = signal_data.get("signal")
+
+    # Block ANY same-direction OPEN signal inside cooldown window (4 hours).
+    recent_same_direction = [
+        h
+        for h in history
+        if h.get("signal") == signal_side
+        and h.get("status") == "OPEN"
+        and now - float(h.get("open_timestamp", 0) or 0) < 4 * 3600
+    ]
+    if recent_same_direction:
+        logger.info("Dedup blocked: %s already OPEN", signal_side)
+        return
+
+    # Hard cap: max 1 OPEN signal per direction.
+    open_longs = [h for h in history if h.get("signal") == "LONG" and h.get("status") == "OPEN"]
+    open_shorts = [h for h in history if h.get("signal") == "SHORT" and h.get("status") == "OPEN"]
+    if signal_side == "LONG" and len(open_longs) >= 1:
+        logger.info("Max-open blocked: LONG already OPEN")
+        return
+    if signal_side == "SHORT" and len(open_shorts) >= 1:
+        logger.info("Max-open blocked: SHORT already OPEN")
+        return
 
     record = {
         "id": len(history) + 1,
