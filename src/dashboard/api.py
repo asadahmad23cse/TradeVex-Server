@@ -24,6 +24,7 @@ from src.dashboard.btc_service import BitcoinMarketService
 from src.dashboard.focus_engine import FocusQuantEngine
 from src.options import ExpiryTracker, OptionsEngine
 from src.compliance import SEBIComplianceEngine
+from src.utils.notifiers import NotificationManager
 
 try:
     import jwt  # type: ignore[import]
@@ -62,6 +63,14 @@ def init_dashboard(store, portfolio, config: dict | None = None) -> None:  # typ
     _btc_service = BitcoinMarketService(_dashboard_cfg)
     if _options_engine is None:
         _options_engine = OptionsEngine()
+    try:
+        from src.paper_trading import get_auto_executor, get_paper_engine
+
+        _ = get_paper_engine()
+        _ = get_auto_executor()
+        logger.info("Paper trading engine initialized")
+    except Exception as e:
+        logger.warning("Paper engine init failed: %s", e)
 
 
 def set_live_runner(runner) -> None:  # type: ignore[no-untyped-def]
@@ -119,7 +128,17 @@ _response_cache_ttl = {
     "/api/stock-signal": 30,
     "/api/chart-data": 60,
     "/api/options/chain": 60,
+    "/api/options/signal": 30,
+    "/api/options/iv-surface": 60,
+    "/api/options/expiry": 300,
     "/api/market-overview": 30,
+    "/api/btc/candles": 30,
+    "/api/btc/markers": 60,
+    "/api/btc/signal": 10,
+    "/api/btc/signal/history": 10,
+    "/api/btc/news": 120,
+    "/api/news": 120,
+    "/api/portfolio": 15,
 }
 
 
@@ -1112,6 +1131,202 @@ def get_portfolio():
         "metrics": _portfolio.get_metrics(),
         "positions": _portfolio.get_open_positions_list(),
     }
+
+
+# ------------------------------------------------------------------
+# Paper Trading Endpoints
+# ------------------------------------------------------------------
+
+@app.get("/api/paper/portfolio")
+def paper_portfolio():
+    """Live portfolio metrics + positions."""
+    try:
+        from src.paper_trading import get_paper_engine
+
+        engine = get_paper_engine()
+        metrics = engine.get_portfolio_metrics()
+        positions = engine.get_open_positions()
+        return {
+            "metrics": metrics,
+            "open_positions": positions,
+            "mode": engine._state.get("mode", "manual"),
+            "success": True,
+        }
+    except Exception as e:
+        logger.error("Paper portfolio error: %s", e)
+        return {
+            "metrics": {
+                "capital": 100000.0,
+                "initial_capital": 100000.0,
+                "portfolio_value": 100000.0,
+                "total_pnl": 0.0,
+                "total_pnl_pct": 0.0,
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+                "total_trades": 0,
+                "open_positions": 0,
+                "wins": 0,
+                "losses": 0,
+                "win_rate": 0.0,
+                "sharpe_ratio": 0.0,
+                "max_drawdown": 0.0,
+                "profit_factor": 0.0,
+                "avg_win_pct": 0.0,
+                "avg_loss_pct": 0.0,
+                "best_trade_pct": 0.0,
+                "worst_trade_pct": 0.0,
+                "mode": "manual",
+            },
+            "open_positions": [],
+            "mode": "manual",
+            "success": False,
+            "error": str(e),
+        }
+
+
+@app.get("/api/paper/trades")
+def paper_trades(limit: int = 50):
+    """Closed trade history."""
+    from src.paper_trading import get_paper_engine
+
+    return get_paper_engine().get_closed_trades(limit)
+
+
+@app.post("/api/paper/execute")
+async def paper_execute(payload: dict):
+    """
+    Manually execute a paper trade.
+    Body: { ticker, signal, entry_price, stop_loss,
+            take_profit, confidence, asset_class }
+    """
+    from src.paper_trading import get_paper_engine
+
+    engine = get_paper_engine()
+    result = engine.execute_trade(payload, mode="manual")
+    if result.get("success"):
+        try:
+            nm = NotificationManager((_dashboard_cfg or {}).get("notifications", {}))
+            nm.notify(
+                "PAPER TRADE EXECUTED",
+                (
+                    f"{result.get('direction')} {result.get('ticker')}\n"
+                    f"Entry: {result.get('entry_price')}\n"
+                    f"Qty: {result.get('quantity')}\n"
+                    f"SL: {result.get('stop_loss')} | TP: {result.get('take_profit')}"
+                ),
+                severity="INFO",
+            )
+        except Exception:
+            pass
+    return result
+
+
+@app.post("/api/paper/close")
+async def paper_close(payload: dict):
+    """
+    Close an open position.
+    Body: { ticker, exit_price, reason }
+    """
+    from src.paper_trading import get_paper_engine
+
+    engine = get_paper_engine()
+    ticker = str(payload.get("ticker", "")).strip().upper()
+    if not ticker:
+        return {"success": False, "error": "Ticker is required"}
+
+    exit_price = payload.get("exit_price")
+    if not exit_price:
+        open_map = {str(p.get("ticker")).upper(): p for p in engine.get_open_positions()}
+        pos = open_map.get(ticker)
+        if pos:
+            exit_price = pos.get("current_price") or pos.get("entry_price")
+        if not exit_price:
+            try:
+                import yfinance as yf  # type: ignore[import]
+
+                hist = yf.Ticker(ticker).history(period="1d", interval="1m")
+                exit_price = float(hist["Close"].iloc[-1]) if not hist.empty else 0.0
+            except Exception:
+                return {"success": False, "error": "Could not fetch current price"}
+
+    result = engine.close_position(ticker, float(exit_price), payload.get("reason", "manual"))
+    if result:
+        try:
+            nm = NotificationManager((_dashboard_cfg or {}).get("notifications", {}))
+            pnl = float(result.get("pnl", 0.0))
+            nm.notify(
+                "PAPER TRADE CLOSED",
+                (
+                    f"{result.get('direction')} {ticker}\n"
+                    f"P&L: {pnl:+.2f} ({float(result.get('pnl_pct', 0.0)):+.2f}%)\n"
+                    f"Reason: {result.get('reason')}"
+                ),
+                severity="INFO",
+            )
+        except Exception:
+            pass
+        return {"success": True, **result}
+    return {"success": False, "error": "No open position"}
+
+
+@app.post("/api/paper/mode")
+async def paper_set_mode(payload: dict):
+    """
+    Set auto/manual mode.
+    Body: { mode: "auto" | "manual" }
+    """
+    import threading
+
+    from src.paper_trading import get_auto_executor, get_paper_engine
+
+    mode = str(payload.get("mode", "manual")).lower()
+    mode = "auto" if mode == "auto" else "manual"
+    engine = get_paper_engine()
+    engine.set_mode(mode)
+
+    executor = get_auto_executor()
+    if mode == "auto" and not executor._running:
+        t = threading.Thread(target=executor.start, daemon=True)
+        t.start()
+    elif mode == "manual":
+        executor.stop()
+
+    return {"mode": mode, "success": True}
+
+
+@app.post("/api/paper/reset")
+async def paper_reset(payload: dict):
+    """Reset paper account. Body: { capital: float }"""
+    from src.paper_trading import get_paper_engine
+
+    capital = float(payload.get("capital", 100000))
+    get_paper_engine().reset(capital)
+    return {"success": True, "capital": capital}
+
+
+@app.get("/api/paper/pending")
+def paper_pending():
+    """Get signals waiting for manual approval."""
+    from src.paper_trading import get_auto_executor
+
+    return get_auto_executor().get_pending_signals()
+
+
+@app.post("/api/paper/approve")
+async def paper_approve(payload: dict):
+    """Approve a pending signal. Body: { ticker, trade_id }"""
+    from src.paper_trading import get_auto_executor
+
+    return get_auto_executor().approve_signal(payload["ticker"], payload["trade_id"])
+
+
+@app.post("/api/paper/reject")
+async def paper_reject(payload: dict):
+    """Reject a pending signal. Body: { ticker, trade_id }"""
+    from src.paper_trading import get_auto_executor
+
+    get_auto_executor().reject_signal(payload["ticker"], payload["trade_id"])
+    return {"success": True}
 
 
 @app.get("/api/history")

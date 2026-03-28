@@ -33,6 +33,8 @@
 .sent{font-size:10px;font-weight:800;padding:2px 6px;border-radius:999px}.POSITIVE{background:rgba(52,211,153,.2);color:#34d399}.NEGATIVE{background:rgba(248,113,113,.2);color:#f87171}.NEUTRAL{background:rgba(148,163,184,.2);color:#94a3b8}
 .sbar{height:8px;background:rgba(148,163,184,.2);border-radius:999px;overflow:hidden}.fill{height:100%}.empty{padding:10px;text-align:center;color:var(--muted);font-size:12px;border:1px dashed rgba(148,163,184,.25);border-radius:8px}
 .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(148,163,184,.3);border-top-color:#60a5fa;border-radius:50%;animation:spin .9s linear infinite}.success-icon{display:inline-block;width:14px;height:14px;border-radius:50%;background:#22c55e}.error-icon{display:inline-block;width:14px;height:14px;border-radius:50%;background:#ef4444}@keyframes spin{to{transform:rotate(360deg)}}.fo-grid{display:grid;grid-template-columns:360px 1fr;gap:10px}.fo-card{padding:10px;background:#0f1724;border:1px solid rgba(148,163,184,.16);border-radius:10px}.fo-head{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}.fo-gauge{height:12px;border-radius:999px;background:rgba(148,163,184,.2);overflow:hidden}.fo-gfill{height:100%;width:0;background:#60a5fa}.fo-count{font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700}.fo-chain{max-height:330px;overflow:auto;border:1px solid rgba(148,163,184,.16);border-radius:8px}.fo-chain table{font-family:"JetBrains Mono",monospace}.fo-atm{background:rgba(250,204,21,.12)!important}.fo-itm-ce{background:rgba(52,211,153,.08)}.fo-itm-pe{background:rgba(248,113,113,.08)}.fo-hi-oi{font-weight:800}
+.toast-notification{position:fixed;bottom:20px;right:20px;background:#1e293b;border:1px solid #334155;color:#f1f5f9;padding:12px 20px;border-radius:8px;z-index:9999;animation:slideIn .3s ease}
+@keyframes slideIn{from{transform:translateY(12px);opacity:0}to{transform:translateY(0);opacity:1}}
 @media (max-width:1040px){.top{grid-template-columns:1fr}.strip{grid-template-columns:repeat(2,minmax(0,1fr))}.main{grid-template-columns:1fr}#chart{height:420px}} @media (max-width:760px){.strip{grid-template-columns:1fr}.g2{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}}
 </style>
 </head>
@@ -111,7 +113,7 @@
   </div>
 
   <div class="bottom">
-    <div class="btabs"><button class="btab active" data-b="orderflow">Order Flow</button><button class="btab" data-b="backtest">Backtest</button><button class="btab" data-b="portfolio">Portfolio</button><button class="btab" data-b="news">News</button><button class="btab" data-b="fo">F&O</button></div>
+    <div class="btabs"><button class="btab active" data-b="orderflow">Order Flow</button><button class="btab" data-b="backtest">Backtest</button><button class="btab" data-b="portfolio">Portfolio</button><button class="btab" data-b="news">News</button><button class="btab" data-b="fo">F&O</button><button id="tab-paper" class="btab" data-b="paper">Paper</button></div>
     <div id="b-orderflow" class="bpanel active"><div class="g2"><div class="metric"><div class="k">Volume</div><div id="of-volume" class="mval">--</div></div><div class="metric"><div class="k">Smart Money</div><div id="of-smart-money" class="mval">--</div></div><div class="metric"><div class="k">Money Flow</div><div id="of-money-flow" class="mval">--</div></div><div class="metric"><div class="k">Overbought/Oversold</div><div id="of-obs" class="mval">--</div></div></div></div>
     <div id="b-backtest" class="bpanel">
       <div class="controls">
@@ -228,6 +230,57 @@
         </div>
       </div>
     </div>
+    <div id="b-paper" class="bpanel">
+      <div class="srow">
+        <span id="paper-mode-badge" class="badge hold" data-mode="manual">● MANUAL MODE</span>
+        <span style="display:flex;gap:8px">
+          <button id="paper-toggle-mode" class="btn">Switch to AUTO</button>
+          <button id="paper-reset" class="btn">Reset Account</button>
+        </span>
+      </div>
+      <div class="srow" style="margin-top:8px">
+        <span class="k">Capital</span><span id="paper-capital" class="sv">₹ --</span>
+      </div>
+      <div class="srow">
+        <span class="k">P&L</span><span id="paper-pnl" class="sv">₹ --</span>
+      </div>
+      <div class="metrics" style="margin-top:8px">
+        <div class="metric"><div class="k">Portfolio</div><div id="paper-portfolio-value" class="mval">₹ --</div></div>
+        <div class="metric"><div class="k">Win Rate</div><div id="paper-winrate" class="mval">--%</div></div>
+        <div class="metric"><div class="k">Sharpe</div><div id="paper-sharpe" class="mval">--</div></div>
+        <div class="metric"><div class="k">Max DD</div><div id="paper-maxdd" class="mval">--%</div></div>
+      </div>
+
+      <div style="margin-top:10px">
+        <div class="srow"><span class="k">Open Positions</span><button id="paper-exec-active" class="btn">Execute Signal for active stock</button></div>
+        <div class="tbl" style="margin-top:8px;max-height:220px">
+          <table>
+            <thead><tr><th>Ticker</th><th>Dir</th><th class="r">Entry</th><th class="r">Current</th><th class="r">Unreal P&L</th><th class="r">SL</th><th class="r">TP</th><th>Close</th></tr></thead>
+            <tbody id="paper-open-body"><tr><td colspan="8" class="empty">No open positions</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style="margin-top:10px">
+        <div class="srow"><span class="k">Pending Signals (manual mode)</span></div>
+        <div class="tbl" style="margin-top:8px;max-height:190px">
+          <table>
+            <thead><tr><th>Ticker</th><th>Signal</th><th class="r">Conf</th><th class="r">Entry</th><th class="r">SL</th><th class="r">TP</th><th>Actions</th></tr></thead>
+            <tbody id="paper-pending-body"><tr><td colspan="7" class="empty">No pending signals</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div style="margin-top:10px">
+        <div class="srow"><span class="k">Closed Trades (last 20)</span></div>
+        <div class="tbl" style="margin-top:8px;max-height:230px">
+          <table>
+            <thead><tr><th>#</th><th>Time</th><th>Ticker</th><th>Dir</th><th class="r">Entry</th><th class="r">Exit</th><th class="r">P&L%</th><th>Result</th><th>Reason</th></tr></thead>
+            <tbody id="paper-closed-body"><tr><td colspan="9" class="empty">No closed trades</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -240,7 +293,12 @@ const W={
   mid:[["Titan","TITAN.NS","Auto"],["UltraTech","ULTRACEMCO.NS","Energy"],["Nestle","NESTLEIND.NS","Energy"],["Power Grid","POWERGRID.NS","Energy"]],
   crypto:[["Bitcoin","BTC","Crypto"],["Ethereum","ETH","Crypto"]]
 };
-const ALL=[...W.indices,...W.large,...W.mid,...W.crypto].map(x=>({name:x[0],ticker:x[1],sector:x[2]}));
+const US_STOCKS=[
+  ["Apple Inc","AAPL","US Tech"],["Microsoft","MSFT","US Tech"],["Alphabet","GOOGL","US Tech"],["Nvidia","NVDA","US Tech"],
+  ["Tesla","TSLA","US Auto"],["Amazon","AMZN","US Retail"],["Meta Platforms","META","US Tech"],["JPMorgan Chase","JPM","US Banking"],
+  ["Goldman Sachs","GS","US Banking"],["AMD","AMD","US Tech"],["Netflix","NFLX","US Media"],["S&P 500 ETF","SPY","US ETF"],["Nasdaq ETF","QQQ","US ETF"]
+];
+const ALL=[...W.indices,...W.large,...W.mid,...W.crypto,...US_STOCKS].map(x=>({name:x[0],ticker:x[1],sector:x[2]}));
 const SCREEN=[...W.large,...W.mid].map(x=>({name:x[0],ticker:x[1],sector:x[2]}));
 const S={ticker:"RELIANCE.NS",name:"Reliance",tf:"15m",tab:"large",chart:[],rows:new Map(),sdata:[],sort:{k:"confidence",d:"desc"},reqId:0};
 let chart,candle,s20,s50,btEqChart,btEqSeries,pfC,pfS;
@@ -250,7 +308,50 @@ const FO={symbol:"NIFTY",expiry:"nearest",pcrHist:[]};
 let foChart,foSeries;
 
 const $=id=>document.getElementById(id);
-const json=async(u,o)=>{try{const r=await fetch(u,o);if(!r.ok)throw new Error(r.status);return await r.json()}catch{return null}};
+const _apiCache = new Map();
+const _apiInFlight = new Map();
+function _ttlForUrl(url){
+  if(url.includes("/api/chart-data")) return 45000;
+  if(url.includes("/api/stock-signal")) return 12000;
+  if(url.includes("/api/chart-markers")) return 45000;
+  if(url.includes("/api/market-overview")) return 20000;
+  if(url.includes("/api/news")) return 90000;
+  if(url.includes("/api/options/")) return 30000;
+  if(url.includes("/api/portfolio") || url.includes("/api/history")) return 15000;
+  return 10000;
+}
+const json=async(u,o={})=>{
+  const { cacheTtlMs, timeoutMs, ...fetchOpts } = o || {};
+  const method = String(fetchOpts.method || "GET").toUpperCase();
+  const useCache = method === "GET";
+  const ttl = Number(cacheTtlMs ?? _ttlForUrl(String(u)));
+  const key = `${method}:${u}`;
+  const now = Date.now();
+  if(useCache){
+    const cached = _apiCache.get(key);
+    if(cached && (now - cached.ts) < ttl) return cached.data;
+    const pending = _apiInFlight.get(key);
+    if(pending) return pending;
+  }
+  const p = (async()=>{
+    const ctrl = new AbortController();
+    const timer = setTimeout(()=>ctrl.abort(), Number(timeoutMs ?? 9000));
+    try{
+      const r = await fetch(u, { ...fetchOpts, signal: ctrl.signal });
+      if(!r.ok) throw new Error(r.status);
+      const data = await r.json();
+      if(useCache && ttl > 0) _apiCache.set(key, { ts: Date.now(), data });
+      return data;
+    }catch{
+      return null;
+    }finally{
+      clearTimeout(timer);
+      _apiInFlight.delete(key);
+    }
+  })();
+  if(useCache) _apiInFlight.set(key, p);
+  return p;
+};
 const inr=v=>v==null||isNaN(Number(v))?"₹ --":"₹ "+Number(v).toLocaleString("en-IN",{maximumFractionDigits:2});
 const pct=v=>(v>=0?"+":"")+Number(v).toFixed(2)+"%";
 const sig=s=>{s=String(s||"HOLD").toUpperCase();if(s==="LONG")return"BUY";if(s==="SHORT")return"SELL";return s};
@@ -269,50 +370,67 @@ function setupTop(){
   $("chips").querySelectorAll(".chip").forEach(b=>b.onclick=()=>{$("chips").querySelectorAll(".chip").forEach(z=>z.classList.remove("active"));b.classList.add("active");S.tab=b.dataset.c;renderWatch()});
 }
 function setupLeftTabs(){document.querySelectorAll(".tbtn").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tbtn").forEach(x=>x.classList.remove("active"));b.classList.add("active");document.querySelectorAll(".ltab").forEach(x=>x.classList.remove("active"));$(`l-${b.dataset.l}`).classList.add("active")})}
-function setupBottom(){document.querySelectorAll(".btab").forEach(b=>b.onclick=()=>{document.querySelectorAll(".btab").forEach(x=>x.classList.remove("active"));b.classList.add("active");document.querySelectorAll(".bpanel").forEach(x=>x.classList.remove("active"));$(`b-${b.dataset.b}`).classList.add("active");if(b.dataset.b==="portfolio")refreshPortfolio();if(b.dataset.b==="news")refreshNews();if(b.dataset.b==="fo")refreshFO();if(b.dataset.b==="orderflow")loadOrderFlow(S.ticker)})}
+function setupBottom(){document.querySelectorAll(".btab").forEach(b=>b.onclick=()=>{document.querySelectorAll(".btab").forEach(x=>x.classList.remove("active"));b.classList.add("active");document.querySelectorAll(".bpanel").forEach(x=>x.classList.remove("active"));$(`b-${b.dataset.b}`).classList.add("active");if(b.dataset.b==="portfolio")refreshPortfolio();if(b.dataset.b==="news")refreshNews();if(b.dataset.b==="fo")refreshFO();if(b.dataset.b==="orderflow")loadOrderFlow(S.ticker);if(b.dataset.b==="paper")loadPaperPortfolio()})}
 function openAssetDashboard(t,n){if(t==="BTC"){location.href="/";return}if(t==="ETH"){location.href="/";return}location.href=`/stock-terminal?ticker=${encodeURIComponent(t)}&name=${encodeURIComponent(n||t)}`;}
 function setupSearch(){const i=$("search"),r=$("results");i.oninput=()=>{const q=i.value.trim().toLowerCase();if(!q){r.style.display="none";r.innerHTML="";return}const m=ALL.filter(a=>a.ticker.toLowerCase().includes(q)||a.name.toLowerCase().includes(q)).slice(0,12);r.innerHTML=m.length?m.map(a=>`<div class="result" data-t="${a.ticker}"><b>${a.ticker}</b> <span class="k">- ${a.name}</span></div>`).join(""):`<div class="result">No matches</div>`;r.style.display="block";r.querySelectorAll(".result[data-t]").forEach(x=>x.onclick=()=>{const a=ALL.find(z=>z.ticker===x.dataset.t);if(a)setAsset(a.ticker,a.name);r.style.display="none";i.value=""})};i.onkeydown=e=>{if(e.key==="Enter"){const v=i.value.trim().toLowerCase();const a=ALL.find(z=>z.ticker.toLowerCase()===v||z.name.toLowerCase()===v);if(a)setAsset(a.ticker,a.name);r.style.display="none";i.value=""}};document.addEventListener("click",e=>{if(!r.contains(e.target)&&e.target!==i)r.style.display="none"})}
 
 function watchAssets(){if(S.tab==="indices")return W.indices;if(S.tab==="mid")return W.mid;if(S.tab==="crypto")return W.crypto;return W.large}
 function buildIndices(){const l=$("indices");l.innerHTML=W.indices.map(a=>`<div class="row" data-t="${a[1]}" data-n="${a[0]}"><div><div class="name">${a[0]}</div><div class="meta">${a[1]}</div></div><div class="mono">--</div><div class="badge hold">INDEX</div></div>`).join("");l.querySelectorAll(".row").forEach(r=>r.onclick=()=>setAsset(r.dataset.t,r.dataset.n))}
 function renderWatch(){const l=$("watchlist"),arr=watchAssets();l.innerHTML=arr.map(a=>`<div class="row" data-ticker="${a[1]}" data-name="${a[0]}"><div><div class="name">${a[0]}</div><div class="meta">${a[1]}</div></div><div class="mono"><div class="stock-price">---</div><div class="stock-change k">--</div></div><div class="badge stock-signal hold">HOLD</div></div>`).join("");S.rows.clear();l.querySelectorAll(".row").forEach(r=>{const t=r.dataset.ticker;S.rows.set(t,r);r.onclick=()=>setAsset(t,r.dataset.name)});refreshWatch()}
-function updateWatchlistRow(ticker,price,change_pct){const row=document.querySelector(`[data-ticker="${ticker}"]`);if(!row)return;const priceEl=row.querySelector('.stock-price');const changeEl=row.querySelector('.stock-change');if(priceEl){priceEl.textContent='₹ '+Number(price||0).toLocaleString('en-IN',{minimumFractionDigits:1,maximumFractionDigits:1})}if(changeEl){const cp=Number(change_pct||0);changeEl.textContent=(cp>=0?'+':'')+cp.toFixed(2)+'%';changeEl.style.color=cp>=0?BUY:SELL}}
+function updateWatchlistRow(ticker,price,change_pct){
+  const safeTicker=(window.CSS&&typeof CSS.escape==="function")?CSS.escape(String(ticker)):String(ticker);
+  const row=document.querySelector(`[data-ticker="${safeTicker}"]`);
+  if(!row)return;
+  const priceEl=row.querySelector('.stock-price');
+  const changeEl=row.querySelector('.stock-change');
+  if(priceEl&&Number(price)>0){
+    priceEl.textContent='₹ '+Number(price).toLocaleString('en-IN',{minimumFractionDigits:1,maximumFractionDigits:1});
+  }
+  if(changeEl){
+    const cp=Number(change_pct||0);
+    changeEl.textContent=(cp>=0?'+':'')+cp.toFixed(2)+'%';
+    changeEl.style.color=cp>=0?BUY:SELL;
+  }
+}
 async function fetchAndUpdatePrice(ticker){
-  const row=S.rows.get(ticker);
+  const localTicker=String(ticker);
+  const row=S.rows.get(localTicker);
   if(!row)return;
   const badge=row.querySelector('.stock-signal');
-  if(ticker==="BTC"){
-    updateWatchlistRow(ticker,0,0);
+  if(localTicker==="BTC"){
+    updateWatchlistRow(localTicker,0,0);
     if(badge){badge.textContent="LINK";badge.className="badge stock-signal hold"}
     return;
   }
-  const cached=getCachedPrice(ticker);
-  if(cached){updateWatchlistRow(ticker,cached.price,cached.change_pct)}
+  const cached=getCachedPrice(localTicker);
+  if(cached&&cached.price){updateWatchlistRow(localTicker,cached.price,cached.change_pct||0)}
   try{
     if(!cached){
-      const res=await fetch(`/api/chart-data?ticker=${encodeURIComponent(ticker)}&interval=1d&period=5d`);
-      const data=await res.json();
-      if(data.data&&data.data.length>=1){
-        const last=data.data[data.data.length-1];
-        const prev=data.data.length>=2?data.data[data.data.length-2]:last;
-        const price=Number(last.close||0);
-        const prevClose=Number(prev.close||0);
-        const change_pct=prevClose>0?((price-prevClose)/prevClose)*100:0;
-        setCachedPrice(ticker,{price,change_pct});
-        updateWatchlistRow(ticker,price,change_pct);
+      const data=await json(`/api/chart-data?ticker=${encodeURIComponent(localTicker)}&interval=1d&period=5d`, { cacheTtlMs: 45000, timeoutMs: 7000 });
+      if(data?.data&&data.data.length>=2){
+        const candles=data.data;
+        const last=candles[candles.length-1];
+        const prev=candles[candles.length-2];
+        const price=parseFloat(last.close);
+        const prevClose=parseFloat(prev.close);
+        if(Number.isFinite(price)&&Number.isFinite(prevClose)&&price>0&&prevClose>0){
+          const change_pct=((price-prevClose)/prevClose)*100;
+          setCachedPrice(localTicker,{price,change_pct});
+          updateWatchlistRow(localTicker,price,change_pct);
+        }
       }
     }
-    const sg=await json(`/api/stock-signal?ticker=${encodeURIComponent(ticker)}`);
+    const sg=await json(`/api/stock-signal?ticker=${encodeURIComponent(localTicker)}`);
     if(sg&&badge){
       const g=sig(sg.signal);
       badge.textContent=g;
       badge.className=`badge stock-signal ${cls(g)}`;
     }
   }catch(e){
-    console.error(`Price fetch failed for ${ticker}:`,e);
+    console.warn('Price fetch failed for', localTicker, e?.message||e);
   }
 }
-async function loadWatchlistPrices(tickers){const BATCH_SIZE=3;for(let i=0;i<tickers.length;i+=BATCH_SIZE){const batch=tickers.slice(i,i+BATCH_SIZE);await Promise.all(batch.map(fetchAndUpdatePrice));if(i+BATCH_SIZE<tickers.length)await sleep(300)}}
+async function loadWatchlistPrices(tickers){const BATCH_SIZE=3;for(let i=0;i<tickers.length;i+=BATCH_SIZE){const batch=tickers.slice(i,i+BATCH_SIZE);await Promise.all(batch.map(t=>fetchAndUpdatePrice(t)));if(i+BATCH_SIZE<tickers.length)await sleep(400)}}
 async function refreshWatch(){const tickers=watchAssets().map(a=>a[1]);await loadWatchlistPrices(tickers)}
 
 function initChart(){const c=$("chart");chart=LightweightCharts.createChart(c,{width:c.clientWidth,height:c.clientHeight,layout:{background:{type:"solid",color:"transparent"},textColor:"#94a3b8",fontFamily:"Sora"},grid:{vertLines:{color:"rgba(148,163,184,.08)"},horzLines:{color:"rgba(148,163,184,.08)"}},rightPriceScale:{borderColor:"rgba(148,163,184,.25)"},timeScale:{borderColor:"rgba(148,163,184,.25)",timeVisible:true}});candle=chart.addCandlestickSeries({upColor:BUY,downColor:SELL,borderUpColor:BUY,borderDownColor:SELL,wickUpColor:BUY,wickDownColor:SELL});s20=chart.addLineSeries({color:"#facc15",lineWidth:1,priceLineVisible:false,lastValueVisible:false});s50=chart.addLineSeries({color:"#60a5fa",lineWidth:1,priceLineVisible:false,lastValueVisible:false});window.addEventListener("resize",()=>chart.applyOptions({width:c.clientWidth,height:c.clientHeight}))}
@@ -325,13 +443,14 @@ function initTf(){document.querySelectorAll(".tf").forEach(b=>b.onclick=()=>{doc
 function setAsset(t,n){if(t==="BTC"){location.href="/";return}S.ticker=t;S.name=n||t;$("t-name").textContent=`${S.name} (${S.ticker})`;$("bt-ticker").value=S.ticker;loadAsset(S.ticker,S.name)}
 function setAction(g,reason,e,sl,tp){const box=$("action"),big=$("a-big"),sub=$("a-sub");if(g==="BUY"){big.textContent="BUY";big.style.color=BUY;box.style.borderColor=BUY;box.style.background="rgba(52,211,153,.12)";sub.textContent=`Entry ${inr(e)} | SL ${inr(sl)} | TP ${inr(tp)}`}else if(g==="SELL"){big.textContent="SELL";big.style.color=SELL;box.style.borderColor=SELL;box.style.background="rgba(248,113,113,.12)";sub.textContent=`Entry ${inr(e)} | SL ${inr(sl)} | TP ${inr(tp)}`}else{big.textContent="WAIT";big.style.color=HOLD;box.style.borderColor=HOLD;box.style.background="rgba(96,165,250,.12)";sub.textContent=reason||"No high-quality setup"}}
 function showSignalLoading(){setAction("HOLD","Loading signal...");$("sig").textContent="HOLD";$("sig").style.color=HOLD;const rs=$("reason");if(rs)rs.textContent="Loading signal...";$("conf").textContent="--";$("cfill").style.width="0%"}
-async function fetchSignalWithTimeout(){try{return await Promise.race([json(`/api/stock-signal?ticker=${encodeURIComponent(S.ticker)}`),new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),8000))])}catch(e){if(String(e?.message||"").toLowerCase().includes("timeout"))return "__timeout__";return null}}
+function signalIntervalFor(tf){if(tf==="1W"||tf==="1D")return"1d";if(tf==="1h")return"1h";return"15m"}
+async function fetchSignalWithTimeout(ticker=S.ticker,tf=S.tf){const signalInterval=signalIntervalFor(tf);try{return await Promise.race([json(`/api/stock-signal?ticker=${encodeURIComponent(ticker)}&interval=${encodeURIComponent(signalInterval)}`),new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),10000))])}catch(e){if(String(e?.message||"").toLowerCase().includes("timeout"))return "__timeout__";return null}}
 function renderSignalData(s){const g=sig(s.signal),rawConf=Number(s.confidence||0),conf=rawConf>1?rawConf:rawConf*100,a=Number(s.alpha_score||0),alpha=Math.abs(a)<=1?Math.round(Math.abs(a)*100):Math.round(a),edge=Math.max(0,Math.round(Number(s.net_alpha_score||alpha)||0)),e=Number(s.entry_price||S.chart.at(-1)?.close||0),sl=Number(s.stop_loss||(g==="BUY"?e*.985:e*1.015)),tp=Number(s.take_profit||(g==="BUY"?e*1.02:e*.98)),rr=(Math.abs(tp-e)/Math.max(Math.abs(e-sl),1e-9)).toFixed(2);setAction(g,s.message||s.reason,e,sl,tp);$("sig").textContent=g;$("sig").style.color=g==="BUY"?BUY:g==="SELL"?SELL:HOLD;$("conf").textContent=Math.round(conf)+"%";$("cfill").style.width=Math.max(0,Math.min(100,conf))+"%";$("alpha").textContent=Math.max(0,Math.min(100,alpha))+" / 100";$("edge").textContent=Math.max(0,Math.min(100,edge))+" / 100";$("entry").textContent=inr(e);$("sl").textContent=inr(sl);$("tp").textContent=inr(tp);$("rr").textContent=Number.isFinite(Number(rr))?rr+":1":"--";const r=String(s.regime||"SIDEWAYS").toUpperCase();$("regime").textContent=r;$("regime").className=`regime ${rcls(r)}`;const fs=s.factor_scores||{};["1","2","3","5"].forEach(k=>{const v=Number(fs["F"+k]||0);$("f"+k).style.width=Math.max(0,Math.min(100,f2p(v)))+"%";$("f"+k+"v").textContent=v.toFixed(2)});$("sig-time").textContent="updated: "+new Date().toLocaleTimeString()}
-async function signal(){if(S.ticker==="ETH"){setAction("HOLD","Use BTC terminal for crypto execution");return}const s=await fetchSignalWithTimeout();if(s==="__timeout__"){setAction("HOLD","Signal timeout — click Refresh Signal to retry");const rs=$("reason");if(rs)rs.textContent="Signal timeout — click Refresh Signal to retry";$("sig-time").textContent="updated: timeout";return}if(!s){setAction("HOLD","Data unavailable");const rs=$("reason");if(rs)rs.textContent="Data unavailable";return}renderSignalData(s)}
-async function loadAsset(t,n){if(t==="BTC"){location.href="/";return}S.ticker=t;S.name=n||t;S.reqId+=1;const rid=S.reqId;$("t-name").textContent=`${S.name} (${S.ticker})`;$("bt-ticker").value=S.ticker;showChartLoading();showSignalLoading();const cfg=TF[S.tf];const [candleData,signalData,markerData]=await Promise.all([json(`/api/chart-data?ticker=${encodeURIComponent(S.ticker)}&interval=${encodeURIComponent(cfg.i)}&period=${encodeURIComponent(cfg.p)}`),fetchSignalWithTimeout(),json(`/api/chart-markers?ticker=${encodeURIComponent(S.ticker)}&interval=${encodeURIComponent(cfg.i)}&period=${encodeURIComponent(cfg.p)}`)]);if(rid!==S.reqId)return;renderChartData(candleData);renderMarkersData(markerData);if(signalData==="__timeout__"){setAction("HOLD","Signal timeout — click Refresh Signal to retry");const rs=$("reason");if(rs)rs.textContent="Signal timeout — click Refresh Signal to retry"}else if(signalData){renderSignalData(signalData)}else{setAction("HOLD","Data unavailable");const rs=$("reason");if(rs)rs.textContent="Data unavailable"}loadOrderFlow(S.ticker);refreshNews()}
+async function signal(){if(S.ticker==="ETH"){setAction("HOLD","Use BTC terminal for crypto execution");return}const s=await fetchSignalWithTimeout(S.ticker,S.tf);if(s==="__timeout__"){setAction("HOLD","Signal timeout — click Refresh Signal to retry");const rs=$("reason");if(rs)rs.textContent="Signal timeout — click Refresh Signal to retry";$("sig-time").textContent="updated: timeout (retry in 15s)";return}if(!s){setAction("HOLD","Data unavailable");const rs=$("reason");if(rs)rs.textContent="Data unavailable";return}renderSignalData(s)}
+async function loadAsset(t,n){if(t==="BTC"){location.href="/";return}S.ticker=t;S.name=n||t;S.reqId+=1;const rid=S.reqId;$("t-name").textContent=`${S.name} (${S.ticker})`;$("bt-ticker").value=S.ticker;showChartLoading();showSignalLoading();const cfg=TF[S.tf];const [candleData,signalData,markerData]=await Promise.all([json(`/api/chart-data?ticker=${encodeURIComponent(S.ticker)}&interval=${encodeURIComponent(cfg.i)}&period=${encodeURIComponent(cfg.p)}`),fetchSignalWithTimeout(S.ticker,S.tf),json(`/api/chart-markers?ticker=${encodeURIComponent(S.ticker)}&interval=${encodeURIComponent(cfg.i)}&period=${encodeURIComponent(cfg.p)}`)]);if(rid!==S.reqId)return;renderChartData(candleData);renderMarkersData(markerData);if(signalData==="__timeout__"){setAction("HOLD","Signal timeout — click Refresh Signal to retry");const rs=$("reason");if(rs)rs.textContent="Signal timeout — click Refresh Signal to retry";$("sig-time").textContent="updated: timeout (retry in 15s)"}else if(signalData){renderSignalData(signalData)}else{setAction("HOLD","Data unavailable");const rs=$("reason");if(rs)rs.textContent="Data unavailable"}loadOrderFlow(S.ticker);refreshNews()}
 function showOrderFlowUnavailable(){$("of-volume").textContent="Data unavailable";$("of-volume").style.color="#94a3b8";$("of-smart-money").textContent="--";$("of-smart-money").style.color="#94a3b8";$("of-money-flow").textContent="--";$("of-money-flow").style.color="#94a3b8";$("of-obs").textContent="--";$("of-obs").style.color="#94a3b8"}
 function calculateRSI(closes,period=14){if(!Array.isArray(closes)||closes.length<=period)return 50;let gains=0,losses=0;for(let i=1;i<=period;i++){const diff=Number(closes[i]||0)-Number(closes[i-1]||0);if(diff>0)gains+=diff;else losses-=diff}const avgGain=gains/period,avgLoss=losses/period;return avgLoss===0?100:100-(100/(1+avgGain/Math.max(avgLoss,1e-9)))}
-async function loadOrderFlow(ticker){try{const res=await fetch(`/api/chart-data?ticker=${encodeURIComponent(ticker)}&interval=15m&period=5d`);const data=await res.json();if(!data.data||data.data.length<20){showOrderFlowUnavailable();return}const candles=data.data.slice(-20);const avgVol=candles.reduce((s,c)=>s+Number(c.volume||0),0)/candles.length,lastVol=Number(candles[candles.length-1].volume||0),volRatio=avgVol>0?lastVol/avgVol:1,volLabel=volRatio>1.5?'HIGH':volRatio<0.7?'LOW':'NORMAL',volColor=volRatio>1.5?'#f87171':volRatio<0.7?'#60a5fa':'#94a3b8';const bigMoves=candles.filter(c=>Math.abs(Number(c.close||0)-Number(c.open||0))>(Number(c.high||0)-Number(c.low||0))*0.6&&Number(c.volume||0)>avgVol);const smartMoney=bigMoves.length>3?'RISING':bigMoves.length<1?'FALLING':'NEUTRAL';let mfSum=0;for(const c of candles){const hi=Number(c.high||0),lo=Number(c.low||0),cl=Number(c.close||0),vol=Number(c.volume||0),mfm=((cl-lo)-(hi-cl))/Math.max(hi-lo,0.01);mfSum+=mfm*vol}const totalVol=candles.reduce((s,c)=>s+Number(c.volume||0),0),cmf=totalVol>0?mfSum/totalVol:0,mfLabel=cmf>0.05?'ACCUMULATION':cmf<-0.05?'DISTRIBUTION':'NEUTRAL';const closes=candles.map(c=>Number(c.close||0)),rsi=calculateRSI(closes,14),obsLabel=rsi>70?'OVERBOUGHT':rsi<30?'OVERSOLD':`${rsi.toFixed(1)} NEUTRAL`;$("of-volume").textContent=volLabel;$("of-volume").style.color=volColor;$("of-smart-money").textContent=smartMoney;$("of-smart-money").style.color=smartMoney==='RISING'?BUY:smartMoney==='FALLING'?SELL:'#94a3b8';$("of-money-flow").textContent=`${mfLabel} (${cmf.toFixed(4)})`;$("of-money-flow").style.color=cmf>0?BUY:cmf<0?SELL:'#94a3b8';$("of-obs").textContent=obsLabel;$("of-obs").style.color=rsi>70?SELL:rsi<30?BUY:'#94a3b8'}catch(e){showOrderFlowUnavailable()}}
+async function loadOrderFlow(ticker){try{const data=await json(`/api/chart-data?ticker=${encodeURIComponent(ticker)}&interval=15m&period=5d`, { cacheTtlMs: 45000, timeoutMs: 7000 });if(!data?.data||data.data.length<20){showOrderFlowUnavailable();return}const candles=data.data.slice(-20);const avgVol=candles.reduce((s,c)=>s+Number(c.volume||0),0)/candles.length,lastVol=Number(candles[candles.length-1].volume||0),volRatio=avgVol>0?lastVol/avgVol:1,volLabel=volRatio>1.5?'HIGH':volRatio<0.7?'LOW':'NORMAL',volColor=volRatio>1.5?'#f87171':volRatio<0.7?'#60a5fa':'#94a3b8';const bigMoves=candles.filter(c=>Math.abs(Number(c.close||0)-Number(c.open||0))>(Number(c.high||0)-Number(c.low||0))*0.6&&Number(c.volume||0)>avgVol);const smartMoney=bigMoves.length>3?'RISING':bigMoves.length<1?'FALLING':'NEUTRAL';let mfSum=0;for(const c of candles){const hi=Number(c.high||0),lo=Number(c.low||0),cl=Number(c.close||0),vol=Number(c.volume||0),mfm=((cl-lo)-(hi-cl))/Math.max(hi-lo,0.01);mfSum+=mfm*vol}const totalVol=candles.reduce((s,c)=>s+Number(c.volume||0),0),cmf=totalVol>0?mfSum/totalVol:0,mfLabel=cmf>0.05?'ACCUMULATION':cmf<-0.05?'DISTRIBUTION':'NEUTRAL';const closes=candles.map(c=>Number(c.close||0)),rsi=calculateRSI(closes,14),obsLabel=rsi>70?'OVERBOUGHT':rsi<30?'OVERSOLD':`${rsi.toFixed(1)} NEUTRAL`;$("of-volume").textContent=volLabel;$("of-volume").style.color=volColor;$("of-smart-money").textContent=smartMoney;$("of-smart-money").style.color=smartMoney==='RISING'?BUY:smartMoney==='FALLING'?SELL:'#94a3b8';$("of-money-flow").textContent=`${mfLabel} (${cmf.toFixed(4)})`;$("of-money-flow").style.color=cmf>0?BUY:cmf<0?SELL:'#94a3b8';$("of-obs").textContent=obsLabel;$("of-obs").style.color=rsi>70?SELL:rsi<30?BUY:'#94a3b8'}catch(e){showOrderFlowUnavailable()}}
 async function market(){const d=await json("/api/market-overview"),u=(id,v)=>{if(!v){$(id).textContent="Data unavailable";return}$(id).textContent=`${Number(v.price||0).toLocaleString("en-IN",{maximumFractionDigits:2})} (${pct(Number(v.change_pct||0))})`;$(id).style.color=Number(v.change_pct||0)>=0?BUY:SELL};if(!d){["m-nifty","m-sensex","m-bank","m-vix"].forEach(x=>$(x).textContent="Data unavailable");return}u("m-nifty",d.NIFTY_50);u("m-sensex",d.SENSEX);u("m-bank",d.NIFTY_BANK);u("m-vix",d.INDIA_VIX)}
 function screener(){const b=$("sbody");const render=()=>{const sf=$("f-signal").value.toUpperCase(),st=$("f-strength").value.toUpperCase(),se=$("f-sector").value.toUpperCase(),k=S.sort.k,dir=S.sort.d==="asc"?1:-1;const arr=S.sdata.filter(x=>sf==="ALL"||x.signal===sf).filter(x=>st==="ALL"||x.strength===st).filter(x=>se==="ALL"||String(x.sector).toUpperCase()===se).sort((a,c)=>["stock","signal","regime"].includes(k)?String(a[k]).localeCompare(String(c[k]))*dir:(Number(a[k]||0)-Number(c[k]||0))*dir);if(!arr.length){b.innerHTML='<tr><td colspan="7" class="empty">No matches</td></tr>';return}b.innerHTML=arr.map(x=>`<tr data-t="${x.stock}"><td>${x.rank}</td><td>${x.stock}</td><td><span class="badge ${cls(x.signal)}">${x.signal}</span></td><td class="r">${Math.round(x.confidence)}%</td><td class="r">${Math.abs(x.alpha)<=1?(Math.abs(x.alpha)*100).toFixed(1):Number(x.alpha).toFixed(1)}</td><td>${x.regime}</td><td class="r">${inr(x.price)}</td></tr>`).join("");b.querySelectorAll("tr[data-t]").forEach(r=>r.onclick=()=>{const a=ALL.find(z=>z.ticker===r.dataset.t);if(a)setAsset(a.ticker,a.name)})};$("scan").onclick=async()=>{b.innerHTML='<tr><td colspan="7"><span class="spinner"></span> Scanning...</td></tr>';const out=[];let rk=1;for(const a of SCREEN){const [sg,ch]=await Promise.all([json(`/api/stock-signal?ticker=${encodeURIComponent(a.ticker)}`),json(`/api/chart-data?ticker=${encodeURIComponent(a.ticker)}&interval=1d&period=5d`)]),rows=ch&&Array.isArray(ch.data)?parse(ch.data):[],last=rows.length?rows[rows.length-1].close:null;out.push({rank:rk++,stock:a.ticker,sector:a.sector,signal:sig(sg?.signal||"HOLD"),strength:String(sg?.strength||"WEAK").toUpperCase(),confidence:Number(sg?.confidence||0),alpha:Number(sg?.alpha_score||0),regime:String(sg?.regime||"SIDEWAYS").toUpperCase(),price:last})}S.sdata=out;render()};["f-signal","f-strength","f-sector"].forEach(id=>$(id).onchange=render);document.querySelectorAll("#l-screener th[data-s]").forEach(th=>th.onclick=()=>{const k=th.dataset.s;if(S.sort.k===k)S.sort.d=S.sort.d==="asc"?"desc":"asc";else{S.sort.k=k;S.sort.d=k==="stock"?"asc":"desc"}render()})}
 function initBT(){const t=$("bt-ticker");t.innerHTML=SCREEN.map(a=>`<option value="${a.ticker}">${a.ticker}</option>`).join("");t.value=S.ticker;const n=new Date(),p=new Date(Date.now()-365*24*3600*1000);$("bt-from").value=p.toISOString().slice(0,10);$("bt-to").value=n.toISOString().slice(0,10);$("bt-status").textContent="Idle";$("bt-status-icon").className="";$("run-bt").onclick=runBT}
@@ -410,7 +529,43 @@ function renderFOIv(iv){const p=Math.max(0,Math.min(100,Number(iv?.iv_percentile
 function updateFOPcrChart(pcr){if(!foSeries)return;FO.pcrHist.push(Number(pcr||0));if(FO.pcrHist.length>40)FO.pcrHist.shift();const now=Math.floor(Date.now()/1000);const data=FO.pcrHist.map((v,i)=>({time:now-(FO.pcrHist.length-1-i)*60,value:Number(v)}));foSeries.setData(data);foChart&&foChart.timeScale().fitContent()}
 async function refreshFO(){const sym=$("fo-symbol")?.value||FO.symbol||"NIFTY",exp=$("fo-expiry")?.value||FO.expiry||"nearest";FO.symbol=sym;FO.expiry=exp;const [chain,sig,iv,expiry]=await Promise.all([json(`/api/options/chain?symbol=${encodeURIComponent(sym)}&expiry=${encodeURIComponent(exp)}`),json(`/api/options/signal?symbol=${encodeURIComponent(sym)}`),json(`/api/options/iv-surface?symbol=${encodeURIComponent(sym)}&expiry=${encodeURIComponent(exp)}`),json(`/api/options/expiry?symbol=${encodeURIComponent(sym)}`)]);if(chain&&Array.isArray(chain.expiry_dates)&&chain.expiry_dates.length){const fe=$("fo-expiry"),cur=fe.value;fe.innerHTML=['<option value="nearest">nearest</option>',...chain.expiry_dates.map(d=>`<option value="${d}">${d}</option>`)].join("");if([...fe.options].some(o=>o.value===cur))fe.value=cur;else if(exp!=="nearest"&&[...fe.options].some(o=>o.value===exp))fe.value=exp;else fe.value="nearest"}renderFOChain(chain||{});renderFOSignal(sig||{},expiry||{});renderFOIv(iv||{});updateFOPcrChart(chain?.pcr||sig?.pcr||0)}
 
-function boot(){setupTop();setupLeftTabs();setupBottom();setupSearch();buildIndices();renderWatch();initChart();initTf();screener();initBT();initPF();initFO();$("refresh-signal").onclick=signal;const expBtn=$("pf-export-itr");if(expBtn)expBtn.onclick=async()=>{const r=await json("/api/compliance/export-itr3");if(r&&r.path)alert(`ITR-3 CSV exported: ${r.path}`);else alert("Export failed")};$("t-name").textContent=`${S.name} (${S.ticker})`;setAsset(S.ticker,S.name);market();refreshPortfolio();setInterval(signal,15000);setInterval(refreshWatch,60000);setInterval(()=>loadOrderFlow(S.ticker),60000);setInterval(market,30000);setInterval(refreshNews,300000);setInterval(()=>{const p=document.querySelector('.btab.active')?.dataset?.b;if(p==="fo")refreshFO()},60000)}
+function showToast(msg){const toast=document.createElement('div');toast.className='toast-notification';toast.textContent=msg;document.body.appendChild(toast);setTimeout(()=>toast.remove(),3000)}
+function renderPaperMetrics(metrics,modeValue){const m=metrics||{};$("paper-capital").textContent='₹ '+Number(m.capital||0).toLocaleString('en-IN',{maximumFractionDigits:0});const pnl=Number(m.total_pnl||0),pnlPct=Number(m.total_pnl_pct||0);const pnlEl=$("paper-pnl");pnlEl.textContent=`${pnl>=0?'+₹':'-₹'}${Math.abs(pnl).toLocaleString('en-IN',{maximumFractionDigits:0})} (${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}%)`;pnlEl.style.color=pnl>=0?BUY:SELL;$("paper-portfolio-value").textContent='₹ '+Number(m.portfolio_value||0).toLocaleString('en-IN',{maximumFractionDigits:0});$("paper-winrate").textContent=`${Number(m.win_rate||0).toFixed(1)}%`;$("paper-sharpe").textContent=Number(m.sharpe_ratio||0).toFixed(2);$("paper-maxdd").textContent=`${Number(m.max_drawdown||0).toFixed(2)}%`;const mode=String(modeValue||m.mode||"manual").toLowerCase();const badge=$("paper-mode-badge");badge.dataset.mode=mode;badge.textContent='● '+mode.toUpperCase()+' MODE';badge.className=`badge ${mode==="auto"?"buy":"hold"}`;$("paper-toggle-mode").textContent=mode==="auto"?"Switch to MANUAL":"Switch to AUTO"}
+function renderOpenPositions(positions){const tbody=$("paper-open-body");if(!tbody)return;const rows=Array.isArray(positions)?positions:[];if(!rows.length){tbody.innerHTML='<tr><td colspan="8" class="empty">No open positions</td></tr>';return}tbody.innerHTML=rows.map(p=>{const up=Number(p.unrealized_pnl||0);const upPct=Number(p.unrealized_pnl_pct||0);return `<tr><td>${p.ticker||'--'}</td><td style="color:${String(p.direction).toUpperCase()==='LONG'?BUY:SELL}">${p.direction||'--'}</td><td class="r">${inr(p.entry_price||0)}</td><td class="r">${inr(p.current_price||0)}</td><td class="r" style="color:${up>=0?BUY:SELL}">${up>=0?'+':''}${inr(up)} (${upPct>=0?'+':''}${upPct.toFixed(2)}%)</td><td class="r">${inr(p.stop_loss||0)}</td><td class="r">${inr(p.take_profit||0)}</td><td><button class="btn" onclick="closePaperPosition('${p.ticker}')">X</button></td></tr>`}).join("")}
+function renderClosedPaperTrades(trades){const tbody=$("paper-closed-body");if(!tbody)return;const rows=Array.isArray(trades)?trades:[];if(!rows.length){tbody.innerHTML='<tr><td colspan="9" class="empty">No closed trades</td></tr>';return}tbody.innerHTML=rows.slice(0,20).map((t,i)=>{const pnl=Number(t.pnl_pct||0);const result=pnl>0?'WIN':'LOSS';return `<tr><td>${i+1}</td><td>${String(t.closed_at||'').replace('T',' ').slice(0,19)}</td><td>${t.ticker||'--'}</td><td style="color:${String(t.direction).toUpperCase()==='LONG'?BUY:SELL}">${t.direction||'--'}</td><td class="r">${inr(t.entry_price||0)}</td><td class="r">${inr(t.exit_price||0)}</td><td class="r" style="color:${pnl>=0?BUY:SELL}">${pnl>=0?'+':''}${pnl.toFixed(2)}%</td><td style="color:${pnl>=0?BUY:SELL}">${result}</td><td>${t.reason||'--'}</td></tr>`}).join("")}
+async function renderPendingSignals(){const tbody=$("paper-pending-body");if(!tbody)return;const pending=await json('/api/paper/pending',{cacheTtlMs:4000,timeoutMs:7000});const rows=Array.isArray(pending)?pending:[];if(!rows.length){tbody.innerHTML='<tr><td colspan="7" class="empty">No pending signals</td></tr>';return}tbody.innerHTML=rows.map(s=>`<tr><td>${s.ticker||'--'}</td><td style="color:${String(s.signal).toUpperCase()==='LONG'?BUY:SELL}">${s.signal||'--'}</td><td class="r">${Number(s.confidence||0).toFixed(1)}%</td><td class="r">${inr(s.entry_price||0)}</td><td class="r">${inr(s.stop_loss||0)}</td><td class="r">${inr(s.take_profit||0)}</td><td><button class="btn" onclick="approvePaperSignal('${s.ticker}','${s.trade_id}')">✓ Execute</button> <button class="btn" onclick="rejectPaperSignal('${s.ticker}','${s.trade_id}')">✗</button></td></tr>`).join("")}
+async function loadPaperPortfolio(){
+  try{
+    const res=await fetch('/api/paper/portfolio');
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const data=await res.json();
+    const m=data.metrics;
+    if(!m)throw new Error('No metrics');
+    renderPaperMetrics(m,data.mode||'manual');
+    renderOpenPositions(data.open_positions||[]);
+    const trades=await json('/api/paper/trades?limit=50',{cacheTtlMs:8000,timeoutMs:8000});
+    renderClosedPaperTrades(Array.isArray(trades)?trades:[]);
+    await renderPendingSignals();
+  }catch(e){
+    console.error('Paper portfolio load error:',e);
+    const cEl=$("paper-capital");if(cEl)cEl.textContent='₹ 0';
+    const pEl=$("paper-pnl");if(pEl){pEl.textContent='₹ 0';pEl.style.color='#94a3b8'}
+    const pvEl=$("paper-portfolio-value");if(pvEl)pvEl.textContent='₹ 0';
+    const wrEl=$("paper-winrate");if(wrEl)wrEl.textContent='0%';
+    const shEl=$("paper-sharpe");if(shEl)shEl.textContent='0.00';
+    const ddEl=$("paper-maxdd");if(ddEl)ddEl.textContent='0.00%';
+    renderOpenPositions([]);
+    renderClosedPaperTrades([]);
+  }
+}
+async function executePaperTrade(){const activeTicker=S.ticker;const signal=await json(`/api/stock-signal?ticker=${encodeURIComponent(activeTicker)}`,{cacheTtlMs:0,timeoutMs:9000});if(!signal){showToast('Signal fetch failed');return}const sg=String(signal.signal||'HOLD').toUpperCase();if(!['BUY','SELL','LONG','SHORT'].includes(sg)){showToast('No active signal for '+activeTicker);return}signal.ticker=activeTicker;const result=await json('/api/paper/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(signal),cacheTtlMs:0,timeoutMs:10000});if(result&&result.success){showToast('✅ Trade executed: '+result.direction+' '+result.ticker);await loadPaperPortfolio()}else{showToast('❌ '+(result?.message||result?.error||'Execution failed'))}}
+async function closePaperPosition(ticker){if(!confirm('Close position in '+ticker+'?'))return;const result=await json('/api/paper/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker,reason:'manual'}),cacheTtlMs:0,timeoutMs:10000});if(result&&result.success){const pnl=Number(result.pnl_pct||0);showToast(pnl>=0?`✅ Closed +${pnl.toFixed(2)}%`:`❌ Closed ${pnl.toFixed(2)}%`)}else{showToast('❌ '+(result?.error||'Close failed'))}await loadPaperPortfolio()}
+async function toggleMode(){const currentMode=String($("paper-mode-badge")?.dataset?.mode||'manual').toLowerCase();const newMode=currentMode==='auto'?'manual':'auto';const r=await json('/api/paper/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:newMode}),cacheTtlMs:0,timeoutMs:8000});if(r&&r.success){showToast(`Mode changed to ${newMode.toUpperCase()}`);await loadPaperPortfolio()}else{showToast('Mode change failed')}}
+async function resetPaperAccount(){if(!confirm('Reset paper account? This clears open positions.'))return;const r=await json('/api/paper/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({capital:100000}),cacheTtlMs:0,timeoutMs:8000});if(r&&r.success){showToast('Paper account reset');await loadPaperPortfolio()}else{showToast('Reset failed')}}
+async function approvePaperSignal(ticker,tradeId){const r=await json('/api/paper/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker,trade_id:tradeId}),cacheTtlMs:0,timeoutMs:10000});if(r&&r.success){showToast(`✅ Executed ${ticker}`)}else{showToast(`❌ ${r?.message||'Approve failed'}`)}await loadPaperPortfolio()}
+async function rejectPaperSignal(ticker,tradeId){await json('/api/paper/reject',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker,trade_id:tradeId}),cacheTtlMs:0,timeoutMs:8000});showToast(`Rejected ${ticker}`);await loadPaperPortfolio()}
+
+function boot(){setupTop();setupLeftTabs();setupBottom();setupSearch();buildIndices();renderWatch();initChart();initTf();screener();initBT();initPF();initFO();$("refresh-signal").onclick=signal;const expBtn=$("pf-export-itr");if(expBtn)expBtn.onclick=async()=>{const r=await json("/api/compliance/export-itr3");if(r&&r.path)alert(`ITR-3 CSV exported: ${r.path}`);else alert("Export failed")};const pExec=$("paper-exec-active");if(pExec)pExec.onclick=executePaperTrade;const pToggle=$("paper-toggle-mode");if(pToggle)pToggle.onclick=toggleMode;const pReset=$("paper-reset");if(pReset)pReset.onclick=resetPaperAccount;const paperTab=$("tab-paper");if(paperTab)paperTab.addEventListener('click',loadPaperPortfolio);$("t-name").textContent=`${S.name} (${S.ticker})`;setAsset(S.ticker,S.name);market();refreshPortfolio();setInterval(signal,15000);setInterval(refreshWatch,60000);setInterval(()=>loadOrderFlow(S.ticker),60000);setInterval(market,30000);setInterval(refreshNews,300000);setInterval(loadPaperPortfolio,30000);setInterval(()=>{const p=document.querySelector('.btab.active')?.dataset?.b;if(p==="fo")refreshFO()},60000)}
 boot();
 </script>
 </body>
