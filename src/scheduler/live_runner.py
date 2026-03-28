@@ -126,7 +126,12 @@ class LiveRunner:
             ic_window=self.cfg["signal"]["ic_window"],
         )
         self.regime_detector = RegimeDetector()
-        self.signal_engine = SignalEngine(self.cfg.get("cost_model", {}))
+        self.signal_engine = SignalEngine(
+            self.cfg.get("cost_model", {}),
+            min_sqs=float(self.cfg.get("signal", {}).get("min_sqs", 55)),
+            dedup_hours=float(self.cfg.get("signal", {}).get("dedup_hours", 4)),
+            min_holding_candles=int(self.cfg.get("signal", {}).get("min_holding_candles", 2)),
+        )
         db_url = self.cfg.get("database", {}).get("url", db_path)
         self.store = SignalStore(db_url)
         self.kelly = KellyCalculator(
@@ -752,7 +757,17 @@ class LiveRunner:
 
                 alpha_start_ms = time_module.perf_counter() * 1000.0
                 ml_score = self._combined_ml_score(symbol, asset_class, df, entry_price)
-                alpha_result = self.alpha_model.score(df, ml_score=ml_score, hurst=hurst)
+                alpha_result = self.alpha_model.score(
+                    df,
+                    ml_score=ml_score,
+                    hurst=hurst,
+                    asset=symbol,
+                    asset_class=asset_class,
+                    regime=regime,
+                )
+                alpha_result["atr_percentile"] = float(
+                    df.get("ATR_Percentile", pd.Series([50.0], index=df.index)).iloc[-1]
+                )
                 timing_totals["alpha_score_ms"] += (time_module.perf_counter() * 1000.0 - alpha_start_ms)
 
                 if alpha_result["signal"] == "HOLD":
@@ -1004,7 +1019,17 @@ class LiveRunner:
 
                 ml_score = self._combined_ml_score(symbol, asset_class, df, entry_price)
 
-                alpha_result = self.alpha_model.score(df, ml_score=ml_score, hurst=hurst)
+                alpha_result = self.alpha_model.score(
+                    df,
+                    ml_score=ml_score,
+                    hurst=hurst,
+                    asset=symbol,
+                    asset_class=asset_class,
+                    regime=regime,
+                )
+                alpha_result["atr_percentile"] = float(
+                    df.get("ATR_Percentile", pd.Series([50.0], index=df.index)).iloc[-1]
+                )
                 if alpha_result["signal"] == "HOLD":
                     continue
 

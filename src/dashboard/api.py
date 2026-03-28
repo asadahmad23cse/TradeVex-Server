@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from datetime import datetime
 from typing import Any, Dict, List, Union
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect  # type: ignore[import]
@@ -416,7 +417,8 @@ async def run_backtest_endpoint(payload: dict):
         for i in range(50, len(feat_df)):
             window = feat_df.iloc[: i + 1]
             try:
-                result = model.score(window)
+                ac = "indian_stock" if str(ticker).upper().endswith((".NS", ".BO")) else "us_stock"
+                result = model.score(window, asset=str(ticker), asset_class=ac)
                 signals[i] = str(result.get("signal", "HOLD")).upper()
             except Exception:
                 signals[i] = "HOLD"
@@ -590,6 +592,7 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
         import yfinance as yf  # type: ignore[import]
         from src.features.engineer import FeatureEngineer  # type: ignore[import]
         from src.alpha.factor_model import AlphaFactorModel  # type: ignore[import]
+        from src.alpha.signal_quality import SignalQualityScorer  # type: ignore[import]
 
         # Fallback to fetching minimum 5 days to ensure FeatureEngineer has enough data for ATR_Percentile (104 bars)
         df = yf.download(ticker, interval="5m", period="5d", progress=False)
@@ -609,8 +612,26 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
             return {"ticker": ticker, "signal": "HOLD", "confidence": 50, "alpha_score": 0.0, "message": "Feature computation failed"}
 
         # Very low threshold for dashboard activity demonstration
-        model = AlphaFactorModel(alpha_threshold=0.01)  
-        result = model.score(feat_df)
+        model = AlphaFactorModel(alpha_threshold=0.01)
+        asset_class = "indian_stock" if ticker.upper().endswith((".NS", ".BO")) else "us_stock"
+        result = model.score(feat_df, asset=ticker, asset_class=asset_class)
+        atr_pct = float(feat_df.get("ATR_Percentile", 50.0).iloc[-1]) if "ATR_Percentile" in feat_df.columns else 50.0
+        sqs_min = float((_dashboard_cfg.get("signal", {}) or {}).get("min_sqs", 55))
+        sqs_obj = SignalQualityScorer(min_sqs=sqs_min).score(
+            signal=str(result.get("signal", "HOLD")),
+            factor_scores=result.get("factor_scores", {}),
+            ic_weights=result.get("ic_weights", {}),
+            regime=str(result.get("regime_for_confidence", "SIDEWAYS")),
+            atr_percentile=atr_pct,
+        )
+        signal_out = str(result.get("signal", "HOLD"))
+        if signal_out in {"BUY", "SELL"} and not sqs_obj.passes:
+            signal_out = "HOLD"
+        sqs_message = (
+            f"Signal blocked by SQS gate ({sqs_obj.sqs} < {sqs_min})"
+            if str(result.get("signal", "HOLD")) in {"BUY", "SELL"} and not sqs_obj.passes
+            else ""
+        )
 
         entry_price: float = float(feat_df["Close"].iloc[-1])
         atr: float = float(feat_df.get("ATR_14", feat_df["Close"] * 0.02).iloc[-1])
@@ -621,7 +642,7 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
         return {
             "ticker": ticker,
             "asset": ticker,
-            "signal": result["signal"],
+            "signal": signal_out,
             "strength": result["strength"],
             "confidence": result["confidence"],
             "alpha_score": result["alpha_score"],
@@ -630,10 +651,69 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
             "take_profit": _round2(tp),
             "factor_scores": result.get("factor_scores", {}),
             "ic_weights": result.get("ic_weights", {}),
+            "sqs": sqs_obj.sqs,
+            "sqs_passed": sqs_obj.passes,
+            "sqs_components": sqs_obj.components,
+            "message": sqs_message,
             "live": True,
         }
     except Exception as e:
         return {"ticker": ticker, "signal": "HOLD", "confidence": 50, "alpha_score": 0.0, "message": str(e)}
+
+
+@app.get("/api/signal-quality")
+def get_signal_quality(ticker: str = "RELIANCE.NS"):
+    """Return composite Signal Quality Score (SQS) for an asset."""
+    try:
+        import yfinance as yf  # type: ignore[import]
+        from src.features.engineer import FeatureEngineer  # type: ignore[import]
+        from src.alpha.factor_model import AlphaFactorModel  # type: ignore[import]
+        from src.alpha.signal_quality import SignalQualityScorer  # type: ignore[import]
+
+        df = yf.download(ticker, interval="5m", period="5d", progress=False)
+        if df.empty or len(df) < 40:
+            df = yf.download(ticker, period="6mo", progress=False)
+        if df.empty or len(df) < 40:
+            return {"ticker": ticker, "error": "Insufficient data"}
+
+        if hasattr(df.columns, "levels"):
+            df.columns = df.columns.get_level_values(0)
+
+        eng = FeatureEngineer()
+        feat_df = eng.compute_all_features(df, timeframe="daily" if len(df) > 100 else "intraday")
+        if feat_df.empty:
+            return {"ticker": ticker, "error": "Feature computation failed"}
+
+        asset_class = "indian_stock" if ticker.upper().endswith((".NS", ".BO")) else "us_stock"
+        model = AlphaFactorModel(alpha_threshold=float((_dashboard_cfg.get("signal", {}) or {}).get("alpha_score_threshold", 0.15)))
+        result = model.score(feat_df, asset=ticker, asset_class=asset_class)
+
+        atr_pct = float(feat_df.get("ATR_Percentile", 50.0).iloc[-1]) if "ATR_Percentile" in feat_df.columns else 50.0
+        sqs_min = float((_dashboard_cfg.get("signal", {}) or {}).get("min_sqs", 55))
+        sqs = SignalQualityScorer(min_sqs=sqs_min).score(
+            signal=str(result.get("signal", "HOLD")),
+            factor_scores=result.get("factor_scores", {}),
+            ic_weights=result.get("ic_weights", {}),
+            regime=str(result.get("regime_for_confidence", "SIDEWAYS")),
+            atr_percentile=atr_pct,
+        )
+
+        return {
+            "ticker": ticker,
+            "asset_class": asset_class,
+            "signal": result.get("signal", "HOLD"),
+            "alpha_score": result.get("alpha_score", 0.0),
+            "confidence": result.get("confidence", 50.0),
+            "sqs": sqs.sqs,
+            "sqs_passed": sqs.passes,
+            "threshold": sqs.threshold,
+            "components": sqs.components,
+            "factor_scores": result.get("factor_scores", {}),
+            "ic_weights": result.get("ic_weights", {}),
+            "as_of_utc": datetime.utcnow().isoformat(),
+        }
+    except Exception as e:
+        return {"ticker": ticker, "error": str(e)}
 
 
 @app.get("/api/chart-markers")

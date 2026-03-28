@@ -307,7 +307,7 @@ def get_us_stock_signal(ticker: str) -> dict[str, Any]:
             return _cached_or_default(key, {})
 
         model = AlphaFactorModel(alpha_threshold=0.01)
-        result = model.score(feat_df)
+        result = model.score(feat_df, asset=symbol, asset_class="us_stock")
 
         entry_price = float(feat_df["Close"].iloc[-1])
         atr = float(feat_df.get("ATR_14", feat_df["Close"] * 0.02).iloc[-1])

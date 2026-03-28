@@ -271,7 +271,14 @@ class BacktestEngine:
             window = df.iloc[max(0, i - 200): i + 1]
             hurst = compute_hurst(window["Close"].tail(60))
 
-            alpha_result = self.alpha_model.score(window, ml_score=0.0, hurst=hurst)
+            alpha_result = self.alpha_model.score(
+                window,
+                ml_score=0.0,
+                hurst=hurst,
+                asset=ticker,
+                asset_class=asset_class,
+                regime=None,
+            )
             if alpha_result["signal"] == "HOLD":
                 continue
 

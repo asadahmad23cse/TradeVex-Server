@@ -248,6 +248,9 @@ signal:
   alpha_score_threshold: 0.15
   ic_window: 60
   min_confidence: 50.0
+  min_sqs: 55
+  dedup_hours: 4
+  min_holding_candles: 2
 
 risk:
   max_daily_drawdown_pct: 5.0

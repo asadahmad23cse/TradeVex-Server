@@ -13,8 +13,9 @@ produces a fully-specified TradingSignal dataclass with:
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
+from src.alpha.signal_quality import SignalQualityScorer
 from src.risk.cost_model import CostModel  # type: ignore[import]
 
 
@@ -25,7 +26,7 @@ from src.risk.cost_model import CostModel  # type: ignore[import]
 @dataclass
 class TradingSignal:
     signal_id: str = field(default_factory=lambda: str(uuid.uuid4()))
-    timestamp: datetime = field(default_factory=datetime.utcnow)
+    timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     asset: str = ""
     asset_class: str = ""       # 'indian_stock' | 'us_stock' | 'forex'
@@ -123,8 +124,30 @@ class SignalEngine:
     Applies net-alpha gate: discards signals where transaction cost > gross alpha.
     """
 
-    def __init__(self, cost_config: dict | None = None):
+    def __init__(
+        self,
+        cost_config: dict | None = None,
+        min_sqs: float = 55.0,
+        dedup_hours: float = 4.0,
+        min_holding_candles: int = 2,
+    ):
         self._cost_model = CostModel(cost_config or {})
+        self._sqs_scorer = SignalQualityScorer(min_sqs=min_sqs)
+        self._min_sqs = float(min_sqs)
+        self._dedup_seconds = float(dedup_hours) * 3600.0
+        self._min_holding_candles = int(min_holding_candles)
+        self._last_same_direction_ts: dict[tuple[str, str], datetime] = {}
+        self._last_direction_state: dict[str, dict[str, object]] = {}
+        self._bar_counters: dict[str, int] = {}
+
+    @staticmethod
+    def _normalize_direction(signal: str) -> str:
+        s = (signal or "").upper()
+        if s in {"BUY", "LONG"}:
+            return "LONG"
+        if s in {"SELL", "SHORT"}:
+            return "SHORT"
+        return "HOLD"
 
     def generate(
         self,
@@ -154,13 +177,52 @@ class SignalEngine:
         regime_size_mult : float â€” 0.5 for SIDEWAYS, 1.0 otherwise
         """
         signal_str = alpha_result["signal"]
+        direction = self._normalize_direction(signal_str)
         strength = alpha_result["strength"]
         confidence = alpha_result["confidence"]
         alpha_score = alpha_result["alpha_score"]
+        now_utc = datetime.now(timezone.utc)
+        state_key = f"{asset}:{timeframe}"
 
         # HOLD or regime gate
         if signal_str == "HOLD" or not regime_allows:
             return None
+
+        # Signal quality gate
+        atr_percentile = float(alpha_result.get("atr_percentile", 50.0))
+        sqs_payload = alpha_result.get("sqs")
+        if sqs_payload is None:
+            sqs_payload = alpha_result.get("signal_quality_score")
+        sqs_val = float(sqs_payload) if sqs_payload is not None else None
+        if sqs_val is None:
+            sqs_eval = self._sqs_scorer.score(
+                signal=signal_str,
+                factor_scores=alpha_result.get("factor_scores", {}),
+                ic_weights=alpha_result.get("ic_weights", {}),
+                regime=regime,
+                atr_percentile=atr_percentile,
+            )
+            sqs_val = float(sqs_eval.sqs)
+        if sqs_val < self._min_sqs:
+            return None
+
+        # Same-direction deduplication window
+        last_same = self._last_same_direction_ts.get((state_key, direction))
+        if last_same is not None:
+            elapsed = (now_utc - last_same).total_seconds()
+            if elapsed < self._dedup_seconds:
+                return None
+
+        # Minimum holding period before accepting reversal
+        bar_index = int(self._bar_counters.get(state_key, 0)) + 1
+        self._bar_counters[state_key] = bar_index
+        st = self._last_direction_state.get(state_key)
+        if st:
+            prev_dir = str(st.get("direction", "HOLD"))
+            prev_bar = int(st.get("bar_index", 0))
+            if direction in {"LONG", "SHORT"} and prev_dir in {"LONG", "SHORT"} and direction != prev_dir:
+                if (bar_index - prev_bar) < self._min_holding_candles:
+                    return None
 
         # Net-alpha gate (GAP 2): discard if transaction cost exceeds gross alpha
         final_size = position_size_pct * regime_size_mult
@@ -196,7 +258,7 @@ class SignalEngine:
             slip_key = "forex_major" if asset in {"EURUSD", "GBPUSD"} else "forex_minor"
         slippage = SLIPPAGE.get(slip_key, SLIPPAGE["us_stock"])
 
-        return TradingSignal(
+        out = TradingSignal(
             asset=asset,
             asset_class=asset_class,
             timeframe=timeframe,
@@ -219,6 +281,9 @@ class SignalEngine:
             net_alpha_score=round(net_alpha, 4),  # type: ignore[call-overload]
             cs_alpha_score=round(cs_alpha_score, 4),  # type: ignore[call-overload]
         )
+        self._last_same_direction_ts[(state_key, direction)] = now_utc
+        self._last_direction_state[state_key] = {"direction": direction, "bar_index": bar_index}
+        return out
 
     def format_cli(self, sig: TradingSignal) -> str:
         """Return a formatted CLI string for the signal."""
