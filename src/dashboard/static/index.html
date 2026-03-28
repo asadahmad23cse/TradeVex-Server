@@ -161,32 +161,54 @@ body{
 .pulse-hold { animation: pulseBlue 3s ease-in-out infinite; }
 
 .info-panel {
-  background: #161b22;
-  border: 1px solid #30363d;
-  border-radius: 10px;
+  position: relative;
+  background:
+    radial-gradient(120% 120% at 0% 0%, rgba(88,166,255,.10), rgba(22,27,34,0) 55%),
+    linear-gradient(180deg, #171d27 0%, #121821 100%);
+  border: 1px solid #2c3645;
+  border-radius: 12px;
   padding: 14px;
-  transition: border-color 0.3s, transform 0.2s;
+  box-shadow: 0 12px 26px rgba(2,6,23,.32);
+  transition: border-color .25s ease, transform .2s ease, box-shadow .25s ease;
 }
 .info-panel:hover {
   border-color: #58a6ff;
-  transform: translateY(-2px);
+  transform: translateY(-3px);
+  box-shadow: 0 16px 30px rgba(2,6,23,.42);
 }
 .panel-title {
-  font-size: 13px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
   color: #e6edf3;
+  margin-bottom: 4px;
+}
+.panel-subtitle{
+  font-size: 11px;
+  color: #8f9db3;
   margin-bottom: 10px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid #21262d;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #212c3a;
 }
 .panel-row {
   display: flex;
   justify-content: space-between;
-  padding: 3px 0;
+  padding: 7px 0;
   font-size: 12px;
+  border-bottom: 1px dashed rgba(65,78,97,.35);
 }
-.panel-label { color: #8b949e; }
-.panel-value { font-family: "JetBrains Mono", monospace; text-align: right; }
+.panel-row:last-child{border-bottom:none}
+.panel-label {
+  color: #9babbe;
+  font-size: 11.5px;
+}
+.panel-value {
+  font-family: "JetBrains Mono", monospace;
+  text-align: right;
+  color: #e6edf3;
+  font-weight: 700;
+}
 
 .history-row-win { background: rgba(0,200,83,0.05); }
 .history-row-loss { background: rgba(255,23,68,0.05); }
@@ -326,7 +348,8 @@ body{
 
     <div class="terminal-panels panels-grid" style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; margin:10px 12px;">
       <div class="info-panel">
-        <div class="panel-title">📊 Order Flow</div>
+        <div class="panel-title">Order Flow</div>
+        <div class="panel-subtitle">Volume, flow and momentum posture</div>
         <div class="panel-row"><span class="panel-label">Volume</span><span id="of-volume" class="panel-value">—</span></div>
         <div class="panel-row"><span class="panel-label" title="On-Balance Volume direction: Rising = institutions buying, Falling = selling">Smart Money</span><span id="of-obv" class="panel-value">—</span></div>
         <div class="panel-row"><span class="panel-label" title="Chaikin Money Flow: positive = big buyers accumulating, negative = distributing">Money Flow</span><span id="of-cmf" class="panel-value">—</span></div>
@@ -334,7 +357,8 @@ body{
       </div>
 
       <div class="info-panel">
-        <div class="panel-title">📈 Derivatives</div>
+        <div class="panel-title">Derivatives</div>
+        <div class="panel-subtitle">Funding, OI and positioning bias</div>
         <div class="panel-row"><span class="panel-label">Funding Rate</span><span id="deriv-funding" class="panel-value">—</span></div>
         <div class="panel-row"><span class="panel-label">Sentiment</span><span id="deriv-sentiment" class="panel-value">—</span></div>
         <div class="panel-row"><span class="panel-label">Open Interest</span><span id="deriv-oi" class="panel-value">—</span></div>
@@ -342,14 +366,16 @@ body{
       </div>
 
       <div class="info-panel" style="max-height:220px; overflow-y:auto;">
-        <div class="panel-title">📰 Live BTC News</div>
+        <div class="panel-title">Live BTC News</div>
+        <div class="panel-subtitle">Latest market-moving headlines</div>
         <div id="news-feed" style="font-size:11px; line-height:1.6;">
           <span style="color:#484f58">Loading news...</span>
         </div>
       </div>
 
       <div class="info-panel">
-        <div class="panel-title">🌍 Market Overview</div>
+        <div class="panel-title">Market Overview</div>
+        <div class="panel-subtitle">Regime, volatility and sentiment snapshot</div>
         <div class="panel-row"><span class="panel-label">1h Change</span><span id="mo-1h" class="panel-value">—</span></div>
         <div class="panel-row"><span class="panel-label">Fear & Greed</span><span id="mo-fg" class="panel-value">—</span></div>
         <div class="panel-row"><span class="panel-label">Volatility</span><span id="mo-vol" class="panel-value">—</span></div>

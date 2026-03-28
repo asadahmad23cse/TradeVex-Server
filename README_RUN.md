@@ -7,7 +7,7 @@ This is the practical runbook for the current project structure and UI.
 From the project root:
 
 ```powershell
-cd c:\Users\KRISH\Desktop\Trading
+cd c:\Users\Asad\Desktop\Trading
 python -m venv .venv
 .\.venv\Scripts\activate
 python -m pip install --upgrade pip

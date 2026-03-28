@@ -308,6 +308,12 @@ def btc_news(limit: int = 8):
     return {"news": get_btc_news(limit)}
 
 
+@app.get("/api/news")
+def get_news(symbol: str = "BTC", asset_class: str = "crypto", limit: int = 8):
+    from src.data.news_feed import get_news_for_asset
+    return {"news": get_news_for_asset(symbol, asset_class, limit)}
+
+
 @app.get("/api/stock-signal")
 def get_stock_signal(ticker: str = "RELIANCE.NS"):
     """Return AI signal for a specific stock â€” live alpha computation."""
