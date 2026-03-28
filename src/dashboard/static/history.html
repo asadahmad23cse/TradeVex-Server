@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>QuantTrader — Signal History</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'Consolas', monospace; }
+  nav { background: #161b22; padding: 12px 24px; display: flex; gap: 24px; border-bottom: 1px solid #30363d; }
+  nav a { color: #58a6ff; text-decoration: none; font-size: 14px; }
+  nav a.active { color: #f0f6fc; border-bottom: 2px solid #58a6ff; padding-bottom: 2px; }
+  .page { padding: 24px; }
+  h1 { font-size: 20px; color: #f0f6fc; margin-bottom: 20px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { background: #161b22; padding: 10px 8px; text-align: left; color: #8b949e; font-weight: normal;
+       border-bottom: 1px solid #30363d; white-space: nowrap; }
+  td { padding: 8px; border-bottom: 1px solid #21262d; white-space: nowrap; }
+  tr:hover td { background: #161b22; }
+  .tag-BUY { color: #3fb950; font-weight: bold; }
+  .tag-SELL { color: #f85149; font-weight: bold; }
+  .str-STRONG { color: #e3b341; }
+  .str-MODERATE { color: #58a6ff; }
+  .str-WEAK { color: #8b949e; }
+  .out-WIN { color: #3fb950; font-weight: bold; }
+  .out-LOSS { color: #f85149; font-weight: bold; }
+  .out-null { color: #8b949e; font-style: italic; }
+  .pnl-pos { color: #3fb950; } .pnl-neg { color: #f85149; }
+  .regime-BULL { color: #3fb950; } .regime-BEAR { color: #f85149; } .regime-SIDEWAYS { color: #58a6ff; }
+  .empty { padding: 32px; text-align: center; color: #8b949e; }
+</style>
+</head>
+<body>
+<nav>
+  <a href="/">Live Signals</a>
+  <a href="/portfolio">Portfolio</a>
+  <a href="/history" class="active">Signal History</a>
+  <a href="/factors">Factor Analysis</a>
+  <a href="/regime">Regime Monitor</a>
+</nav>
+<div class="page">
+  <h1>Signal History</h1>
+  <div id="table-container"><div class="empty">Loading...</div></div>
+</div>
+
+<script>
+fetch('/api/history?limit=100').then(r=>r.json()).then(rows=>{
+  const el = document.getElementById('table-container');
+  if (!rows.length) { el.innerHTML = '<div class="empty">No signals yet.</div>'; return; }
+  el.innerHTML = `<table>
+    <thead><tr>
+      <th>Time</th><th>Asset</th><th>Class</th><th>TF</th>
+      <th>Signal</th><th>Strength</th><th>Conf%</th><th>α</th>
+      <th>Regime</th><th>Entry</th><th>SL</th><th>TP</th>
+      <th>Size%</th><th>Outcome</th><th>PnL%</th>
+    </tr></thead>
+    <tbody>${rows.map(s=>{
+      const pnl = s.pnl_pct != null ? `<td class="${s.pnl_pct>=0?'pnl-pos':'pnl-neg'}">${(s.pnl_pct>=0?'+':'')+parseFloat(s.pnl_pct).toFixed(2)}%</td>` : '<td class="out-null">—</td>';
+      return `<tr>
+        <td>${new Date(s.timestamp).toLocaleString()}</td>
+        <td><b>${s.asset}</b></td>
+        <td>${(s.asset_class||'').replace('_',' ')}</td>
+        <td>${s.timeframe}</td>
+        <td class="tag-${s.signal}">${s.signal}</td>
+        <td class="str-${s.strength}">${s.strength}</td>
+        <td>${parseFloat(s.confidence).toFixed(1)}</td>
+        <td>${parseFloat(s.alpha_score).toFixed(3)}</td>
+        <td class="regime-${s.regime}">${s.regime}</td>
+        <td>${parseFloat(s.entry_price).toFixed(4)}</td>
+        <td style="color:#f85149">${parseFloat(s.stop_loss).toFixed(4)}</td>
+        <td style="color:#3fb950">${parseFloat(s.take_profit).toFixed(4)}</td>
+        <td>${parseFloat(s.position_size_pct).toFixed(1)}%</td>
+        <td class="out-${s.outcome||'null'}">${s.outcome||'Open'}</td>
+        ${pnl}
+      </tr>`;
+    }).join('')}
+    </tbody></table>`;
+});
+</script>
+</body>
+</html>

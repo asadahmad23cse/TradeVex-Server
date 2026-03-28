@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>QuantTrader — Regime Monitor</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'Consolas', monospace; }
+  nav { background: #161b22; padding: 12px 24px; display: flex; gap: 24px; border-bottom: 1px solid #30363d; }
+  nav a { color: #58a6ff; text-decoration: none; font-size: 14px; }
+  nav a.active { color: #f0f6fc; border-bottom: 2px solid #58a6ff; padding-bottom: 2px; }
+  .page { padding: 24px; }
+  h1 { font-size: 20px; color: #f0f6fc; margin-bottom: 20px; }
+  .info { color: #8b949e; font-size: 13px; margin-bottom: 24px; line-height: 1.6; }
+  .regime-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 28px; }
+  .regime-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; text-align: center; }
+  .regime-card.BULL { border-top: 4px solid #3fb950; }
+  .regime-card.BEAR { border-top: 4px solid #f85149; }
+  .regime-card.SIDEWAYS { border-top: 4px solid #58a6ff; }
+  .regime-card h3 { font-size: 16px; margin-bottom: 8px; }
+  .regime-card .regime-label { font-size: 28px; font-weight: bold; margin: 12px 0; }
+  .regime-BULL { color: #3fb950; }
+  .regime-BEAR { color: #f85149; }
+  .regime-SIDEWAYS { color: #58a6ff; }
+  .regime-card p { font-size: 12px; color: #8b949e; line-height: 1.5; }
+  .prob-bars { margin-top: 12px; }
+  .prob-row { display: flex; align-items: center; gap: 8px; margin: 4px 0; font-size: 12px; }
+  .prob-label { width: 70px; text-align: right; }
+  .prob-bar { flex: 1; height: 6px; background: #21262d; border-radius: 3px; overflow: hidden; }
+  .prob-fill-BULL { height: 100%; background: #3fb950; }
+  .prob-fill-BEAR { height: 100%; background: #f85149; }
+  .prob-fill-SIDEWAYS { height: 100%; background: #58a6ff; }
+  .prob-pct { width: 40px; }
+  .signal-filter { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; margin-bottom: 20px; }
+  .signal-filter h2 { font-size: 14px; color: #f0f6fc; margin-bottom: 12px; }
+  .filter-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; font-size: 13px; }
+  .filter-item { padding: 10px; background: #0d1117; border-radius: 4px; text-align: center; }
+  .filter-item .regime-name { font-weight: bold; margin-bottom: 4px; }
+  .filter-item .rule { color: #8b949e; font-size: 11px; }
+  .hmm-info { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }
+  .hmm-info h2 { font-size: 14px; color: #f0f6fc; margin-bottom: 12px; }
+  .hmm-info p { font-size: 12px; color: #8b949e; line-height: 1.6; margin-bottom: 8px; }
+</style>
+</head>
+<body>
+<nav>
+  <a href="/">Live Signals</a>
+  <a href="/portfolio">Portfolio</a>
+  <a href="/history">Signal History</a>
+  <a href="/factors">Factor Analysis</a>
+  <a href="/regime" class="active">Regime Monitor</a>
+</nav>
+<div class="page">
+  <h1>Regime Monitor</h1>
+  <p class="info">
+    Hidden Markov Model (GaussianHMM) with 3 states and 4 emission features
+    (log-return, realized volatility, volume ratio, ATR percentile).
+    Retrained weekly on rolling 252-day window. Signal gate: only the correct
+    signal type is allowed to fire in each regime.
+  </p>
+
+  <div class="regime-cards">
+    <div class="regime-card BULL">
+      <h3>BULL</h3>
+      <div class="regime-label regime-BULL">▲ BULL</div>
+      <p>Positive drift, low-medium volatility, normal volume.</p>
+      <p style="color:#3fb950;margin-top:8px">Only BUY signals allowed.</p>
+    </div>
+    <div class="regime-card BEAR">
+      <h3>BEAR</h3>
+      <div class="regime-label regime-BEAR">▼ BEAR</div>
+      <p>Negative drift, high volatility, elevated volume (panic).</p>
+      <p style="color:#f85149;margin-top:8px">Only SELL signals allowed.</p>
+    </div>
+    <div class="regime-card SIDEWAYS">
+      <h3>SIDEWAYS</h3>
+      <div class="regime-label regime-SIDEWAYS">— SIDEWAYS</div>
+      <p>Near-zero drift, low volatility, low volume.</p>
+      <p style="color:#58a6ff;margin-top:8px">Only STRONG signals pass. Position size halved.</p>
+    </div>
+  </div>
+
+  <div class="signal-filter">
+    <h2>Regime → Signal Filter Rules</h2>
+    <div class="filter-grid">
+      <div class="filter-item">
+        <div class="regime-name regime-BULL">BULL</div>
+        <div class="rule">✅ BUY — pass (any strength)<br>❌ SELL — blocked<br>📏 Position size: 100%</div>
+      </div>
+      <div class="filter-item">
+        <div class="regime-name regime-BEAR">BEAR</div>
+        <div class="rule">❌ BUY — blocked<br>✅ SELL — pass (any strength)<br>📏 Position size: 100%</div>
+      </div>
+      <div class="filter-item">
+        <div class="regime-name regime-SIDEWAYS">SIDEWAYS</div>
+        <div class="rule">✅ STRONG only — pass<br>❌ MODERATE / WEAK — blocked<br>📏 Position size: 50%</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="hmm-info">
+    <h2>HMM Technical Details</h2>
+    <p><b>Model:</b> GaussianHMM — hmmlearn library, covariance_type='full'</p>
+    <p><b>States:</b> 3 (labeled by mean log-return: lowest=BEAR, middle=SIDEWAYS, highest=BULL)</p>
+    <p><b>Emission features (4):</b> daily log-return, realized volatility (20d), volume ratio, ATR percentile rank (90d)</p>
+    <p><b>Training:</b> Rolling 252-day window of daily data, retrained weekly (Sundays)</p>
+    <p><b>Inference:</b> Viterbi decoding — most likely hidden state sequence</p>
+    <p><b>Why 4 features?</b> Bull and Sideways both have low volatility — adding volume ratio and ATR percentile allows the model to discriminate between them.</p>
+    <p style="color:#8b949e;margin-top:8px;font-style:italic">
+      Note: Current regime data is displayed on the Live Signals page (regime tag on each signal card).
+      Full state probability time-series will be available in Phase 2 with real-time charting.
+    </p>
+  </div>
+</div>
+</body>
+</html>

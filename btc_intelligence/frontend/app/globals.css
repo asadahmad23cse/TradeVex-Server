@@ -1,0 +1,227 @@
+﻿:root {
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: #0d1117;
+  color: #e6edf3;
+  font-family: "JetBrains Mono", "Inter", "Segoe UI", sans-serif;
+}
+
+.navBar {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  display: flex;
+  gap: 10px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #30363d;
+  background: rgba(13, 17, 23, 0.95);
+  backdrop-filter: blur(8px);
+}
+
+.navLink {
+  color: #9da7b3;
+  text-decoration: none;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+.navLink.active {
+  background: #161b22;
+  color: #ffffff;
+}
+
+.pageWrap {
+  padding: 18px;
+}
+
+.mainGrid {
+  display: grid;
+  grid-template-columns: minmax(340px, 520px) minmax(460px, 1fr);
+  gap: 16px;
+}
+
+.panel,
+.chartPanel,
+.card {
+  border: 1px solid #30363d;
+  border-radius: 12px;
+  background: #161b22;
+  overflow: hidden;
+}
+
+.panelHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #30363d;
+  padding: 12px 14px;
+}
+
+.panelHeader h2,
+.chartHead h3,
+.card h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.status {
+  color: #8b949e;
+  font-size: 12px;
+}
+
+.gridRows {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.k,
+.v {
+  padding: 10px 12px;
+  border-bottom: 1px solid #30363d;
+}
+
+.k {
+  color: #9da7b3;
+  border-right: 1px solid #30363d;
+}
+
+.v {
+  font-weight: 700;
+}
+
+.stackV {
+  display: grid;
+  gap: 4px;
+}
+
+.progressWrap {
+  padding: 12px;
+}
+
+.progressWrap.compact {
+  padding-top: 0;
+}
+
+.progressTrack {
+  margin-top: 6px;
+  height: 10px;
+  border-radius: 999px;
+  background: #262f3d;
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  transition: width 240ms ease;
+}
+
+.holdBanner {
+  padding: 10px 12px 14px;
+  color: #ffd54f;
+  font-weight: 700;
+}
+
+.pauseBanner {
+  padding: 10px 12px 14px;
+  color: #ffab40;
+  font-weight: 700;
+}
+
+.cLong {
+  color: #00c853;
+}
+
+.cShort {
+  color: #ff1744;
+}
+
+.cHold {
+  color: #2979ff;
+}
+
+.chartHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #30363d;
+  padding: 12px;
+}
+
+.chartHead select {
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  color: #e6edf3;
+  background: #0d1117;
+  padding: 6px 8px;
+}
+
+.chartRoot {
+  width: 100%;
+}
+
+.card {
+  padding: 14px;
+}
+
+.tableLike {
+  display: grid;
+  gap: 6px;
+}
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  border-bottom: 1px solid #263140;
+  padding-bottom: 5px;
+}
+
+.historyTable {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 170px 80px 95px 220px 1fr;
+  gap: 6px 10px;
+  font-size: 12px;
+}
+
+.h {
+  color: #9da7b3;
+  font-weight: 700;
+  border-bottom: 1px solid #30363d;
+  padding-bottom: 6px;
+}
+
+.jsonBlock {
+  white-space: pre-wrap;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 12px;
+}
+
+.blink {
+  animation: pulse 0.7s ease;
+}
+
+@keyframes pulse {
+  0% { box-shadow: 0 0 0 rgba(41, 121, 255, 0.0); }
+  50% { box-shadow: 0 0 24px rgba(41, 121, 255, 0.25); }
+  100% { box-shadow: 0 0 0 rgba(41, 121, 255, 0.0); }
+}
+
+@media (max-width: 1100px) {
+  .mainGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .historyTable {
+    grid-template-columns: 120px 70px 85px 160px 1fr;
+  }
+}

@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BTC Quant Terminal</title>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+:root{
+  --bg:#070b12;
+  --panel:rgba(16,24,36,.86);
+  --line:rgba(148,163,184,.2);
+  --text:#e2e8f0;
+  --muted:#94a3b8;
+  --btc:#f7931a;
+  --up:#22c55e;
+  --down:#ef4444;
+  --hold:#f59e0b;
+  --okbg:rgba(34,197,94,.15);
+  --badbg:rgba(239,68,68,.16);
+}
+*{box-sizing:border-box}
+body{
+  margin:0;
+  min-height:100vh;
+  color:var(--text);
+  font-family:"Sora",system-ui,sans-serif;
+  background:
+    radial-gradient(900px 600px at -5% -10%, rgba(247,147,26,.26), transparent 60%),
+    radial-gradient(900px 700px at 100% 0%, rgba(59,130,246,.14), transparent 62%),
+    linear-gradient(180deg,#070b12 0%,#0a1220 100%);
+}
+.wrap{max-width:1350px;margin:0 auto;padding:20px}
+.top{
+  display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:14px;
+}
+.title{font-weight:800;font-size:32px;letter-spacing:.02em}
+.title span{color:var(--btc)}
+.pills{display:flex;gap:8px;flex-wrap:wrap}
+.pill{
+  font-size:11px;font-weight:700;padding:6px 10px;border-radius:999px;
+  border:1px solid var(--line);background:rgba(15,23,36,.7);color:var(--muted)
+}
+.pill.ok{color:var(--up);background:var(--okbg);border-color:rgba(34,197,94,.35)}
+.pill.bad{color:var(--down);background:var(--badbg);border-color:rgba(239,68,68,.35)}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.card{
+  background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:12px;
+  box-shadow:0 8px 24px rgba(2,6,23,.35);
+}
+.k{color:var(--muted);font-size:12px;margin-bottom:5px}
+.v{font-size:24px;font-weight:800;font-family:"JetBrains Mono",monospace}
+.v.small{font-size:15px;font-weight:700}
+.layout{display:grid;grid-template-columns:2fr 1fr;gap:10px}
+#chart-panel,.side{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 8px 24px rgba(2,6,23,.35)}
+.head{
+  padding:12px 14px;border-bottom:1px solid var(--line);
+  display:flex;justify-content:space-between;align-items:center;gap:8px
+}
+.head-title{font-size:14px;font-weight:700}
+.sub{font-size:12px;color:var(--muted);font-family:"JetBrains Mono",monospace}
+#chart{height:580px}
+.side-body{padding:12px;display:grid;gap:8px}
+.signal{padding:10px;border-radius:10px;border:1px solid var(--line);background:rgba(9,14,24,.62)}
+.sig-row{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:12px}
+.sig-val{font-family:"JetBrains Mono",monospace;font-weight:700}
+.buy{color:var(--up)}.sell{color:var(--down)}.hold{color:var(--hold)}
+@media(max-width:980px){
+  .grid{grid-template-columns:1fr 1fr}
+  .layout{grid-template-columns:1fr}
+  #chart{height:380px}
+  .title{font-size:26px}
+}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="title"><span>BTC</span> Quant Terminal</div>
+      <div class="pills">
+        <div id="ws-pill" class="pill">WS: connecting</div>
+        <div id="sig-pill" class="pill">Signal API: checking</div>
+        <div class="pill ok">Update: 15s</div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card"><div class="k">Bitcoin Price (USDT)</div><div class="v" id="price">--</div></div>
+      <div class="card"><div class="k">Last Tick</div><div class="v small" id="last-tick">--</div></div>
+      <div class="card"><div class="k">Session High</div><div class="v small" id="session-high">--</div></div>
+      <div class="card"><div class="k">Session Low</div><div class="v small" id="session-low">--</div></div>
+    </div>
+
+    <div class="layout">
+      <div id="chart-panel">
+        <div class="head">
+          <div class="head-title">BTCUSDT All-Time + Live</div>
+          <div class="sub" id="status">Loading history...</div>
+        </div>
+        <div id="chart"></div>
+      </div>
+      <div class="side">
+        <div class="head">
+          <div class="head-title">Real-Time Signal (Your Algo)</div>
+          <div class="sub" id="sig-source">source: --</div>
+        </div>
+        <div class="side-body">
+          <div class="signal"><div class="sig-row"><span>Signal</span><span id="sig" class="sig-val hold">HOLD</span></div></div>
+          <div class="signal"><div class="sig-row"><span>Validated</span><span id="sigv" class="sig-val hold">HOLD</span></div></div>
+          <div class="signal"><div class="sig-row"><span>Confidence</span><span id="conf" class="sig-val">--</span></div></div>
+          <div class="signal"><div class="sig-row"><span>Alpha Score</span><span id="alpha" class="sig-val">--</span></div></div>
+          <div class="signal"><div class="sig-row"><span>Net Alpha</span><span id="netalpha" class="sig-val">--</span></div></div>
+          <div class="signal"><div class="sig-row"><span>Entry</span><span id="entry" class="sig-val">--</span></div></div>
+          <div class="signal"><div class="sig-row"><span>Stop Loss</span><span id="sl" class="sig-val">--</span></div></div>
+          <div class="signal"><div class="sig-row"><span>Take Profit</span><span id="tp" class="sig-val">--</span></div></div>
+          <div class="signal"><div class="sig-row"><span>Algo</span><span id="algo" class="sig-val">--</span></div></div>
+          <div class="signal"><div class="sig-row"><span>As Of UTC</span><span id="asof" class="sig-val">--</span></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+const BINANCE_WS_URL = "wss://stream.binance.com:9443/ws/btcusdt@trade";
+const BINANCE_REST_TICKER = "https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT";
+const BINANCE_KLINES = "https://api.binance.com/api/v3/klines";
+const BTC_LISTING_MS = 1502942400000;
+const DAY_MS = 86400000;
+const SIGNAL_REFRESH_MS = 15000;
+const REST_REFRESH_MS = 15000;
+const RECONNECT_MS = 3000;
+
+let chart, series;
+let points = [];
+let ws = null;
+let reconnectTimer = null;
+let lastPrice = null;
+
+function setPill(id, text, ok){
+  const el = document.getElementById(id);
+  el.textContent = text;
+  el.className = "pill " + (ok ? "ok" : "bad");
+}
+function clsFromSignal(s){const x=(s||"HOLD").toUpperCase();return x==="BUY"?"buy":x==="SELL"?"sell":"hold";}
+function fmt(v){return Number(v).toLocaleString("en-US",{maximumFractionDigits:2});}
+function fmtPx(v){if(v===null||v===undefined||Number.isNaN(Number(v))) return "--"; return fmt(v);}
+
+function initChart(){
+  const c=document.getElementById("chart");
+  chart=LightweightCharts.createChart(c,{
+    width:c.clientWidth,height:c.clientHeight,
+    layout:{background:{type:"solid",color:"transparent"},textColor:"#94a3b8",fontFamily:"Sora"},
+    grid:{vertLines:{color:"rgba(148,163,184,.08)"},horzLines:{color:"rgba(148,163,184,.08)"}},
+    rightPriceScale:{borderColor:"rgba(148,163,184,.25)"},
+    timeScale:{borderColor:"rgba(148,163,184,.25)",timeVisible:true,secondsVisible:true}
+  });
+  series=chart.addAreaSeries({
+    topColor:"rgba(247,147,26,.35)",
+    bottomColor:"rgba(247,147,26,.03)",
+    lineColor:"#f7931a",
+    lineWidth:2
+  });
+  window.addEventListener("resize",()=>chart.applyOptions({width:c.clientWidth,height:c.clientHeight}));
+}
+
+function updateCards(price, nowMs){
+  const now=new Date(nowMs);
+  document.getElementById("price").textContent=fmtPx(price);
+  document.getElementById("last-tick").textContent=now.toLocaleTimeString("en-US",{hour12:false});
+  if(points.length>0){
+    const vals=points.map(p=>p.value);
+    document.getElementById("session-high").textContent=fmtPx(Math.max(...vals));
+    document.getElementById("session-low").textContent=fmtPx(Math.min(...vals));
+  }
+  if(lastPrice!==null){document.getElementById("price").style.color=price>=lastPrice?"var(--up)":"var(--down)";}
+  lastPrice=price;
+}
+
+function upsertPoint(tsSec, price){
+  if(!points.length || points[points.length-1].time!==tsSec){
+    const p={time:tsSec,value:price};
+    points.push(p);
+    series.update(p);
+  } else {
+    points[points.length-1].value=price;
+    series.update({time:tsSec,value:price});
+  }
+  chart.timeScale().scrollToRealTime();
+}
+
+async function fetchKlinesBatch(startMs){
+  const url = `${BINANCE_KLINES}?symbol=BTCUSDT&interval=1d&limit=1000&startTime=${startMs}`;
+  const res = await fetch(url, { cache: "no-store" });
+  if(!res.ok) throw new Error(`HTTP ${res.status}`);
+  return await res.json();
+}
+
+async function loadHistoryFromBackend(){
+  const res=await fetch("/api/btc/history?interval=1d",{cache:"no-store"});
+  if(!res.ok) throw new Error(`backend history HTTP ${res.status}`);
+  const json=await res.json();
+  const data=(json.data||[]).map(d=>({time:Number(d.time),value:Number(d.close)}));
+  if(!data.length) throw new Error("backend returned empty history");
+  points=data;
+  series.setData(points);
+  chart.timeScale().fitContent();
+  const last=points[points.length-1];
+  updateCards(last.value,last.time*1000);
+  document.getElementById("status").textContent=`History backend: ${data.length} daily bars`;
+}
+
+async function loadHistoryFromBinanceDirect(){
+  let start = BTC_LISTING_MS;
+  const now = Date.now();
+  const all = [];
+  for(let i=0;i<30 && start<now;i++){
+    const rows = await fetchKlinesBatch(start);
+    if(!Array.isArray(rows) || rows.length===0) break;
+    all.push(...rows);
+    const lastOpen = Number(rows[rows.length-1][0]);
+    const nextStart = lastOpen + DAY_MS;
+    if(nextStart<=start) break;
+    start = nextStart;
+    if(rows.length < 1000) break;
+  }
+  const data = all.map(r=>({time:Math.floor(Number(r[0])/1000),value:Number(r[4])}));
+  if(!data.length) throw new Error("direct Binance history empty");
+  points=data;
+  series.setData(points);
+  chart.timeScale().fitContent();
+  const last=points[points.length-1];
+  updateCards(last.value,last.time*1000);
+  document.getElementById("status").textContent=`History direct Binance: ${data.length} daily bars`;
+}
+
+async function loadAllTimeHistory(){
+  try{
+    await loadHistoryFromBackend();
+    setPill("sig-pill","Signal API: backend mode",true);
+  }catch(err){
+    document.getElementById("status").textContent=`Backend history unavailable (${err.message}), loading direct Binance...`;
+    try{
+      await loadHistoryFromBinanceDirect();
+    }catch(err2){
+      document.getElementById("status").textContent="History load failed: "+err2.message;
+    }
+  }
+}
+
+function processTick(price, eventTimeMs, source){
+  const tsSec=Math.floor(eventTimeMs/1000);
+  upsertPoint(tsSec, price);
+  updateCards(price, eventTimeMs);
+  document.getElementById("status").textContent=`${source} | ${new Date(eventTimeMs).toISOString()}`;
+}
+
+async function restFallbackTick(){
+  try{
+    const res=await fetch(BINANCE_REST_TICKER,{cache:"no-store"});
+    if(!res.ok) throw new Error("HTTP "+res.status);
+    const json=await res.json();
+    const price=Number(json?.price);
+    if(!Number.isFinite(price)||price<=0) throw new Error("Invalid price");
+    processTick(price, Date.now(), "Binance REST");
+  }catch(_){}
+}
+
+function scheduleReconnect(){
+  if(reconnectTimer) return;
+  reconnectTimer=setTimeout(()=>{reconnectTimer=null;connectWebSocket();},RECONNECT_MS);
+}
+
+function connectWebSocket(){
+  if(ws){try{ws.close();}catch(_){}}
+  ws=new WebSocket(BINANCE_WS_URL);
+  ws.onopen=()=>{setPill("ws-pill","WS: connected",true);};
+  ws.onmessage=(ev)=>{
+    try{
+      const d=JSON.parse(ev.data);
+      const price=Number(d?.p);
+      const t=Number(d?.T)||Date.now();
+      if(Number.isFinite(price)&&price>0) processTick(price,t,"Binance WS");
+    }catch(_){}
+  };
+  ws.onerror=()=>{setPill("ws-pill","WS: error",false);};
+  ws.onclose=()=>{setPill("ws-pill","WS: reconnecting",false);scheduleReconnect();};
+}
+
+function applySignalPayload(s, source){
+  const sig=(s.signal||"HOLD").toUpperCase();
+  const sigv=(s.validated_signal||"HOLD").toUpperCase();
+  document.getElementById("sig").textContent=sig;
+  document.getElementById("sigv").textContent=sigv;
+  document.getElementById("sig").className="sig-val "+clsFromSignal(sig);
+  document.getElementById("sigv").className="sig-val "+clsFromSignal(sigv);
+  document.getElementById("conf").textContent=s.confidence!==undefined?`${Number(s.confidence).toFixed(2)}%`:"--";
+  document.getElementById("alpha").textContent=s.alpha_score!==undefined?Number(s.alpha_score).toFixed(4):"--";
+  document.getElementById("netalpha").textContent=s.net_alpha_score!==undefined?Number(s.net_alpha_score).toFixed(4):"--";
+  document.getElementById("entry").textContent=fmtPx(s.entry_price);
+  document.getElementById("sl").textContent=fmtPx(s.stop_loss);
+  document.getElementById("tp").textContent=fmtPx(s.take_profit);
+  document.getElementById("algo").textContent=s.algo||"--";
+  document.getElementById("asof").textContent=s.as_of_utc||"--";
+  document.getElementById("sig-source").textContent=`source: ${source}`;
+}
+
+async function loadSignal(){
+  try{
+    const res=await fetch("/api/btc/signal?interval=5m",{cache:"no-store"});
+    if(res.ok){
+      const s=await res.json();
+      applySignalPayload(s, "btc_service");
+      setPill("sig-pill","Signal API: /api/btc/signal",true);
+      return;
+    }
+    if(res.status===404){
+      // old backend process: fallback to legacy endpoint
+      const fb=await fetch("/api/stock-signal?ticker=BTC-USD",{cache:"no-store"});
+      if(fb.ok){
+        const x=await fb.json();
+        const payload={
+          signal:(x.signal||"HOLD"),
+          validated_signal:(x.signal||"HOLD"),
+          confidence:x.confidence??50,
+          alpha_score:x.alpha_score??0,
+          net_alpha_score:x.alpha_score??0,
+          entry_price:x.entry_price??0,
+          stop_loss:x.stop_loss??0,
+          take_profit:x.take_profit??0,
+          algo:"fallback_stock_signal_v1",
+          as_of_utc:new Date().toISOString()
+        };
+        applySignalPayload(payload, "fallback (/api/stock-signal)");
+        setPill("sig-pill","Signal API: backend old (restart needed)",false);
+        return;
+      }
+    }
+    throw new Error(`HTTP ${res.status}`);
+  }catch(err){
+    setPill("sig-pill","Signal API: offline",false);
+    document.getElementById("sig-source").textContent=`source: unavailable (${err.message})`;
+  }
+}
+
+async function init(){
+  initChart();
+  await loadAllTimeHistory();
+  await restFallbackTick();
+  connectWebSocket();
+  await loadSignal();
+  setInterval(restFallbackTick, REST_REFRESH_MS);
+  setInterval(loadSignal, SIGNAL_REFRESH_MS);
+}
+
+init();
+</script>
+</body>
+</html>

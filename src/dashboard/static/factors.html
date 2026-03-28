@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>QuantTrader — Factor Analysis</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'Consolas', monospace; }
+  nav { background: #161b22; padding: 12px 24px; display: flex; gap: 24px; border-bottom: 1px solid #30363d; }
+  nav a { color: #58a6ff; text-decoration: none; font-size: 14px; }
+  nav a.active { color: #f0f6fc; border-bottom: 2px solid #58a6ff; padding-bottom: 2px; }
+  .page { padding: 24px; }
+  h1 { font-size: 20px; color: #f0f6fc; margin-bottom: 20px; }
+  .info { color: #8b949e; font-size: 13px; margin-bottom: 24px; line-height: 1.6; }
+  .factors-legend { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; margin-bottom: 28px; }
+  .factor-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+  .factor-card h3 { font-size: 14px; color: #58a6ff; margin-bottom: 8px; }
+  .factor-card p { font-size: 12px; color: #8b949e; line-height: 1.5; }
+  .factor-table { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+  .factor-table h2 { font-size: 14px; color: #f0f6fc; margin-bottom: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { padding: 8px 12px; text-align: left; color: #8b949e; font-weight: normal; border-bottom: 1px solid #30363d; }
+  td { padding: 8px 12px; border-bottom: 1px solid #21262d; }
+  .bar-container { height: 8px; background: #21262d; border-radius: 4px; overflow: hidden; min-width: 80px; }
+  .bar-pos { height: 100%; background: #3fb950; border-radius: 4px; }
+  .bar-neg { height: 100%; background: #f85149; border-radius: 4px; float: right; }
+  .val-pos { color: #3fb950; } .val-neg { color: #f85149; }
+  .empty { padding: 32px; text-align: center; color: #8b949e; }
+</style>
+</head>
+<body>
+<nav>
+  <a href="/">Live Signals</a>
+  <a href="/portfolio">Portfolio</a>
+  <a href="/history">Signal History</a>
+  <a href="/factors" class="active">Factor Analysis</a>
+  <a href="/regime">Regime Monitor</a>
+</nav>
+<div class="page">
+  <h1>Factor Analysis</h1>
+  <p class="info">
+    The 5-Factor IC-Weighted Alpha Model scores each asset across 5 independent alpha factors.
+    Factors are normalized (Z-score) and combined using Information Coefficient (IC) weights —
+    factors that have been more predictive recently get higher weight automatically.
+  </p>
+
+  <div class="factors-legend">
+    <div class="factor-card">
+      <h3>F1 — Momentum</h3>
+      <p>Multi-period ROC: 0.4×ROC_5d + 0.3×ROC_20d + 0.2×ROC_60d + 0.1×ROC_1d<br>Boosted when Hurst > 0.55 (trending)</p>
+    </div>
+    <div class="factor-card">
+      <h3>F2 — Mean Reversion</h3>
+      <p>−Z-score(Close − SMA_20) / BB_Std<br>Price far above mean → bearish. Boosted when Hurst &lt; 0.45</p>
+    </div>
+    <div class="factor-card">
+      <h3>F3 — Volume Alpha</h3>
+      <p>0.5×OBV_Slope + 0.3×CMF + 0.2×Volume_Osc<br>Rising OBV + rising price = institutional accumulation</p>
+    </div>
+    <div class="factor-card">
+      <h3>F4 — ML Alpha (LSTM)</h3>
+      <p>Monte Carlo Dropout: 20 forward passes → mean prediction + uncertainty<br>Score = sign(pred − price) × 1/(1 + uncertainty)</p>
+    </div>
+    <div class="factor-card">
+      <h3>F5 — Volatility / Squeeze</h3>
+      <p>Keltner Squeeze detection + ATR percentile rank<br>Squeeze fires breakout signal aligned with momentum direction</p>
+    </div>
+  </div>
+
+  <div class="factor-table">
+    <h2>Latest Signal Factor Scores</h2>
+    <div id="factor-table-content"><div class="empty">Loading...</div></div>
+  </div>
+</div>
+
+<script>
+fetch('/api/signals?limit=20').then(r=>r.json()).then(rows=>{
+  const el = document.getElementById('factor-table-content');
+  if (!rows.length) { el.innerHTML = '<div class="empty">No signals yet.</div>'; return; }
+
+  const withFactors = rows.filter(r => r.factor_scores);
+  if (!withFactors.length) { el.innerHTML = '<div class="empty">No factor data available yet.</div>'; return; }
+
+  el.innerHTML = `<table>
+    <thead><tr>
+      <th>Asset</th><th>Signal</th><th>F1 Mom</th><th>F2 MRev</th><th>F3 Vol</th><th>F4 ML</th><th>F5 Sqz</th>
+      <th>α Score</th><th>Hurst</th><th>Time</th>
+    </tr></thead>
+    <tbody>${withFactors.map(s=>{
+      const fs = typeof s.factor_scores === 'string' ? JSON.parse(s.factor_scores) : s.factor_scores || {};
+      const fval = (v) => {
+        if (v == null) return '<td>—</td>';
+        const n = parseFloat(v);
+        const pct = Math.min(Math.abs(n)*30, 100);
+        const bar = n >= 0
+          ? `<div class="bar-container"><div class="bar-pos" style="width:${pct}%"></div></div>`
+          : `<div class="bar-container"><div class="bar-neg" style="width:${pct}%"></div></div>`;
+        return `<td><span class="${n>=0?'val-pos':'val-neg'}">${n>=0?'+':''}${n.toFixed(2)}</span> ${bar}</td>`;
+      };
+      return `<tr>
+        <td><b>${s.asset}</b></td>
+        <td class="${s.signal==='BUY'?'val-pos':'val-neg'}">${s.signal}</td>
+        ${fval(fs.F1)}${fval(fs.F2)}${fval(fs.F3)}${fval(fs.F4)}${fval(fs.F5)}
+        <td class="${parseFloat(s.alpha_score)>=0?'val-pos':'val-neg'}">${parseFloat(s.alpha_score).toFixed(3)}</td>
+        <td>${parseFloat(s.hurst_exponent||0.5).toFixed(2)}</td>
+        <td>${new Date(s.timestamp).toLocaleTimeString()}</td>
+      </tr>`;
+    }).join('')}
+    </tbody></table>`;
+});
+</script>
+</body>
+</html>

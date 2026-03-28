@@ -1,0 +1,43 @@
+﻿# Python / tooling
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+htmlcov/
+.tox/
+*.egg-info/
+dist/
+build/
+
+# Secrets & local env
+.env
+.env.*
+
+# VCS
+.git/
+
+# JS (if added later)
+node_modules/
+
+# Obsidian workspace metadata (not your note content)
+.obsidian/
+
+# Large / generated runtime artifacts (keep notes/ and docs/ indexed)
+data/
+logs/
+*.log
+*.pkl
+*.h5
+*.parquet
+*.feather
+*.db
+*.sqlite
+
+# OS / editor junk
+.DS_Store
+Thumbs.db

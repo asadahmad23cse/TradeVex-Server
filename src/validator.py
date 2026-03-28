@@ -1,0 +1,196 @@
+"""
+Layer — Walk-Forward Optimization (WFO) Validator.
+
+Validates the 5-Factor Alpha Model parameters using an expanding window:
+  - Minimum 252-day training window
+  - 21-day out-of-sample (OOS) step
+  - Parameter grid: alpha_score_threshold × ic_window
+  - Acceptance criterion: OOS Information Ratio (IC_mean / IC_std) > 0.3
+
+Per spec §5 (WFO Validation of Alpha Model Parameters).
+
+Usage:
+    python main.py --mode backtest --ticker AAPL --train_days 252
+"""
+
+import logging
+from datetime import datetime
+
+import numpy as np
+import pandas as pd
+
+from src.api.connectors import MarketDataConnector
+from src.features.engineer import FeatureEngineer
+from src.alpha.factor_model import AlphaFactorModel
+
+logger = logging.getLogger(__name__)
+
+
+class WFOValidator:
+    """
+    Walk-Forward Optimizer for the 5-factor alpha model.
+
+    Expands the training window from min_train_days onward, steps by
+    oos_step_days, and returns the best parameter set that achieves
+    out-of-sample IR > ir_threshold.
+    """
+
+    # Default WFO config (overridden by config.yaml `wfo` section)
+    DEFAULT_ALPHA_THRESHOLDS = [0.20, 0.25, 0.30, 0.35, 0.40, 0.45]
+    DEFAULT_IC_WINDOWS = [30, 45, 60, 75, 90]
+    DEFAULT_MIN_TRAIN = 252
+    DEFAULT_OOS_STEP = 21
+    DEFAULT_IR_THRESHOLD = 0.3
+
+    def __init__(
+        self,
+        ticker: str,
+        train_window: int = DEFAULT_MIN_TRAIN,
+        wfo_config: dict | None = None,
+    ):
+        self.ticker = ticker
+        self.min_train = train_window
+        cfg = wfo_config or {}
+        self.alpha_thresholds = cfg.get("alpha_thresholds", self.DEFAULT_ALPHA_THRESHOLDS)
+        self.ic_windows = cfg.get("ic_windows", self.DEFAULT_IC_WINDOWS)
+        self.oos_step = cfg.get("oos_step_days", self.DEFAULT_OOS_STEP)
+        self.ir_threshold = cfg.get("ir_threshold", self.DEFAULT_IR_THRESHOLD)
+
+        self.connector = MarketDataConnector()
+        self.engineer = FeatureEngineer()
+
+    # ------------------------------------------------------------------
+    # Public entry point
+    # ------------------------------------------------------------------
+
+    def run_validation(self, **kwargs) -> dict:
+        """
+        Execute WFO grid search over alpha_score_threshold × ic_window.
+
+        Returns
+        -------
+        dict with keys:
+          best_alpha_threshold, best_ic_window, best_ir, all_results, passed
+        """
+        print(f"\n{'='*60}")
+        print(f"  Walk-Forward Optimization — {self.ticker}")
+        print(f"  Min train: {self.min_train}d | OOS step: {self.oos_step}d")
+        print(f"  Alpha thresholds: {self.alpha_thresholds}")
+        print(f"  IC windows: {self.ic_windows}")
+        print(f"  IR threshold (accept): {self.ir_threshold}")
+        print(f"{'='*60}\n")
+
+        # Fetch daily data (need at least min_train + several OOS steps)
+        print(f"Fetching daily data for {self.ticker}...")
+        df_raw = self.connector.get_daily(self.ticker, period="5y")
+        if df_raw.empty:
+            print(f"[ERROR] No data returned for {self.ticker}")
+            return {"passed": False, "reason": "no_data"}
+
+        # Engineer full set of features
+        print("Engineering features...")
+        df = self.engineer.compute_all_features(df_raw, timeframe="daily")
+        if df.empty or len(df) < self.min_train + self.oos_step:
+            print(f"[ERROR] Insufficient data: {len(df)} rows after engineering")
+            return {"passed": False, "reason": "insufficient_data"}
+
+        print(f"Data ready: {len(df)} rows from {df.index[0].date()} to {df.index[-1].date()}\n")
+
+        # Grid search
+        all_results = []
+        for alpha_thr in self.alpha_thresholds:
+            for ic_win in self.ic_windows:
+                ir = self._run_wfo(df, alpha_thr, ic_win)
+                status = "✓ PASS" if ir >= self.ir_threshold else "✗ FAIL"
+                print(f"  alpha_thr={alpha_thr:.2f} | ic_window={ic_win:3d}d | OOS IR={ir:+.3f}  {status}")
+                all_results.append({
+                    "alpha_threshold": alpha_thr,
+                    "ic_window": ic_win,
+                    "oos_ir": round(ir, 4),
+                    "passed": ir >= self.ir_threshold,
+                })
+
+        # Select best
+        passing = [r for r in all_results if r["passed"]]
+        if passing:
+            best = max(passing, key=lambda r: r["oos_ir"])
+        else:
+            best = max(all_results, key=lambda r: r["oos_ir"])
+
+        print(f"\n{'='*60}")
+        print(f"  Best params: alpha_threshold={best['alpha_threshold']:.2f} | ic_window={best['ic_window']}d | OOS IR={best['oos_ir']:+.3f}")
+        if passing:
+            print(f"  ✓ {len(passing)} / {len(all_results)} parameter sets passed IR > {self.ir_threshold}")
+        else:
+            print(f"  ✗ NO parameter sets passed IR > {self.ir_threshold} — system not ready for live trading")
+        print(f"{'='*60}\n")
+
+        return {
+            "best_alpha_threshold": best["alpha_threshold"],
+            "best_ic_window": best["ic_window"],
+            "best_ir": best["oos_ir"],
+            "all_results": all_results,
+            "passed": len(passing) > 0,
+            "ticker": self.ticker,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    # ------------------------------------------------------------------
+    # Single WFO run for one parameter set
+    # ------------------------------------------------------------------
+
+    def _run_wfo(self, df: pd.DataFrame, alpha_threshold: float, ic_window: int) -> float:
+        """
+        Expanding-window WFO for one (alpha_threshold, ic_window) pair.
+
+        Returns
+        -------
+        float : out-of-sample Information Ratio = mean(OOS IC) / std(OOS IC)
+                Returns 0.0 if fewer than 2 OOS steps are available.
+        """
+        model = AlphaFactorModel(alpha_threshold=alpha_threshold, ic_window=ic_window)
+        fwd_returns = df["Returns"].shift(-1)  # forward 1-day return
+
+        oos_ics: list[float] = []
+        n = len(df)
+
+        # Expanding window: train on [0:train_end], test on [train_end : train_end+oos_step]
+        train_end = self.min_train
+        while train_end + self.oos_step <= n:
+            train_df = df.iloc[:train_end]
+            oos_df = df.iloc[train_end: train_end + self.oos_step]
+            oos_fwd = fwd_returns.iloc[train_end: train_end + self.oos_step]
+
+            if len(train_df) < ic_window + 10:
+                train_end += self.oos_step
+                continue
+
+            try:
+                # Score each OOS bar individually (using train history + OOS bar)
+                for i in range(len(oos_df)):
+                    # Use a window ending at this OOS bar
+                    window_end = train_end + i + 1
+                    window_df = df.iloc[max(0, window_end - ic_window - 10): window_end]
+                    if len(window_df) < ic_window + 5:
+                        continue
+
+                    result = model.score(window_df, ml_score=0.0, hurst=0.5)
+                    alpha_score = result.get("alpha_score", 0.0)
+                    actual_fwd = float(oos_fwd.iloc[i]) if i < len(oos_fwd) else np.nan
+
+                    if not np.isnan(actual_fwd) and not np.isnan(alpha_score):
+                        oos_ics.append(alpha_score * np.sign(actual_fwd))
+
+            except Exception as exc:
+                logger.debug("WFO step error (alpha=%.2f, ic=%d): %s", alpha_threshold, ic_window, exc)
+
+            train_end += self.oos_step
+
+        if len(oos_ics) < 2:
+            return 0.0
+
+        ic_array = np.array(oos_ics)
+        ic_mean = float(np.mean(ic_array))
+        ic_std = float(np.std(ic_array))
+        return ic_mean / ic_std if ic_std > 1e-9 else 0.0
+

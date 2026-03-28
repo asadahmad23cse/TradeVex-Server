@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>QuantTrader — Portfolio</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #0d1117; color: #e6edf3; font-family: 'Consolas', monospace; }
+  nav { background: #161b22; padding: 12px 24px; display: flex; gap: 24px; border-bottom: 1px solid #30363d; }
+  nav a { color: #58a6ff; text-decoration: none; font-size: 14px; }
+  nav a.active { color: #f0f6fc; border-bottom: 2px solid #58a6ff; padding-bottom: 2px; }
+  .page { padding: 24px; }
+  h1 { font-size: 20px; color: #f0f6fc; margin-bottom: 20px; }
+  .metrics-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; margin-bottom: 28px; }
+  .metric-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+  .metric-card .label { font-size: 11px; color: #8b949e; text-transform: uppercase; margin-bottom: 6px; }
+  .metric-card .value { font-size: 22px; font-weight: bold; }
+  .val-green { color: #3fb950; }
+  .val-red { color: #f85149; }
+  .val-blue { color: #58a6ff; }
+  .val-yellow { color: #e3b341; }
+  .section-title { font-size: 14px; color: #8b949e; text-transform: uppercase; letter-spacing: 1px; margin: 20px 0 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { background: #161b22; padding: 10px 12px; text-align: left; color: #8b949e; font-weight: normal;
+       border-bottom: 1px solid #30363d; }
+  td { padding: 10px 12px; border-bottom: 1px solid #21262d; }
+  tr:hover td { background: #161b22; }
+  .tag-BUY { color: #3fb950; } .tag-SELL { color: #f85149; }
+  .pnl-pos { color: #3fb950; } .pnl-neg { color: #f85149; }
+  .empty { padding: 32px; text-align: center; color: #8b949e; }
+</style>
+</head>
+<body>
+<nav>
+  <a href="/">Live Signals</a>
+  <a href="/portfolio" class="active">Portfolio</a>
+  <a href="/history">Signal History</a>
+  <a href="/factors">Factor Analysis</a>
+  <a href="/regime">Regime Monitor</a>
+</nav>
+<div class="page">
+  <h1>Portfolio Overview</h1>
+  <div class="metrics-grid" id="metrics-grid"></div>
+  <div class="section-title">Open Positions</div>
+  <div id="positions-table"></div>
+</div>
+
+<script>
+function load() {
+  fetch('/api/portfolio').then(r=>r.json()).then(data=>{
+    const m = data.metrics || {};
+    const grid = document.getElementById('metrics-grid');
+    const cards = [
+      { label: 'Total PnL', value: (m.total_pnl_pct>=0?'+':'')+m.total_pnl_pct?.toFixed(2)+'%', cls: m.total_pnl_pct>=0?'val-green':'val-red' },
+      { label: 'Today PnL', value: (m.daily_pnl_pct>=0?'+':'')+m.daily_pnl_pct?.toFixed(2)+'%', cls: m.daily_pnl_pct>=0?'val-green':'val-red' },
+      { label: 'Equity', value: '$'+Number(m.equity||0).toLocaleString(), cls: 'val-blue' },
+      { label: 'Sharpe', value: m.sharpe?.toFixed(2), cls: m.sharpe>=1.5?'val-green':m.sharpe>=1?'val-yellow':'val-red' },
+      { label: 'Sortino', value: m.sortino?.toFixed(2), cls: m.sortino>=2?'val-green':'val-yellow' },
+      { label: 'Calmar', value: m.calmar?.toFixed(2), cls: m.calmar>=1?'val-green':'val-yellow' },
+      { label: 'Max DD', value: m.max_drawdown?.toFixed(2)+'%', cls: 'val-red' },
+      { label: 'VaR 95%', value: m.var_95?.toFixed(2)+'%', cls: 'val-yellow' },
+      { label: 'Win Rate', value: m.win_rate?.toFixed(1)+'%', cls: m.win_rate>=50?'val-green':'val-red' },
+      { label: 'Profit Factor', value: m.profit_factor?.toFixed(2), cls: m.profit_factor>=1.5?'val-green':'val-yellow' },
+      { label: 'Open Pos', value: m.open_positions, cls: 'val-blue' },
+      { label: 'Closed Trades', value: m.closed_trades, cls: 'val-blue' },
+    ];
+    grid.innerHTML = cards.map(c=>`
+      <div class="metric-card">
+        <div class="label">${c.label}</div>
+        <div class="value ${c.cls}">${c.value ?? '—'}</div>
+      </div>`).join('');
+
+    const positions = data.positions || [];
+    const pt = document.getElementById('positions-table');
+    if (!positions.length) { pt.innerHTML = '<div class="empty">No open positions.</div>'; return; }
+    pt.innerHTML = `<table>
+      <thead><tr>
+        <th>Asset</th><th>Class</th><th>Dir</th><th>Entry</th>
+        <th>Current</th><th>SL</th><th>TP</th><th>Size %</th><th>Net PnL %</th><th>Opened</th>
+      </tr></thead>
+      <tbody>${positions.map(p=>`
+        <tr>
+          <td>${p.asset}</td>
+          <td>${p.asset_class?.replace('_',' ')}</td>
+          <td class="tag-${p.signal}">${p.signal}</td>
+          <td>${parseFloat(p.entry_price).toFixed(4)}</td>
+          <td>${parseFloat(p.current_price).toFixed(4)}</td>
+          <td style="color:#f85149">${parseFloat(p.stop_loss).toFixed(4)}</td>
+          <td style="color:#3fb950">${parseFloat(p.take_profit).toFixed(4)}</td>
+          <td>${p.position_size_pct?.toFixed(1)}%</td>
+          <td class="${p.net_pnl_pct>=0?'pnl-pos':'pnl-neg'}">${(p.net_pnl_pct>=0?'+':'')+p.net_pnl_pct?.toFixed(2)}%</td>
+          <td>${new Date(p.opened_at).toLocaleString()}</td>
+        </tr>`).join('')}
+      </tbody></table>`;
+  });
+}
+load();
+setInterval(load, 10000);
+</script>
+</body>
+</html>
