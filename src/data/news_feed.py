@@ -11,6 +11,30 @@ _cache = {"data": [], "ts": 0}
 CACHE_TTL = 120  # refresh every 2 min
 
 
+def _fetch_cryptocompare(limit: int) -> list[dict]:
+    news: list[dict] = []
+    try:
+        alt_resp = requests.get(
+            "https://min-api.cryptocompare.com/data/v2/news/?categories=BTC&lang=EN",
+            timeout=10,
+        )
+        alt_resp.raise_for_status()
+        alt_data = alt_resp.json().get("Data", [])
+        for item in alt_data[:limit]:
+            news.append(
+                {
+                    "title": item.get("title", ""),
+                    "source": item.get("source", ""),
+                    "url": item.get("url", ""),
+                    "published": item.get("published_on", ""),
+                    "sentiment": "⚪",
+                }
+            )
+    except Exception:
+        pass
+    return news
+
+
 def get_btc_news(limit: int = 8) -> list[dict]:
     now = time.time()
     if now - _cache["ts"] < CACHE_TTL and _cache["data"]:
@@ -42,10 +66,19 @@ def get_btc_news(limit: int = 8) -> list[dict]:
                 }
             )
 
+        # If CryptoPanic returns nothing, try free alternative:
+        if not news:
+            news = _fetch_cryptocompare(limit)
+
         _cache["data"] = news
         _cache["ts"] = now
         return news[:limit]
 
     except Exception as e:
         logger.warning("CryptoPanic fetch failed: %s", e)
+        news = _fetch_cryptocompare(limit)
+        if news:
+            _cache["data"] = news
+            _cache["ts"] = now
+            return news[:limit]
         return _cache["data"][:limit] if _cache["data"] else []

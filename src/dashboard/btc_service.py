@@ -427,7 +427,7 @@ class BitcoinMarketService:
             "validated": validated,
             "strength": strength,
             "confidence": round(confidence, 2),
-            "alpha_score": int(np.clip(round(raw_alpha * 100), 0, 100)),
+            "alpha_score": int(np.clip(round(abs(raw_alpha) * 100), 0, 100)),
             "alpha_score_raw": round(raw_alpha, 4),
             "net_alpha_score": int(np.clip(round(float(net_alpha) * 100), 0, 100)),
             "net_alpha_score_raw": round(float(net_alpha), 4),
