@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import HTMLResponse  # type: ignore[import]
 from fastapi.staticfiles import StaticFiles  # type: ignore[import]
 from starlette.middleware.base import BaseHTTPMiddleware  # type: ignore[import]
+from src.data.signal_history import get_history as get_signal_history, get_stats as get_signal_stats
 from src.dashboard.btc_service import BitcoinMarketService
 from src.dashboard.focus_engine import FocusQuantEngine
 
@@ -280,6 +281,16 @@ def get_btc_signal(interval: str = "5m"):
     if _btc_service is None:
         raise HTTPException(503, "BTC service not initialised")
     return _btc_service.get_realtime_signal(interval=interval)
+
+
+@app.get("/api/btc/signal/history")
+def signal_history(limit: int = 50):
+    return {"signals": get_signal_history(limit), "stats": get_signal_stats()}
+
+
+@app.get("/api/btc/signal/stats")
+def signal_stats():
+    return get_signal_stats()
 
 
 @app.get("/api/btc/markers")

@@ -184,6 +184,42 @@ body{
         </div>
       </div>
     </div>
+
+    <div id="stats-bar" style="display:flex; gap:20px; padding:10px 16px; margin:8px 12px; background:#161b22; border:1px solid #30363d; border-radius:8px; font-size:13px; color:#8b949e; flex-wrap:wrap;">
+      <span>Signals: <b id="stat-total" style="color:#e6edf3">0</b></span>
+      <span>Win Rate: <b id="stat-winrate" style="color:#00c853">0%</b></span>
+      <span>Wins: <b id="stat-wins" style="color:#00c853">0</b></span>
+      <span>Losses: <b id="stat-losses" style="color:#ff1744">0</b></span>
+      <span>Total P&L: <b id="stat-pnl" style="color:#e6edf3">0%</b></span>
+      <span>Open: <b id="stat-open" style="color:#ff9800">0</b></span>
+    </div>
+
+    <div style="margin:8px 12px; background:#161b22; border:1px solid #30363d; border-radius:8px; overflow:hidden;">
+      <div style="padding:10px 16px; font-size:14px; font-weight:600; color:#e6edf3; border-bottom:1px solid #30363d;">
+        Signal History
+      </div>
+      <div style="overflow-x:auto; max-height:300px; overflow-y:auto;">
+        <table style="width:100%; border-collapse:collapse; font-size:12px; font-family:'JetBrains Mono',monospace;">
+          <thead>
+            <tr style="color:#8b949e; border-bottom:1px solid #30363d;">
+              <th style="padding:8px; text-align:left">#</th>
+              <th style="padding:8px; text-align:left">Time</th>
+              <th style="padding:8px; text-align:left">Signal</th>
+              <th style="padding:8px; text-align:right">Conf</th>
+              <th style="padding:8px; text-align:right">Entry</th>
+              <th style="padding:8px; text-align:right">SL</th>
+              <th style="padding:8px; text-align:right">TP1</th>
+              <th style="padding:8px; text-align:right">R:R</th>
+              <th style="padding:8px; text-align:center">Result</th>
+              <th style="padding:8px; text-align:right">P&L</th>
+            </tr>
+          </thead>
+          <tbody id="history-tbody">
+            <tr><td colspan="10" style="padding:20px; text-align:center; color:#484f58;">No signals recorded yet</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   </div>
 
 <script>
@@ -219,6 +255,23 @@ function normalizeSignal(s){
 function signalCls(s){
   const x=normalizeSignal(s);
   return x==="LONG"?"long":x==="SHORT"?"short":"hold";
+}
+function styleSignalBadge(el, signal){
+  if(!el) return;
+  const v = normalizeSignal(signal);
+  el.style.padding = "2px 8px";
+  el.style.borderRadius = "999px";
+  el.style.border = "1px solid rgba(148,163,184,.25)";
+  if(v==="LONG"){
+    el.style.backgroundColor = "#00c853";
+    el.style.color = "#ffffff";
+  }else if(v==="SHORT"){
+    el.style.backgroundColor = "#ff1744";
+    el.style.color = "#ffffff";
+  }else{
+    el.style.backgroundColor = "#2979ff";
+    el.style.color = "#ffffff";
+  }
 }
 function setPill(id, text, ok){
   const el = document.getElementById(id);
@@ -497,6 +550,8 @@ function applySignalPayload(s, source){
   sigvEl.textContent=sigv;
   sigEl.className="sig-val "+signalCls(sig);
   sigvEl.className="sig-val "+signalCls(sigv);
+  styleSignalBadge(sigEl, sig);
+  styleSignalBadge(sigvEl, sigv);
 
   const conf=Math.max(0,Math.min(100,Number(s.confidence||0)));
   document.getElementById("conf").textContent=`${Math.round(conf)}%`;
@@ -570,6 +625,69 @@ async function loadSignal(){
   }
 }
 
+async function loadSignalHistory(){
+  try{
+    const resp = await fetch('/api/btc/signal/history?limit=20');
+    if(!resp.ok) return;
+    const data = await resp.json();
+
+    const s = data.stats || {};
+    const el = (id) => document.getElementById(id);
+    if (el('stat-total')) el('stat-total').textContent = s.total || 0;
+    if (el('stat-winrate')) {
+      el('stat-winrate').textContent = (s.win_rate || 0) + '%';
+      el('stat-winrate').style.color = s.win_rate >= 55 ? '#00c853' : s.win_rate >= 45 ? '#ff9800' : '#ff1744';
+    }
+    if (el('stat-wins')) el('stat-wins').textContent = s.wins || 0;
+    if (el('stat-losses')) el('stat-losses').textContent = s.losses || 0;
+    if (el('stat-pnl')) {
+      const pnl = s.total_pnl || 0;
+      el('stat-pnl').textContent = (pnl >= 0 ? '+' : '') + pnl + '%';
+      el('stat-pnl').style.color = pnl >= 0 ? '#00c853' : '#ff1744';
+    }
+    if (el('stat-open')) el('stat-open').textContent = s.open_signals || 0;
+
+    const tbody = document.getElementById('history-tbody');
+    if (tbody && data.signals && data.signals.length > 0) {
+      tbody.innerHTML = data.signals.reverse().map(sig => {
+        const signalType = sig.signal || 'LONG';
+        const status = sig.status || 'OPEN';
+        const sigColor = signalType === 'LONG' ? '#00c853' : '#ff1744';
+        const resultMap = {
+          'TP1_HIT': 'TP1',
+          'TP2_HIT': 'TP2',
+          'TP3_HIT': 'TP3',
+          'SL_HIT': 'SL',
+          'EXPIRED': 'EXP',
+          'OPEN': 'OPEN',
+        };
+        const result = resultMap[status] || status;
+        const resultColor = status.includes('TP') ? '#00c853' : status === 'SL_HIT' ? '#ff1744' : '#ff9800';
+        const pnl = sig.pnl_pct != null ? (sig.pnl_pct >= 0 ? '+' : '') + sig.pnl_pct + '%' : '—';
+        const pnlColor = sig.pnl_pct > 0 ? '#00c853' : sig.pnl_pct < 0 ? '#ff1744' : '#8b949e';
+        const time = sig.time ? sig.time.split('T')[1]?.substring(0,8) || sig.time : '—';
+
+        return `<tr style="border-bottom:1px solid #21262d;">
+          <td style="padding:6px 8px; color:#8b949e">${sig.id}</td>
+          <td style="padding:6px 8px; color:#8b949e">${time}</td>
+          <td style="padding:6px 8px; color:${sigColor}; font-weight:600">${signalType}</td>
+          <td style="padding:6px 8px; text-align:right">${sig.confidence ?? 0}%</td>
+          <td style="padding:6px 8px; text-align:right">${sig.entry?.toLocaleString() || '—'}</td>
+          <td style="padding:6px 8px; text-align:right; color:#ff5252">${sig.stop_loss?.toLocaleString() || '—'}</td>
+          <td style="padding:6px 8px; text-align:right; color:#00e676">${sig.tp1?.toLocaleString() || '—'}</td>
+          <td style="padding:6px 8px; text-align:right">${sig.risk_reward || '—'}</td>
+          <td style="padding:6px 8px; text-align:center; color:${resultColor}">${result}</td>
+          <td style="padding:6px 8px; text-align:right; color:${pnlColor}; font-weight:600">${pnl}</td>
+        </tr>`;
+      }).join('');
+    } else if (tbody) {
+      tbody.innerHTML = '<tr><td colspan="10" style="padding:20px; text-align:center; color:#484f58;">No signals recorded yet</td></tr>';
+    }
+  }catch(e){
+    console.warn('History fetch failed:', e);
+  }
+}
+
 function processTick(price, eventTimeMs, source){
   upsertPointFromTick(price, eventTimeMs);
   updateCards(price, eventTimeMs);
@@ -631,11 +749,13 @@ async function init(){
   });
   setTfActive();
   await switchTimeframe("15m");
+  await loadSignalHistory();
   await restFallbackTick();
   connectWebSocket();
   setInterval(restFallbackTick, REST_REFRESH_MS);
   setInterval(loadSignal, SIGNAL_REFRESH_MS);
   setInterval(loadSignalMarkers, 120000);
+  setInterval(loadSignalHistory, 30000);
 }
 
 init();

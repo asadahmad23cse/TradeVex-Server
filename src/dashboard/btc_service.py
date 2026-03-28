@@ -20,7 +20,7 @@ import requests
 from src.alpha.factor_model import AlphaFactorModel, _rolling_ic
 from src.api.data_quality import DataAnomalyDetector
 from src.api.rate_limiter import TTLCache
-from src.data.futures_data import get_futures_sentiment
+from src.data.signal_history import check_open_signals, record_signal
 from src.features.engineer import FeatureEngineer
 from src.risk.cost_model import CostModel
 
@@ -194,15 +194,26 @@ class BitcoinMarketService:
                 reason = "HOLD: SHORT signal rejected — price above EMA21 > EMA50 (bullish structure)"
 
         # --- FUNDING RATE FILTER (proven edge) ---
-        futures = {}
+        futures = {
+            "funding_rate_pct": 0,
+            "funding_sentiment": "NEUTRAL",
+            "open_interest_btc": 0,
+            "mark_price": 0,
+        }
         funding_confirms = False
         try:
+            from src.data.futures_data import get_futures_sentiment
             futures = get_futures_sentiment()
-        except Exception:
-            futures = {"funding_rate_pct": 0, "funding_sentiment": "UNKNOWN"}
+            logger.info(
+                "Futures data: funding=%.4f%%, OI=%.1f",
+                futures.get("funding_rate_pct", 0),
+                futures.get("open_interest_btc", 0),
+            )
+        except Exception as e:
+            logger.warning("Futures data unavailable (may be geo-blocked): %s", e)
 
         funding_rate = futures.get("funding_rate_pct", 0)
-        funding_sentiment = futures.get("funding_sentiment", "UNKNOWN")
+        funding_sentiment = futures.get("funding_sentiment", "NEUTRAL")
 
         # Block LONG when market is overleveraged long (funding > +0.05%)
         if signal == "LONG" and funding_sentiment == "OVERLEVERAGED_LONG":
@@ -369,12 +380,6 @@ class BitcoinMarketService:
             take_out = round(float(take), 2) if take is not None else None
             if not reason:
                 if validated:
-                    parts = []
-                    parts.append(regime)
-                    parts.append(session_name)
-                    parts.append(f"Conf:{confidence:.0f}%")
-                    parts.append(strength)
-                    factor_scores = alpha.get("factor_scores", {})
                     factor_names = {
                         "F1": "Momentum",
                         "F2": "MeanRev",
@@ -383,11 +388,11 @@ class BitcoinMarketService:
                         "F5": "VolSqueeze",
                         "F8": "Microstructure",
                     }
-                    top = sorted(factor_scores.items(), key=lambda x: abs(x[1]), reverse=True)[:3]
-                    for fk, fv in top:
+                    parts = [regime, session_name, f"Conf:{confidence:.0f}%", strength]
+                    fs = alpha.get("factor_scores", {})
+                    for fk, fv in sorted(fs.items(), key=lambda x: abs(x[1]), reverse=True)[:3]:
                         name = factor_names.get(fk, fk)
-                        direction = "+" if fv > 0 else "-"
-                        parts.append(f"{name}({direction}{abs(fv):.1f})")
+                        parts.append(f"{name}({fv:+.1f})")
                     reason = " | ".join(parts)
                 else:
                     failed = []
@@ -446,6 +451,9 @@ class BitcoinMarketService:
             "as_of_utc": datetime.now(timezone.utc).isoformat(),
             "algo": "quant_alpha_factor_model_v1",
         }
+        # Track signal outcomes
+        check_open_signals(entry)  # check existing open signals against current price
+        record_signal(payload)  # record new signal if validated LONG/SHORT
         self._signal_cache.set(cache_key, payload, ttl_seconds=5)
         return payload
 

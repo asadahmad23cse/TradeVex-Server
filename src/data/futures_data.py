@@ -28,8 +28,24 @@ def get_funding_rate() -> dict:
             "next_funding_time": data.get("nextFundingTime"),
         }
     except Exception as e:
-        logger.warning("Funding rate fetch failed: %s", e)
-        return {"funding_rate": 0, "funding_rate_pct": 0, "mark_price": 0}
+        logger.warning("Futures API failed (possibly geo-blocked): %s", e)
+        # Fallback: try spot ticker price so UI still has a mark reference.
+        try:
+            resp = requests.get(
+                "https://api.binance.com/api/v3/ticker/price",
+                params={"symbol": "BTCUSDT"},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            price = float(resp.json().get("price", 0))
+            return {
+                "funding_rate": 0,
+                "funding_rate_pct": 0,
+                "mark_price": price,
+                "note": "futures_api_unavailable",
+            }
+        except Exception:
+            return {"funding_rate": 0, "funding_rate_pct": 0, "mark_price": 0}
 
 
 def get_open_interest() -> dict:
