@@ -93,6 +93,58 @@ body{
 .conf-track{flex:1;height:10px;border-radius:999px;background:rgba(148,163,184,.2);overflow:hidden;border:1px solid rgba(148,163,184,.25)}
 .conf-fill{height:100%;width:0;background:var(--hold);transition:width .2s ease}
 
+@keyframes pulseGreen {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(0,200,83,0.4); }
+  50% { box-shadow: 0 0 20px 10px rgba(0,200,83,0.2); }
+}
+@keyframes pulseRed {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255,23,68,0.4); }
+  50% { box-shadow: 0 0 20px 10px rgba(255,23,68,0.2); }
+}
+@keyframes pulseBlue {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(41,121,255,0.3); }
+  50% { box-shadow: 0 0 15px 8px rgba(41,121,255,0.15); }
+}
+@keyframes livePulse {
+  0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0,200,83,0.6); }
+  50% { opacity: 0.6; box-shadow: 0 0 8px 4px rgba(0,200,83,0.3); }
+}
+.pulse-long { animation: pulseGreen 2s ease-in-out infinite; }
+.pulse-short { animation: pulseRed 2s ease-in-out infinite; }
+.pulse-hold { animation: pulseBlue 3s ease-in-out infinite; }
+
+.info-panel {
+  background: #161b22;
+  border: 1px solid #30363d;
+  border-radius: 10px;
+  padding: 14px;
+  transition: border-color 0.3s, transform 0.2s;
+}
+.info-panel:hover {
+  border-color: #58a6ff;
+  transform: translateY(-2px);
+}
+.panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #e6edf3;
+  margin-bottom: 10px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #21262d;
+}
+.panel-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 3px 0;
+  font-size: 12px;
+}
+.panel-label { color: #8b949e; }
+.panel-value { font-family: "JetBrains Mono", monospace; text-align: right; }
+
+.history-row-win { background: rgba(0,200,83,0.05); }
+.history-row-loss { background: rgba(255,23,68,0.05); }
+.history-row-open { background: rgba(255,152,0,0.05); }
+
 @media(max-width:980px){
   .grid{grid-template-columns:1fr 1fr}
   .layout{grid-template-columns:1fr}
@@ -102,12 +154,20 @@ body{
 @media (max-width: 900px) {
   .terminal-panels { grid-template-columns: 1fr 1fr !important; }
 }
+@media (max-width: 1000px) {
+  .main-grid { grid-template-columns: 1fr !important; }
+  .panels-grid { grid-template-columns: 1fr 1fr !important; }
+}
+@media (max-width: 600px) {
+  .panels-grid { grid-template-columns: 1fr !important; }
+  .stats-bar { flex-wrap: wrap !important; font-size: 11px !important; }
+}
 </style>
 </head>
 <body>
   <div class="wrap">
     <div class="top">
-      <div class="title"><span>BTC</span> Quant Terminal</div>
+      <div class="title"><span>BTC</span> Quant Terminal <span style="display:inline-block; width:10px; height:10px; background:#00c853; border-radius:50%; margin-left:12px; animation: livePulse 1.5s ease-in-out infinite;"></span></div>
       <div class="pills">
         <div id="ws-pill" class="pill">WS: connecting</div>
         <div id="sig-pill" class="pill">Signal API: checking</div>
@@ -127,13 +187,19 @@ body{
     </div>
 
     <div class="grid">
-      <div class="card"><div class="k">Bitcoin Price (USDT)</div><div class="v" id="price">--</div></div>
+      <div class="card">
+        <div class="k">Bitcoin Price (USDT)</div>
+        <div style="display:flex; align-items:center; gap:10px;">
+          <div class="v" id="price">--</div>
+          <canvas id="price-spark" width="80" height="30"></canvas>
+        </div>
+      </div>
       <div class="card"><div class="k">Last Tick</div><div class="v small" id="last-tick">--</div></div>
       <div class="card"><div class="k">Session High (UTC Day)</div><div class="v small" id="session-high">--</div></div>
       <div class="card"><div class="k">Session Low (UTC Day)</div><div class="v small" id="session-low">--</div></div>
     </div>
 
-    <div class="layout">
+    <div class="layout main-grid">
       <div id="chart-panel">
         <div class="head">
           <div class="head-title">BTCUSDT Trading Chart</div>
@@ -157,20 +223,24 @@ body{
           <div class="sub" id="sig-source">source: --</div>
         </div>
         <div class="side-body">
+          <div id="action-box" style="padding:16px; border-radius:8px; text-align:center; margin-bottom:12px;">
+            <div id="action-text" style="font-size:22px; font-weight:700; letter-spacing:1px;">WAITING</div>
+            <div id="action-detail" style="font-size:12px; margin-top:4px; opacity:0.8;"></div>
+          </div>
           <div class="signal"><div class="sig-row"><span>Signal</span><span id="sig" class="sig-val hold">HOLD</span></div></div>
           <div class="signal"><div class="sig-row"><span>Validated</span><span id="sigv" class="sig-val hold">HOLD</span></div></div>
           <div class="signal"><div class="sig-row"><span>Reason</span><span id="reason" class="sig-val">--</span></div></div>
           <div class="signal">
             <div class="sig-row">
-              <span>Confidence</span>
+              <span title="How confident the AI model is in this signal (0-100%)">How Sure (AI)</span>
               <div class="conf-wrap">
                 <div class="conf-track"><div id="conf-fill" class="conf-fill"></div></div>
                 <span id="conf" class="sig-val">--</span>
               </div>
             </div>
           </div>
-          <div class="signal"><div class="sig-row"><span>Alpha Score</span><span id="alpha" class="sig-val">--</span></div></div>
-          <div class="signal"><div class="sig-row"><span>Net Alpha</span><span id="netalpha" class="sig-val">--</span></div></div>
+          <div class="signal"><div class="sig-row"><span title="Overall signal strength combining all factors (0-100)">Signal Strength</span><span id="alpha" class="sig-val">--</span></div></div>
+          <div class="signal"><div class="sig-row"><span title="Signal strength minus trading costs. Must be positive to trade.">Edge After Costs</span><span id="netalpha" class="sig-val">--</span></div></div>
 
           <div id="no-trade" class="signal"><div class="sig-row"><span class="no-trade">⏸ No trade - waiting for conditions</span></div></div>
 
@@ -179,6 +249,15 @@ body{
           <div class="signal trade-row"><div class="sig-row"><span>TP1 (40%)</span><span id="tp1" class="sig-val">--</span></div></div>
           <div class="signal trade-row"><div class="sig-row"><span>TP2 (35%)</span><span id="tp2" class="sig-val">--</span></div></div>
           <div class="signal trade-row"><div class="sig-row"><span>TP3 (25%)</span><span id="tp3" class="sig-val">--</span></div></div>
+          <div id="risk-calc" style="display:none; background:#1a2332; border-radius:6px; padding:10px; margin:8px 0; font-size:11px;">
+            <div style="color:#8b949e; margin-bottom:6px; font-weight:600;">💰 If you invest $1,000:</div>
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:4px;">
+              <span style="color:#8b949e">Risk (1%)</span><span id="rc-risk" style="color:#ff5252; text-align:right">$10</span>
+              <span style="color:#8b949e">TP1 Profit</span><span id="rc-tp1" style="color:#00c853; text-align:right">—</span>
+              <span style="color:#8b949e">TP2 Profit</span><span id="rc-tp2" style="color:#00c853; text-align:right">—</span>
+              <span style="color:#8b949e">TP3 Profit</span><span id="rc-tp3" style="color:#00c853; text-align:right">—</span>
+            </div>
+          </div>
           <div class="signal trade-row"><div class="sig-row"><span>Risk Reward</span><span id="rr" class="sig-val">--</span></div></div>
           <div class="signal trade-row"><div class="sig-row"><span>Position Size</span><span id="possize" class="sig-val">--</span></div></div>
 
@@ -188,48 +267,42 @@ body{
       </div>
     </div>
 
-    <div class="terminal-panels" style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; margin:10px 12px;">
-      <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px;">
-        <div style="font-size:14px; font-weight:600; color:#e6edf3; margin-bottom:10px;">📊 Order Flow</div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:12px; font-family:'JetBrains Mono',monospace;">
-          <span style="color:#8b949e">Volume</span><span id="of-volume" style="text-align:right">—</span>
-          <span style="color:#8b949e">OBV Trend</span><span id="of-obv" style="text-align:right">—</span>
-          <span style="color:#8b949e">CMF</span><span id="of-cmf" style="text-align:right">—</span>
-          <span style="color:#8b949e">RSI (14)</span><span id="of-rsi" style="text-align:right">—</span>
-        </div>
+    <div class="terminal-panels panels-grid" style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; margin:10px 12px;">
+      <div class="info-panel">
+        <div class="panel-title">📊 Order Flow</div>
+        <div class="panel-row"><span class="panel-label">Volume</span><span id="of-volume" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label" title="On-Balance Volume direction: Rising = institutions buying, Falling = selling">Smart Money</span><span id="of-obv" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label" title="Chaikin Money Flow: positive = big buyers accumulating, negative = distributing">Money Flow</span><span id="of-cmf" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label" title="Relative Strength Index: above 70 = overbought, below 30 = oversold">Overbought/Oversold</span><span id="of-rsi" class="panel-value">—</span></div>
       </div>
 
-      <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px;">
-        <div style="font-size:14px; font-weight:600; color:#e6edf3; margin-bottom:10px;">📈 Derivatives</div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:12px; font-family:'JetBrains Mono',monospace;">
-          <span style="color:#8b949e">Funding Rate</span><span id="deriv-funding" style="text-align:right">—</span>
-          <span style="color:#8b949e">Sentiment</span><span id="deriv-sentiment" style="text-align:right">—</span>
-          <span style="color:#8b949e">Open Interest</span><span id="deriv-oi" style="text-align:right">—</span>
-          <span style="color:#8b949e">Mark Price</span><span id="deriv-mark" style="text-align:right">—</span>
-        </div>
+      <div class="info-panel">
+        <div class="panel-title">📈 Derivatives</div>
+        <div class="panel-row"><span class="panel-label">Funding Rate</span><span id="deriv-funding" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Sentiment</span><span id="deriv-sentiment" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Open Interest</span><span id="deriv-oi" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Mark Price</span><span id="deriv-mark" class="panel-value">—</span></div>
       </div>
 
-      <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px; max-height:220px; overflow-y:auto;">
-        <div style="font-size:14px; font-weight:600; color:#e6edf3; margin-bottom:10px;">📰 Live BTC News</div>
+      <div class="info-panel" style="max-height:220px; overflow-y:auto;">
+        <div class="panel-title">📰 Live BTC News</div>
         <div id="news-feed" style="font-size:11px; line-height:1.6;">
           <span style="color:#484f58">Loading news...</span>
         </div>
       </div>
 
-      <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px;">
-        <div style="font-size:14px; font-weight:600; color:#e6edf3; margin-bottom:10px;">🌍 Market Overview</div>
-        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:12px; font-family:'JetBrains Mono',monospace;">
-          <span style="color:#8b949e">1h Change</span><span id="mo-1h" style="text-align:right">—</span>
-          <span style="color:#8b949e">Fear & Greed</span><span id="mo-fg" style="text-align:right">—</span>
-          <span style="color:#8b949e">Volatility</span><span id="mo-vol" style="text-align:right">—</span>
-          <span style="color:#8b949e">ATR %</span><span id="mo-atr" style="text-align:right">—</span>
-          <span style="color:#8b949e">Regime</span><span id="mo-regime" style="text-align:right">—</span>
-          <span style="color:#8b949e">Session</span><span id="mo-session" style="text-align:right">—</span>
-        </div>
+      <div class="info-panel">
+        <div class="panel-title">🌍 Market Overview</div>
+        <div class="panel-row"><span class="panel-label">1h Change</span><span id="mo-1h" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Fear & Greed</span><span id="mo-fg" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Volatility</span><span id="mo-vol" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">ATR %</span><span id="mo-atr" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Regime</span><span id="mo-regime" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Session</span><span id="mo-session" class="panel-value">—</span></div>
       </div>
     </div>
 
-    <div id="stats-bar" style="display:flex; gap:20px; padding:10px 16px; margin:8px 12px; background:#161b22; border:1px solid #30363d; border-radius:8px; font-size:13px; color:#8b949e; flex-wrap:wrap;">
+    <div id="stats-bar" class="stats-bar" style="display:flex; gap:20px; padding:10px 16px; margin:8px 12px; background:#161b22; border:1px solid #30363d; border-radius:8px; font-size:13px; color:#8b949e; flex-wrap:wrap;">
       <span>Signals: <b id="stat-total" style="color:#e6edf3">0</b></span>
       <span>Win Rate: <b id="stat-winrate" style="color:#00c853">0%</b></span>
       <span>Wins: <b id="stat-wins" style="color:#00c853">0</b></span>
@@ -264,6 +337,10 @@ body{
         </table>
       </div>
     </div>
+
+    <div style="text-align:center; padding:16px; color:#484f58; font-size:11px; border-top:1px solid #21262d; margin-top:12px;">
+      BTC Quant Terminal v2.0 · Built by Asad · Real-time signals powered by Binance · <span style="color:#00c853;">●</span> System Online
+    </div>
   </div>
 
 <script>
@@ -275,12 +352,11 @@ const RECONNECT_MS = 3000;
 const CANDLE_LIMIT = 200;
 const INTERVAL_SECONDS = {"5m":300,"15m":900,"1h":3600,"4h":14400,"1d":86400};
 
-let chart, series, volumeSeries, ema21Series, ema50Series;
+let chart, candleSeries, volumeSeries, ema21Series, ema50Series;
 let points = [];
 let markersRaw = [];
 let markersMap = new Map();
 let liveSignalMarker = null;
-let signalLines = [];
 let ws = null;
 let reconnectTimer = null;
 let lastPrice = null;
@@ -289,6 +365,9 @@ let currentInterval = "15m";
 let sessionDayKey = null;
 let sessionHigh = null;
 let sessionLow = null;
+const sparkPrices = [];
+const sparkCanvas = document.getElementById("price-spark");
+const sparkCtx = sparkCanvas ? sparkCanvas.getContext("2d") : null;
 
 function normalizeSignal(s){
   const x=(s||"HOLD").toUpperCase();
@@ -332,6 +411,40 @@ function setOf(id, val, color){
 function fmt(v){return Number(v).toLocaleString("en-US",{maximumFractionDigits:2});}
 function fmtPx(v){if(v===null||v===undefined||Number.isNaN(Number(v))) return "—"; return fmt(v);}
 function fmtPct(v){if(v===null||v===undefined||Number.isNaN(Number(v))) return "—"; return `${v>0?"+":""}${Number(v).toFixed(2)}%`;}
+function updateSparkline(price){
+  if(!sparkCtx || !Number.isFinite(Number(price))) return;
+  sparkPrices.push(Number(price));
+  if(sparkPrices.length > 20) sparkPrices.shift();
+  if(sparkPrices.length < 2) return;
+
+  const w = sparkCanvas.width;
+  const h = sparkCanvas.height;
+  const min = Math.min(...sparkPrices);
+  const max = Math.max(...sparkPrices);
+  const range = max - min || 1;
+
+  sparkCtx.clearRect(0, 0, w, h);
+  sparkCtx.beginPath();
+  sparkCtx.strokeStyle = sparkPrices[sparkPrices.length - 1] >= sparkPrices[0] ? "#00c853" : "#ff1744";
+  sparkCtx.lineWidth = 1.5;
+
+  sparkPrices.forEach((p, i) => {
+    const x = (i / (sparkPrices.length - 1)) * w;
+    const y = h - ((p - min) / range) * (h - 4) - 2;
+    if(i === 0) sparkCtx.moveTo(x, y);
+    else sparkCtx.lineTo(x, y);
+  });
+  sparkCtx.stroke();
+}
+function formatUtcReadable(value){
+  const d = value instanceof Date ? value : new Date(value);
+  if(Number.isNaN(d.getTime())) return "--";
+  const time = d.toLocaleTimeString("en",{
+    hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false,timeZone:"UTC",
+  });
+  const date = d.toLocaleDateString("en",{day:"numeric",month:"short",year:"numeric",timeZone:"UTC"});
+  return `${time} UTC · ${date}`;
+}
 function utcDayKey(ms){return new Date(ms).toISOString().slice(0,10);}
 
 function setTfActive(){
@@ -349,7 +462,7 @@ function initChart(){
     rightPriceScale:{borderColor:"rgba(148,163,184,.25)"},
     timeScale:{borderColor:"rgba(148,163,184,.25)",timeVisible:true,secondsVisible:false}
   });
-  series=chart.addCandlestickSeries({
+  candleSeries=chart.addCandlestickSeries({
     upColor: '#00c853',
     downColor: '#ff1744',
     borderDownColor: '#ff1744',
@@ -422,10 +535,24 @@ function updateSessionStats(price, nowMs){
 
 function updateCards(price, nowMs){
   const now=new Date(nowMs);
-  document.getElementById("price").textContent=fmtPx(price);
-  document.getElementById("last-tick").textContent=now.toLocaleTimeString("en-US",{hour12:false,timeZone:"UTC"})+" UTC";
+  const priceEl = document.getElementById("price");
+  const oldPrice = Number(priceEl.dataset.last || price || 0);
+  priceEl.textContent=fmtPx(price);
+  priceEl.dataset.last = String(price);
+  document.getElementById("last-tick").textContent=formatUtcReadable(now);
   updateSessionStats(price, nowMs);
-  if(lastPrice!==null){document.getElementById("price").style.color=price>=lastPrice?"var(--long)":"var(--short)";}
+  updateSparkline(price);
+  if(price > oldPrice){
+    priceEl.style.color = "#00c853";
+    priceEl.style.textShadow = "0 0 10px rgba(0,200,83,0.45)";
+    setTimeout(()=>{priceEl.style.textShadow = "none";}, 350);
+  }else if(price < oldPrice){
+    priceEl.style.color = "#ff1744";
+    priceEl.style.textShadow = "0 0 10px rgba(255,23,68,0.45)";
+    setTimeout(()=>{priceEl.style.textShadow = "none";}, 350);
+  }else if(lastPrice!==null){
+    priceEl.style.color = price>=lastPrice ? "var(--long)" : "var(--short)";
+  }
   lastPrice=price;
 }
 
@@ -454,7 +581,7 @@ function syncChartData(fit=false){
     low:Number(p.low),
     close:Number(p.close),
   }));
-  series.setData(candles);
+  candleSeries.setData(candles);
 
   const volumeData = points.map(c => ({
     time: Number(c.time),
@@ -501,40 +628,38 @@ function upsertPointFromTick(price, eventTimeMs){
   syncChartData();
 }
 
-function clearSignalLines(){
-  for(const ln of signalLines){
-    try{series.removePriceLine(ln);}catch(_){ }
+function setSignalLines(data){
+  // Remove old lines
+  if (window._sigLines) {
+    window._sigLines.forEach(l => { try { candleSeries.removePriceLine(l); } catch(e){} });
   }
-  signalLines=[];
+  window._sigLines = [];
+
+  // Draw new lines only when active signal
+  if (data.signal !== 'HOLD' && data.entry_price) {
+    const mkLine = (price, color, title) => candleSeries.createPriceLine({
+      price, color, lineWidth: 1, lineStyle: 2,
+      axisLabelVisible: true, title,
+    });
+    window._sigLines.push(mkLine(data.entry_price, '#ffffff', 'Entry'));
+    if (data.stop_loss) window._sigLines.push(mkLine(data.stop_loss, '#ff5252', 'SL'));
+    if (data.tp1) window._sigLines.push(mkLine(data.tp1, '#00e676', 'TP1'));
+    if (data.tp2) window._sigLines.push(mkLine(data.tp2, '#69f0ae', 'TP2'));
+    if (data.tp3) window._sigLines.push(mkLine(data.tp3, '#b9f6ca', 'TP3'));
+  }
 }
 
-function addPriceLine(price, color, title){
-  if(price===null || price===undefined || Number.isNaN(Number(price))) return;
-  const ln = series.createPriceLine({
-    price:Number(price),
-    color,
-    lineWidth:1,
-    lineStyle:2,
-    axisLabelVisible:true,
-    title,
-  });
-  signalLines.push(ln);
-}
-
-function setSignalLines(s, activeSignal){
-  clearSignalLines();
-  if(activeSignal==="HOLD" || !s.entry_price) return;
-  addPriceLine(s.entry_price, "#ffffff", "Entry");
-  addPriceLine(s.stop_loss, "#ff5252", "SL");
-  addPriceLine(s.tp1, "#00e676", "TP1");
-  addPriceLine(s.tp2, "#69f0ae", "TP2");
-  addPriceLine(s.tp3, "#b9f6ca", "TP3");
+function clearSignalLines(){
+  if (window._sigLines) {
+    window._sigLines.forEach(l => { try { candleSeries.removePriceLine(l); } catch(e){} });
+  }
+  window._sigLines = [];
 }
 
 function applyMarkers(){
-  if(!series || typeof series.setMarkers!=="function") return;
+  if(!candleSeries || typeof candleSeries.setMarkers!=="function") return;
   const merged = liveSignalMarker ? [...markersRaw, liveSignalMarker] : markersRaw;
-  series.setMarkers(merged);
+  candleSeries.setMarkers(merged);
 }
 
 function rebuildMarkerMap(){
@@ -672,13 +797,46 @@ function applySignalPayload(s, source){
   document.getElementById("conf").textContent=`${Math.round(conf)}%`;
   const confFill=document.getElementById("conf-fill");
   confFill.style.width=`${conf}%`;
-  confFill.style.background = active==="LONG" ? "#00c853" : active==="SHORT" ? "#ff1744" : "#2979ff";
+  let confColor = "#ff1744";
+  if(conf >= 75) confColor = "#00c853";
+  else if(conf >= 60) confColor = "#ff9800";
+  confFill.style.background = confColor;
 
   const alphaRaw = Number(s.alpha_score_raw ?? s.alpha_score ?? 0);
   const alphaDisplay = Math.abs(alphaRaw)<=1 ? Math.round(Math.abs(alphaRaw)*100) : Math.round(Number(s.alpha_score||0));
   document.getElementById("alpha").textContent=`${alphaDisplay} / 100`;
   document.getElementById("netalpha").textContent=`${Number(s.net_alpha_score ?? 0)} / 100`;
   document.getElementById("reason").textContent=s.reason||"--";
+
+  const box = document.getElementById("action-box");
+  const txt = document.getElementById("action-text");
+  const det = document.getElementById("action-detail");
+  box.classList.remove("pulse-long", "pulse-short", "pulse-hold");
+  if(sig === "LONG" && Boolean(s.validated)){
+    box.style.background = "rgba(0,200,83,0.15)";
+    box.style.border = "2px solid #00c853";
+    txt.style.color = "#00c853";
+    txt.textContent = "🟢 BUY NOW";
+    det.textContent = `Entry: $${fmtPx(s.entry_price)} | SL: $${fmtPx(s.stop_loss)} | Target: $${fmtPx(s.tp1)}`;
+    det.style.color = "#00c853";
+    box.classList.add("pulse-long");
+  }else if(sig === "SHORT" && Boolean(s.validated)){
+    box.style.background = "rgba(255,23,68,0.15)";
+    box.style.border = "2px solid #ff1744";
+    txt.style.color = "#ff1744";
+    txt.textContent = "🔴 SELL NOW";
+    det.textContent = `Entry: $${fmtPx(s.entry_price)} | SL: $${fmtPx(s.stop_loss)} | Target: $${fmtPx(s.tp1)}`;
+    det.style.color = "#ff1744";
+    box.classList.add("pulse-short");
+  }else{
+    box.style.background = "rgba(41,121,255,0.1)";
+    box.style.border = "2px solid #2979ff";
+    txt.style.color = "#2979ff";
+    txt.textContent = "⏸ WAIT";
+    det.textContent = s.reason || "No high-probability setup found";
+    det.style.color = "#8b949e";
+    box.classList.add("pulse-hold");
+  }
 
   if(active==="HOLD"){
     setTradeRowsVisible(false);
@@ -702,8 +860,29 @@ function applySignalPayload(s, source){
     document.getElementById("possize").textContent=s.position_size_pct!==null&&s.position_size_pct!==undefined?`${Number(s.position_size_pct).toFixed(2)}%`:"—";
   }
 
+  const riskCalc = document.getElementById("risk-calc");
+  if(active !== "HOLD" && Boolean(s.validated) && s.entry_price){
+    const portfolio = 1000;
+    const riskAmt = portfolio * 0.01;
+    const entry = Number(s.entry_price);
+    const sl = Number(s.stop_loss ?? entry);
+    const slDist = entry > 0 ? Math.abs(entry - sl) / entry : 0;
+    if(slDist > 0){
+      const posSize = riskAmt / slDist;
+      riskCalc.style.display = "block";
+      document.getElementById("rc-risk").textContent = "-$" + riskAmt.toFixed(0);
+      document.getElementById("rc-tp1").textContent = s.tp1 ? "+$" + (posSize * Math.abs(Number(s.tp1) - entry) / entry).toFixed(0) : "—";
+      document.getElementById("rc-tp2").textContent = s.tp2 ? "+$" + (posSize * Math.abs(Number(s.tp2) - entry) / entry).toFixed(0) : "—";
+      document.getElementById("rc-tp3").textContent = s.tp3 ? "+$" + (posSize * Math.abs(Number(s.tp3) - entry) / entry).toFixed(0) : "—";
+    }else{
+      riskCalc.style.display = "none";
+    }
+  }else{
+    riskCalc.style.display = "none";
+  }
+
   document.getElementById("algo").textContent=s.algo||"--";
-  document.getElementById("asof").textContent=s.as_of_utc||"--";
+  document.getElementById("asof").textContent=s.as_of_utc ? formatUtcReadable(s.as_of_utc) : "--";
   document.getElementById("sig-source").textContent=`source: ${source}`;
 
   updateRegimeRow(s);
@@ -744,7 +923,7 @@ function applySignalPayload(s, source){
   setOf('mo-atr', (mo.atr_pct||0)+'%', '#e6edf3');
   setOf('mo-regime', mo.regime||'—', (mo.regime||'').includes('BULL')?'#00c853':(mo.regime||'').includes('BEAR')?'#ff1744':'#ff9800');
   setOf('mo-session', mo.session||'—', '#e6edf3');
-  setSignalLines(s, active);
+  setSignalLines(s);
   updateLiveSignalMarker(s);
 }
 
@@ -788,6 +967,7 @@ async function loadSignalHistory(){
       tbody.innerHTML = data.signals.reverse().map(sig => {
         const signalType = sig.signal || 'LONG';
         const status = sig.status || 'OPEN';
+        const rowClass = status.includes('TP') ? 'history-row-win' : status === 'SL_HIT' ? 'history-row-loss' : 'history-row-open';
         const sigColor = signalType === 'LONG' ? '#00c853' : '#ff1744';
         const resultMap = {
           'TP1_HIT': 'TP1',
@@ -803,7 +983,7 @@ async function loadSignalHistory(){
         const pnlColor = sig.pnl_pct > 0 ? '#00c853' : sig.pnl_pct < 0 ? '#ff1744' : '#8b949e';
         const time = sig.time ? sig.time.split('T')[1]?.substring(0,8) || sig.time : '—';
 
-        return `<tr style="border-bottom:1px solid #21262d;">
+        return `<tr class="${rowClass}" style="border-bottom:1px solid #21262d;">
           <td style="padding:6px 8px; color:#8b949e">${sig.id}</td>
           <td style="padding:6px 8px; color:#8b949e">${time}</td>
           <td style="padding:6px 8px; color:${sigColor}; font-weight:600">${signalType}</td>

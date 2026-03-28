@@ -261,7 +261,7 @@ class BitcoinMarketService:
         )
 
         strength = str(alpha.get("strength", "WEAK"))
-        sl_mult = 1.5 if strength == "STRONG" else 2.0 if strength == "MODERATE" else 2.5
+        sl_mult = 2.5 if strength == "STRONG" else 3.0 if strength == "MODERATE" else 3.5
 
         stop: float | None = None
         tp1: float | None = None
@@ -281,6 +281,15 @@ class BitcoinMarketService:
             stop = entry - sl_mult * atr
         elif signal == "SHORT":
             stop = entry + sl_mult * atr
+
+        if signal == "LONG" and stop is not None:
+            min_sl = entry * 0.997
+            if stop > min_sl:
+                stop = min_sl
+        elif signal == "SHORT" and stop is not None:
+            max_sl = entry * 1.003
+            if stop < max_sl:
+                stop = max_sl
 
         if signal in {"LONG", "SHORT"} and stop is not None:
             sl_dist = abs(entry - stop)
