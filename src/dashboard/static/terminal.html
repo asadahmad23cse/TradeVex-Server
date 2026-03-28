@@ -381,6 +381,53 @@ body{
   font-size:22px;
   font-weight:800;
 }
+/* Keep left market universe aligned with chart/signal pane height; scroll inside list */
+.main{
+  height:640px;
+  align-items:stretch;
+}
+#stocks-panel,#crypto-panel,#chart-wrapper,#screener-center,.main>.panel:last-child{
+  height:100%;
+  min-height:0;
+}
+#stocks-panel,#crypto-panel,#chart-wrapper,#screener-center{
+  display:flex;
+  flex-direction:column;
+}
+#chart{
+  flex:1;
+  min-height:0;
+  height:auto !important;
+}
+.left-body,.right-body{
+  flex:1;
+  min-height:0;
+}
+#l-watchlist,#l-indices,#l-screener{
+  min-height:0;
+}
+#l-watchlist.active,#l-indices.active,#l-screener.active{
+  flex:1;
+}
+.list,.crypto-watchlist{
+  flex:1;
+  min-height:0;
+  overflow-y:auto;
+}
+.crypto-left-panel{
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+}
+@media (max-width:1040px){
+  .main{
+    height:auto !important;
+  }
+  #stocks-panel,#crypto-panel,#chart-wrapper,#screener-center,.main>.panel:last-child{
+    height:auto;
+    min-height:unset;
+  }
+}
 @media (max-width:1040px){.top{grid-template-columns:1fr}.strip{grid-template-columns:repeat(2,minmax(0,1fr))}.main{grid-template-columns:1fr}#chart{height:420px}} @media (max-width:760px){.strip{grid-template-columns:1fr}.g2{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}}
 </style>
 </head>
