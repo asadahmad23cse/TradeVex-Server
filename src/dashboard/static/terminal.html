@@ -380,6 +380,9 @@ const ALL=[...W.indices,...W.india,...W.us,...CRYPTO_ASSETS.map(a=>[a.name,a.sho
 const SCREEN=[...W.india,...W.us].map(x=>({name:x[0],ticker:x[1],sector:x[2]}));
 const S={ticker:"RELIANCE.NS",name:"Reliance",tf:"15m",market:"india",chart:[],rows:new Map(),sdata:[],sort:{k:"confidence",d:"desc"},reqId:0};
 let terminalMode="stocks";
+let activeTicker="RELIANCE.NS";
+let activeAssetClass="indian_stock";
+let activeTF="15m";
 let cryptoPriceInterval=null;
 let fearGreedInterval=null;
 let currentCryptoSymbol="BTCUSDT";
@@ -387,6 +390,9 @@ let cryptoLastCandles=[];
 let chart,candle,s20,s50,btEqChart,btEqSeries,pfC,pfS;
 const _priceCache = new Map();
 const PRICE_TTL = 180000;
+const prefetchCache = new Map();
+const signalCache = new Map();
+const SIGNAL_TTL = 30000;
 const signalBadgeCache = {};
 const SIGNAL_BADGE_TTL = 120000;
 const cryptoTopBarState={btcPrice:0,ethPrice:0,fearGreed:"Loading...",marketCap:0};
@@ -447,6 +453,23 @@ const parse=rows=>Array.isArray(rows)?rows.map(x=>({time:Number.isFinite(Number(
 const sma=(d,p)=>{let s=0,o=[];for(let i=0;i<d.length;i++){s+=d[i].close;if(i>=p)s-=d[i-p].close;if(i>=p-1)o.push({time:d[i].time,value:Number((s/p).toFixed(2))})}return o};
 const f2p=v=>Math.max(0,Math.min(100,(Number(v||0)+2)*25));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function isUSAsset(ticker){
+  const t=String(ticker||"");
+  return !t.endsWith(".NS")&&!t.endsWith(".BO")&&!t.startsWith("^")&&!t.includes("USDT");
+}
+function resolveChartParams(ticker,tf){
+  const t=String(ticker||S.ticker);
+  const frame=String(tf||S.tf||"15m");
+  if(isUSAsset(t)){
+    const avMap={"5m":"5m","15m":"15m","1h":"1h","1D":"1d","1W":"1d"};
+    return { interval: avMap[frame]||"15m", period: frame==="1W"?"3mo":frame==="1D"?"1y":"1mo" };
+  }
+  const map=TF[frame]||TF["15m"];
+  return { interval: map.i, period: frame==="1W"?"5y":frame==="1D"?"1y":frame==="1h"?"1mo":"5d" };
+}
+function chartCacheKey(ticker,tf){
+  return `${String(ticker)}_chart_${String(tf||activeTF||"15m")}`;
+}
 function getCachedPrice(ticker){
   const entry=_priceCache.get(String(ticker));
   if(!entry)return null;
@@ -457,9 +480,9 @@ function setCachedPrice(ticker,data){_priceCache.set(String(ticker),{data,ts:Dat
 
 function setupTop(){
   const nifty=$("card-nifty"),sensex=$("card-sensex"),bank=$("card-bank");
-  if(nifty)nifty.onclick=()=>{if(terminalMode==="stocks")setAsset("^NSEI","NIFTY 50")};
-  if(sensex)sensex.onclick=()=>{if(terminalMode==="stocks")setAsset("^BSESN","SENSEX")};
-  if(bank)bank.onclick=()=>{if(terminalMode==="stocks")setAsset("^NSEBANK","BANK NIFTY")};
+  if(nifty)nifty.onclick=()=>{if(terminalMode==="stocks")openAssetDashboard("^NSEI","NIFTY 50")};
+  if(sensex)sensex.onclick=()=>{if(terminalMode==="stocks")openAssetDashboard("^BSESN","SENSEX")};
+  if(bank)bank.onclick=()=>{if(terminalMode==="stocks")openAssetDashboard("^NSEBANK","BANK NIFTY")};
 }
 function setupLeftTabs(){document.querySelectorAll(".tbtn").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tbtn").forEach(x=>x.classList.remove("active"));b.classList.add("active");document.querySelectorAll(".ltab").forEach(x=>x.classList.remove("active"));$(`l-${b.dataset.l}`).classList.add("active")})}
 function setupBottom(){
@@ -505,34 +528,90 @@ function switchCryptoTab(tab,event){
     refreshCryptoNews();
   }
 }
-function openAssetDashboard(t,n){if(t==="BTC"){location.href="/";return}if(t==="ETH"){location.href="/";return}location.href=`/stock-terminal?ticker=${encodeURIComponent(t)}&name=${encodeURIComponent(n||t)}`;}
-function setupSearch(){const i=$("search"),r=$("results");i.oninput=()=>{const q=i.value.trim().toLowerCase();if(!q){r.style.display="none";r.innerHTML="";return}const m=ALL.filter(a=>a.ticker.toLowerCase().includes(q)||a.name.toLowerCase().includes(q)).slice(0,12);r.innerHTML=m.length?m.map(a=>`<div class="result" data-t="${a.ticker}"><b>${a.ticker}</b> <span class="k">- ${a.name}</span></div>`).join(""):`<div class="result">No matches</div>`;r.style.display="block";r.querySelectorAll(".result[data-t]").forEach(x=>x.onclick=()=>{const a=ALL.find(z=>z.ticker===x.dataset.t);if(a){if(CRYPTO_ASSETS.some(c=>c.short===a.ticker||c.symbol===a.ticker)){switchTerminalMode("crypto");const c=CRYPTO_ASSETS.find(z=>z.short===a.ticker||z.symbol===a.ticker)||CRYPTO_ASSETS[0];selectCryptoAsset(c.symbol,c.name)}else{switchTerminalMode("stocks");setAsset(a.ticker,a.name)}}r.style.display="none";i.value=""})};i.onkeydown=e=>{if(e.key==="Enter"){const v=i.value.trim().toLowerCase();const a=ALL.find(z=>z.ticker.toLowerCase()===v||z.name.toLowerCase()===v);if(a){if(CRYPTO_ASSETS.some(c=>c.short===a.ticker||c.symbol===a.ticker)){switchTerminalMode("crypto");const c=CRYPTO_ASSETS.find(z=>z.short===a.ticker||z.symbol===a.ticker)||CRYPTO_ASSETS[0];selectCryptoAsset(c.symbol,c.name)}else{switchTerminalMode("stocks");setAsset(a.ticker,a.name)}}r.style.display="none";i.value=""}};document.addEventListener("click",e=>{if(!r.contains(e.target)&&e.target!==i)r.style.display="none"})}
+function openAssetDashboard(t,n){
+  const tickerRaw=String(t||"").trim();
+  const ticker=tickerRaw.toUpperCase();
+  const cryptoByShort=CRYPTO_ASSETS.find(a=>a.short===ticker);
+  const cryptoBySymbol=CRYPTO_ASSETS.find(a=>a.symbol===ticker);
+  const cryptoAsset=cryptoByShort||cryptoBySymbol||null;
+  const cryptoSymbol=cryptoAsset?.symbol||(ticker.endsWith("USDT")?ticker:"");
+  if(ticker==="BTC"||ticker==="BTCUSDT"){location.href="/";return}
+  if(cryptoSymbol){
+    location.href=`/terminal?mode=crypto&symbol=${encodeURIComponent(cryptoSymbol)}&name=${encodeURIComponent(cryptoAsset?.name||n||cryptoSymbol)}`;
+    return;
+  }
+  location.href=`/stock-terminal?ticker=${encodeURIComponent(tickerRaw)}&name=${encodeURIComponent(n||tickerRaw)}`;
+}
+function setupSearch(){
+  const i=$("search"),r=$("results");
+  if(!i||!r)return;
+  const goToAsset=(asset)=>{
+    if(!asset)return;
+    openAssetDashboard(asset.ticker,asset.name);
+  };
+  i.oninput=()=>{
+    const q=i.value.trim().toLowerCase();
+    if(!q){r.style.display="none";r.innerHTML="";return}
+    const m=ALL.filter(a=>a.ticker.toLowerCase().includes(q)||a.name.toLowerCase().includes(q)).slice(0,12);
+    r.innerHTML=m.length?m.map(a=>`<div class="result" data-t="${a.ticker}"><b>${a.ticker}</b> <span class="k">- ${a.name}</span></div>`).join(""):`<div class="result">No matches</div>`;
+    r.style.display="block";
+    r.querySelectorAll(".result[data-t]").forEach(x=>x.onclick=()=>{
+      const a=ALL.find(z=>z.ticker===x.dataset.t);
+      goToAsset(a);
+      r.style.display="none";
+      i.value="";
+    });
+  };
+  i.onkeydown=e=>{
+    if(e.key!=="Enter")return;
+    const v=i.value.trim().toLowerCase();
+    const a=ALL.find(z=>z.ticker.toLowerCase()===v||z.name.toLowerCase()===v);
+    goToAsset(a);
+    r.style.display="none";
+    i.value="";
+  };
+  document.addEventListener("click",e=>{if(!r.contains(e.target)&&e.target!==i)r.style.display="none"});
+}
 function setupMarketTabs(){document.querySelectorAll(".mtab").forEach(b=>b.onclick=()=>{document.querySelectorAll(".mtab").forEach(x=>x.classList.remove("active"));b.classList.add("active");S.market=b.dataset.m||"india";renderWatch()})}
 
 function watchAssets(){return S.market==="us"?W.us:W.india}
-function buildIndices(){const l=$("indices");l.innerHTML=W.indices.map(a=>`<div class="row" data-t="${a[1]}" data-n="${a[0]}"><div><div class="name">${a[0]}</div><div class="meta">${a[1]}</div></div><div class="mono">--</div><div class="badge hold">INDEX</div></div>`).join("");l.querySelectorAll(".row").forEach(r=>r.onclick=()=>setAsset(r.dataset.t,r.dataset.n))}
-function renderWatch(){
-  const l=$("watchlist"),arr=watchAssets();
-  l.innerHTML=arr.map(a=>{
+function buildIndices(){const l=$("indices");l.innerHTML=W.indices.map(a=>`<div class="row" data-t="${a[1]}" data-n="${a[0]}"><div><div class="name">${a[0]}</div><div class="meta">${a[1]}</div></div><div class="mono">--</div><div class="badge hold">INDEX</div></div>`).join("");l.querySelectorAll(".row").forEach(r=>r.onclick=()=>openAssetDashboard(r.dataset.t,r.dataset.n))}
+function buildWatchlistInstant(stocks,containerId="watchlist"){
+  const container=$(containerId);
+  if(!container)return;
+  S.rows.clear();
+  container.innerHTML=(stocks||[]).map(a=>{
     const ticker=String(a[1]);
     const name=String(a[0]);
+    const cached=getCachedPrice(ticker);
+    const priceText=cached?.price?formatAssetPrice(ticker,cached.price):"₹ ---";
+    const changeNum=Number(cached?.change_pct||0);
+    const changeText=cached?`${changeNum>=0?"+":""}${changeNum.toFixed(2)}%`:"--";
+    const changeColor=cached?(changeNum>=0?BUY:SELL):"#475569";
     return `<div class="row watchlist-row" data-ticker="${ticker}" data-name="${name}">
       <div><div class="name">${name}</div><div class="meta">${ticker}</div></div>
       <div class="mono">
-        <div class="stock-price" data-price-for="${ticker}">₹ ---</div>
-        <div class="stock-change k" data-change-for="${ticker}">--</div>
+        <div class="stock-price" data-price-for="${ticker}">${priceText}</div>
+        <div class="stock-change k" data-change-for="${ticker}" style="color:${changeColor}">${changeText}</div>
       </div>
       <div class="stock-signal" data-signal-for="${ticker}"><span class="badge hold">HOLD</span></div>
     </div>`;
   }).join("");
-  S.rows.clear();
-  l.querySelectorAll(".row").forEach(r=>{
+  container.querySelectorAll(".row").forEach(r=>{
     const t=String(r.dataset.ticker||"");
     S.rows.set(t,r);
-    r.onclick=()=>setAsset(t,r.dataset.name);
+    r.onclick=()=>openAssetDashboard(t,r.dataset.name||t);
   });
-  refreshWatch({fast:true});
+  const tickers=(stocks||[]).map(s=>String(s[1]));
+  attachAllHoverPrefetch(tickers);
+  const priority=tickers.slice(0,5);
+  const rest=tickers.slice(5);
+  Promise.all(priority.map(t=>fetchAndUpdatePrice(t)))
+    .then(()=>rest.reduce((chain,t)=>chain.then(()=>fetchAndUpdatePrice(t).then(()=>sleep(150))),Promise.resolve()))
+    .catch(()=>{});
+  loadWatchlistSignals(tickers.slice(0,8));
 }
+function renderWatch(){buildWatchlistInstant(watchAssets(),"watchlist")}
 function formatAssetPrice(ticker,price){if(String(ticker).endsWith(".NS")||String(ticker).startsWith("^")){return "₹ "+Number(price).toLocaleString("en-IN",{minimumFractionDigits:1,maximumFractionDigits:1})}return "$ "+Number(price).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}
 function updateWatchlistRow(ticker,price,change_pct,signal){
   const t=String(ticker);
@@ -576,6 +655,23 @@ async function fetchAndUpdatePrice(ticker){
   }
   return null;
 }
+function attachHoverPrefetch(ticker){
+  const t=String(ticker);
+  const esc=(window.CSS&&typeof CSS.escape==="function")?CSS.escape(t):t;
+  const row=document.querySelector(`[data-ticker="${esc}"]`);
+  if(!row||row.dataset.prefetchBound==="1")return;
+  row.dataset.prefetchBound="1";
+  row.addEventListener("mouseenter",()=>{
+    const key=chartCacheKey(t,activeTF);
+    if(prefetchCache.has(key))return;
+    const params=resolveChartParams(t,activeTF);
+    fetch(`/api/chart-data?ticker=${encodeURIComponent(t)}&interval=${encodeURIComponent(params.interval)}&period=${encodeURIComponent(params.period)}`)
+      .then(r=>r.ok?r.json():null)
+      .then(data=>{if(data?.data?.length)prefetchCache.set(key,data)})
+      .catch(()=>{});
+  },{passive:true});
+}
+function attachAllHoverPrefetch(tickers){(tickers||[]).forEach(t=>attachHoverPrefetch(String(t)))}
 async function fetchAndUpdateSignalBadge(ticker){
   const localTicker=String(ticker);
   const row=S.rows.get(localTicker);
@@ -612,8 +708,8 @@ async function loadWatchlistPrices(tickers,opts={}){
     await sleep(200);
   }
 }
-async function refreshWatch(opts={}){const tickers=watchAssets().map(a=>a[1]);await loadWatchlistPrices(tickers,{fast:Boolean(opts.fast)});const priority=tickers.slice(0,8);loadWatchlistSignals(priority);if(tickers.length>8)setTimeout(()=>{loadWatchlistSignals(tickers.slice(8))},300)}
-function buildCryptoWatchlist(){const wrap=$("crypto-watchlist");if(!wrap)return;wrap.innerHTML=CRYPTO_ASSETS.map(a=>`<div class="crypto-row" data-csym="${a.symbol}"><div><span class="crypto-icon" style="color:${a.color}">${a.icon}</span><span class="name">${a.short}</span><div class="meta">${a.name}</div></div><div class="mono"><div data-crypto-price="${a.symbol}">$ --</div><div class="k" data-crypto-change="${a.symbol}">--</div></div><div class="badge hold">LIVE</div></div>`).join("");wrap.querySelectorAll(".crypto-row").forEach(r=>r.onclick=()=>{const a=CRYPTO_ASSETS.find(x=>x.symbol===r.dataset.csym);if(a)selectCryptoAsset(a.symbol,a.name)})}
+async function refreshWatch(opts={}){buildWatchlistInstant(watchAssets(),"watchlist")}
+function buildCryptoWatchlist(){const wrap=$("crypto-watchlist");if(!wrap)return;wrap.innerHTML=CRYPTO_ASSETS.map(a=>`<div class="crypto-row" data-csym="${a.symbol}"><div><span class="crypto-icon" style="color:${a.color}">${a.icon}</span><span class="name">${a.short}</span><div class="meta">${a.name}</div></div><div class="mono"><div data-crypto-price="${a.symbol}">$ --</div><div class="k" data-crypto-change="${a.symbol}">--</div></div><div class="badge hold">LIVE</div></div>`).join("");wrap.querySelectorAll(".crypto-row").forEach(r=>r.onclick=()=>{const a=CRYPTO_ASSETS.find(x=>x.symbol===r.dataset.csym);if(!a)return;openAssetDashboard(a.symbol,a.name)})}
 function updateCryptoRow(symbol,price,changePct){const priceEl=document.querySelector(`[data-crypto-price="${symbol}"]`);const changeEl=document.querySelector(`[data-crypto-change="${symbol}"]`);if(priceEl){priceEl.textContent=price>100?`$${price.toLocaleString("en-US",{maximumFractionDigits:2})}`:`$${price.toFixed(4)}`}if(changeEl){changeEl.textContent=(changePct>=0?"+":"")+changePct.toFixed(2)+"%";changeEl.style.color=changePct>=0?BUY:SELL}}
 function updateStocksTopBar(data){
   const cardMap=[
@@ -731,70 +827,93 @@ async function loadCryptoStats(){
 }
 function updateMarketStatus(){const now=new Date();const ist=new Date(now.toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));const istDay=ist.getDay(),istMin=ist.getHours()*60+ist.getMinutes(),nseOpen=istDay>=1&&istDay<=5&&istMin>=555&&istMin<=930;const est=new Date(now.toLocaleString("en-US",{timeZone:"America/New_York"}));const estDay=est.getDay(),estMin=est.getHours()*60+est.getMinutes(),nyseOpen=estDay>=1&&estDay<=5&&estMin>=570&&estMin<=960;const statusEl=$("market-status");if(!statusEl)return;if(terminalMode==="crypto"){statusEl.innerHTML="🟢 Crypto 24/7";statusEl.style.color=BUY}else{statusEl.innerHTML=`${nseOpen?"🟢 NSE Open":"🔴 NSE Closed"} ${nyseOpen?"🟢 NYSE Open":"🔴 NYSE Closed"}`;statusEl.style.color="#e2e8f0"}}
 function refreshTopBar(){if(terminalMode==="stocks"){loadMarketOverview()}}
-async function switchTerminalMode(mode){
+function switchTerminalMode(mode){
   terminalMode=mode==="crypto"?"crypto":"stocks";
   const bs=$("mode-stocks"),bc=$("mode-crypto"),sp=$("stocks-panel"),cp=$("crypto-panel"),st=$("stocks-tabs"),ct=$("crypto-tabs");
+  if(sp)sp.style.display=terminalMode==="stocks"?"":"none";
+  if(cp)cp.style.display=terminalMode==="crypto"?"":"none";
+  if(st)st.style.display=terminalMode==="stocks"?"":"none";
+  if(ct)ct.style.display=terminalMode==="crypto"?"":"none";
   if(bs)bs.classList.toggle("active",terminalMode==="stocks");
   if(bc)bc.classList.toggle("active",terminalMode==="crypto");
-  if(sp)sp.style.display=terminalMode==="stocks"?"block":"none";
-  if(cp)cp.style.display=terminalMode==="crypto"?"block":"none";
-  if(st)st.style.display=terminalMode==="stocks"?"flex":"none";
-  if(ct)ct.style.display=terminalMode==="crypto"?"flex":"none";
+  showChartSkeleton();
+  showSignalSkeleton();
   if(terminalMode==="stocks"){
     if(cryptoPriceInterval){clearInterval(cryptoPriceInterval);cryptoPriceInterval=null}
     if(fearGreedInterval){clearInterval(fearGreedInterval);fearGreedInterval=null}
-    S.market=S.market||"india";
-    S.ticker="RELIANCE.NS";
-    S.name="Reliance";
-    S.tf="15m";
-    document.querySelectorAll(".tf").forEach(x=>x.classList.toggle("active",x.dataset.tf==="15m"));
-    $("t-name").textContent="Reliance (RELIANCE.NS)";
-    if($("bt-ticker"))$("bt-ticker").value=S.ticker;
-    document.querySelectorAll(".bpanel[id^='cb-']").forEach(x=>x.style.display="none");
-    document.querySelectorAll(".bpanel[id^='b-']").forEach(x=>x.style.display="");
+    const lastTicker=localStorage.getItem("lastTicker")||"RELIANCE.NS";
+    activeTicker=lastTicker;activeAssetClass=isUSAsset(lastTicker)?"us_stock":"indian_stock";
+    const picked=ALL.find(a=>a.ticker===activeTicker);
+    activeTF="15m";S.tf=activeTF;S.ticker=activeTicker;S.name=picked?.name||activeTicker;
+    document.querySelectorAll(".tf").forEach(x=>x.classList.toggle("active",x.dataset.tf===activeTF));
     const firstStockTab=document.querySelector('#stocks-tabs .btab[data-b="orderflow"]');
     document.querySelectorAll("#stocks-tabs .btab").forEach(x=>x.classList.remove("active"));
     if(firstStockTab)firstStockTab.classList.add("active");
+    document.querySelectorAll(".bpanel[id^='b-']").forEach(x=>x.style.display="");
     document.querySelectorAll(".bpanel[id^='b-']").forEach(x=>x.classList.remove("active"));
     if($("b-orderflow"))$("b-orderflow").classList.add("active");
-    refreshWatch({fast:true});
-    await Promise.all([loadAsset("RELIANCE.NS","Reliance"),loadMarketOverview(),refreshNews()]);
+    document.querySelectorAll(".bpanel[id^='cb-']").forEach(x=>x.style.display="none");
+    renderWatch();
+    Promise.all([loadChart(activeTicker,activeTF),loadSignal(activeTicker,activeTF),loadMarketOverview()]).catch(e=>console.warn("Mode switch load error:",e));
   }else{
-    S.ticker="BTCUSDT";
-    S.name="Bitcoin";
-    S.tf="15m";
-    document.querySelectorAll(".tf").forEach(x=>x.classList.toggle("active",x.dataset.tf==="15m"));
+    activeTicker="BTCUSDT";activeAssetClass="crypto";activeTF="15m";
+    S.tf=activeTF;S.ticker=activeTicker;S.name="Bitcoin";
+    document.querySelectorAll(".tf").forEach(x=>x.classList.toggle("active",x.dataset.tf===activeTF));
+    document.querySelectorAll(".bpanel[id^='b-']").forEach(x=>x.classList.remove("active"));
     document.querySelectorAll(".bpanel[id^='b-']").forEach(x=>x.style.display="none");
     document.querySelectorAll(".bpanel[id^='cb-']").forEach(x=>x.style.display="none");
     const firstCryptoTab=document.querySelector('#crypto-tabs .ctab[data-cb="orderflow"]');
     document.querySelectorAll("#crypto-tabs .ctab").forEach(x=>x.classList.remove("active"));
     if(firstCryptoTab)firstCryptoTab.classList.add("active");
     buildCryptoWatchlist();
-    await selectCryptoAsset("BTCUSDT","Bitcoin");
-    await Promise.all([loadCryptoPrices(),loadCryptoStats()]);
-    await loadFearAndGreed();
     switchCryptoTab("order-flow",{currentTarget:firstCryptoTab});
+    Promise.all([loadCryptoChart("BTCUSDT"),loadCryptoSignal("BTCUSDT"),loadCryptoPrices(),loadFearAndGreed(),loadCryptoStats()]).catch(e=>console.warn("Crypto load error:",e));
     if(cryptoPriceInterval)clearInterval(cryptoPriceInterval);
     cryptoPriceInterval=setInterval(loadCryptoPrices,10000);
     if(fearGreedInterval)clearInterval(fearGreedInterval);
     fearGreedInterval=setInterval(loadFearAndGreed,300000);
-    refreshCryptoFunding();
-    refreshCryptoNews();
   }
   updateMarketStatus();
   localStorage.setItem("terminalMode",terminalMode);
 }
+async function loadCryptoChart(symbol="BTCUSDT"){const a=CRYPTO_ASSETS.find(x=>x.symbol===symbol);return selectCryptoAsset(symbol,a?.name||symbol)}
 
 function initChart(){const c=$("chart");chart=LightweightCharts.createChart(c,{width:c.clientWidth,height:c.clientHeight,layout:{background:{type:"solid",color:"transparent"},textColor:"#94a3b8",fontFamily:"Sora"},grid:{vertLines:{color:"rgba(148,163,184,.08)"},horzLines:{color:"rgba(148,163,184,.08)"}},rightPriceScale:{borderColor:"rgba(148,163,184,.25)"},timeScale:{borderColor:"rgba(148,163,184,.25)",timeVisible:true}});candle=chart.addCandlestickSeries({upColor:BUY,downColor:SELL,borderUpColor:BUY,borderDownColor:SELL,wickUpColor:BUY,wickDownColor:SELL});s20=chart.addLineSeries({color:"#facc15",lineWidth:1,priceLineVisible:false,lastValueVisible:false});s50=chart.addLineSeries({color:"#60a5fa",lineWidth:1,priceLineVisible:false,lastValueVisible:false});window.addEventListener("resize",()=>chart.applyOptions({width:c.clientWidth,height:c.clientHeight}))}
 function showChartLoading(){const st=$("status");if(st)st.textContent=`${S.tf} | Loading chart...`;candle.setData([]);s20.setData([]);s50.setData([]);$("t-ltp").textContent="Loading...";$("t-chg").textContent="";$("t-vol").textContent="Vol: --"}
+function showChartSkeleton(){const n=$("t-name");if(n)n.textContent=`${S.name||"Loading"} (${S.ticker||"--"})`;const p=getCachedPrice(S.ticker);$("t-ltp").textContent=p?.price?inr(p.price):"Loading...";$("t-chg").textContent=p?.change_pct!=null?pct(Number(p.change_pct)):"";$("t-vol").textContent="Vol: --"}
 function renderMarkersData(j){if(!Array.isArray(j)){candle.setMarkers([]);return}candle.setMarkers(j.map(m=>({time:Number(m.time),position:m.position,color:m.color||(m.text==="BUY"?BUY:SELL),shape:m.shape||(m.text==="BUY"?"arrowUp":"arrowDown"),text:""})).filter(x=>Number.isFinite(x.time)))}
 function renderChartData(j){if(!j||!Array.isArray(j.data)||!j.data.length){candle.setData([]);s20.setData([]);s50.setData([]);$("t-ltp").textContent="Data unavailable";$("t-chg").textContent="";$("t-vol").textContent="Vol: --";return false}const d=parse(j.data);if(!d.length){$("t-ltp").textContent="Data unavailable";$("t-chg").textContent="";$("t-vol").textContent="Vol: --";return false}S.chart=d;candle.setData(d);s20.setData(sma(d,20));s50.setData(sma(d,50));chart.timeScale().fitContent();const x=d[d.length-1],y=d.length>1?d[d.length-2]:x,lastClose=Number(x.close||0),prevClose=Number(y.close||0),ch=prevClose>0?((lastClose-prevClose)/prevClose*100):0;$("t-ltp").textContent=inr(lastClose);$("t-chg").textContent=pct(ch);$("t-chg").style.color=ch>=0?BUY:SELL;$("t-vol").textContent=`Vol: ${Number(x.volume||0).toLocaleString("en-IN")}`;return true}
-async function loadChart(){const cfg=TF[S.tf];const j=await json(`/api/chart-data?ticker=${encodeURIComponent(S.ticker)}&interval=${encodeURIComponent(cfg.i)}&period=${encodeURIComponent(cfg.p)}`);if(renderChartData(j)){await loadMarkers(cfg.i,cfg.p)}}
+async function loadChart(ticker=S.ticker,tf=S.tf){
+  const t=String(ticker||S.ticker);
+  const frame=String(tf||S.tf||"15m");
+  activeTicker=t;activeTF=frame;S.ticker=t;S.tf=frame;
+  const params=resolveChartParams(t,frame);
+  showChartSkeleton();
+  const prefetchKey=chartCacheKey(t,frame);
+  const prefetched=prefetchCache.get(prefetchKey);
+  if(prefetched?.data?.length)renderChartData(prefetched);
+  const j=await json(`/api/chart-data?ticker=${encodeURIComponent(t)}&interval=${encodeURIComponent(params.interval)}&period=${encodeURIComponent(params.period)}`,{timeoutMs:12000});
+  if(j?.data?.length)prefetchCache.set(chartCacheKey(t,frame),j);
+  if(renderChartData(j)){await loadMarkers(params.interval,params.period)}
+}
 async function loadMarkers(i,p){const j=await json(`/api/chart-markers?ticker=${encodeURIComponent(S.ticker)}&interval=${encodeURIComponent(i)}&period=${encodeURIComponent(p)}`);renderMarkersData(j)}
-function initTf(){document.querySelectorAll(".tf").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tf").forEach(x=>x.classList.remove("active"));b.classList.add("active");S.tf=b.dataset.tf;if(terminalMode==="crypto"){selectCryptoAsset(currentCryptoSymbol,S.name)}else{loadAsset(S.ticker,S.name)}})}
-function setAsset(t,n){if(terminalMode==="stocks"&&(t==="BTC"||t==="ETH")){switchTerminalMode("crypto");selectCryptoAsset(t==="BTC"?"BTCUSDT":"ETHUSDT",t==="BTC"?"Bitcoin":"Ethereum");return}S.ticker=t;S.name=n||t;$("t-name").textContent=`${S.name} (${S.ticker})`;if($("bt-ticker"))$("bt-ticker").value=S.ticker;loadAsset(S.ticker,S.name)}
+function initTf(){document.querySelectorAll(".tf").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tf").forEach(x=>x.classList.remove("active"));b.classList.add("active");activeTF=b.dataset.tf;S.tf=activeTF;if(terminalMode==="crypto"){selectCryptoAsset(currentCryptoSymbol,S.name)}else{selectStock(S.ticker,isUSAsset(S.ticker)?"us_stock":"indian_stock",S.name)}})}
+function setAsset(t,n){
+  const tickerNorm=String(t||"").toUpperCase();
+  if(tickerNorm==="BTC"||tickerNorm==="BTCUSDT"){
+    location.href="/";
+    return;
+  }
+  if(terminalMode==="stocks"&&(t==="BTC"||t==="ETH")){
+    switchTerminalMode("crypto");
+    selectCryptoAsset(t==="BTC"?"BTCUSDT":"ETHUSDT",t==="BTC"?"Bitcoin":"Ethereum");
+    return;
+  }
+  selectStock(t,isUSAsset(t)?"us_stock":"indian_stock",n||t);
+}
 function setAction(g,reason,e,sl,tp){const box=$("action"),big=$("a-big"),sub=$("a-sub");if(g==="BUY"){big.textContent="BUY";big.style.color=BUY;box.style.borderColor=BUY;box.style.background="rgba(52,211,153,.12)";sub.textContent=`Entry ${inr(e)} | SL ${inr(sl)} | TP ${inr(tp)}`}else if(g==="SELL"){big.textContent="SELL";big.style.color=SELL;box.style.borderColor=SELL;box.style.background="rgba(248,113,113,.12)";sub.textContent=`Entry ${inr(e)} | SL ${inr(sl)} | TP ${inr(tp)}`}else{big.textContent="WAIT";big.style.color=HOLD;box.style.borderColor=HOLD;box.style.background="rgba(96,165,250,.12)";sub.textContent=reason||"No high-quality setup"}}
 function showSignalLoading(){setAction("HOLD","Loading signal...");$("sig").textContent="HOLD";$("sig").style.color=HOLD;const rs=$("reason");if(rs)rs.textContent="Loading signal...";$("conf").textContent="--";$("cfill").style.width="0%"}
+function showSignalSkeleton(){const n=$("t-name");if(n&&String(n.textContent||"").includes("Loading")===false)n.textContent=`${S.name||S.ticker} (${S.ticker})`;showSignalLoading();$("sig-time").textContent="updated: fetching..."}
 function signalIntervalFor(tf){if(tf==="1W"||tf==="1D")return"1d";if(tf==="1h")return"1h";return"15m"}
 async function fetchSignalWithTimeout(ticker=S.ticker,tf=S.tf){const signalInterval=signalIntervalFor(tf);try{return await Promise.race([json(`/api/stock-signal?ticker=${encodeURIComponent(ticker)}&interval=${encodeURIComponent(signalInterval)}`),new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),10000))])}catch(e){if(String(e?.message||"").toLowerCase().includes("timeout"))return "__timeout__";return null}}
 function renderSignalData(s){
@@ -844,11 +963,94 @@ function renderSignalData(s){
   });
   $("sig-time").textContent="updated: "+new Date().toLocaleTimeString("en-IN");
 }
-async function signal(){if(terminalMode==="crypto"){await loadCryptoSignal();return}const s=await fetchSignalWithTimeout(S.ticker,S.tf);if(s==="__timeout__"){setAction("HOLD","Signal timeout — click Refresh Signal to retry");const rs=$("reason");if(rs)rs.textContent="Signal timeout — click Refresh Signal to retry";$("sig-time").textContent="updated: timeout (retry in 15s)";return}if(!s){setAction("HOLD","Data unavailable");const rs=$("reason");if(rs)rs.textContent="Data unavailable";return}renderSignalData(s)}
-async function loadAsset(t,n){if(terminalMode==="crypto"){await selectCryptoAsset(currentCryptoSymbol,S.name);return}S.ticker=t;S.name=n||t;S.reqId+=1;const rid=S.reqId;$("t-name").textContent=`${S.name} (${S.ticker})`;if($("bt-ticker"))$("bt-ticker").value=S.ticker;showChartLoading();showSignalLoading();const cfg=TF[S.tf];const [candleData,signalData,markerData]=await Promise.all([json(`/api/chart-data?ticker=${encodeURIComponent(S.ticker)}&interval=${encodeURIComponent(cfg.i)}&period=${encodeURIComponent(cfg.p)}`),fetchSignalWithTimeout(S.ticker,S.tf),json(`/api/chart-markers?ticker=${encodeURIComponent(S.ticker)}&interval=${encodeURIComponent(cfg.i)}&period=${encodeURIComponent(cfg.p)}`)]);if(rid!==S.reqId)return;renderChartData(candleData);renderMarkersData(markerData);if(signalData==="__timeout__"){setAction("HOLD","Signal timeout — click Refresh Signal to retry");const rs=$("reason");if(rs)rs.textContent="Signal timeout — click Refresh Signal to retry";$("sig-time").textContent="updated: timeout (retry in 15s)"}else if(signalData){renderSignalData(signalData)}else{setAction("HOLD","Data unavailable");const rs=$("reason");if(rs)rs.textContent="Data unavailable"}loadOrderFlow(S.ticker);refreshNews()}
-async function loadCryptoSignal(){try{if(currentCryptoSymbol==="BTCUSDT"){const s=await json("/api/btc/signal",{timeoutMs:9000,cacheTtlMs:10000});if(s){renderSignalData({signal:s.signal||"HOLD",confidence:s.confidence||0,alpha_score:s.alpha_score||0,net_alpha_score:s.net_alpha_score||0,entry_price:s.entry_price,stop_loss:s.stop_loss,take_profit:s.take_profit,regime:s.regime||"SIDEWAYS",factor_scores:s.factor_scores||{}});return}}const s=await json(`/api/focus-trade?symbol=${encodeURIComponent(currentCryptoSymbol)}`,{timeoutMs:9000,cacheTtlMs:10000});if(s){renderSignalData({signal:s.signal||"HOLD",confidence:s.confidence||0,alpha_score:s.alpha_score||0,net_alpha_score:s.net_alpha_score||0,entry_price:s.entry_price,stop_loss:s.stop_loss,take_profit:s.take_profit,regime:s.regime||"SIDEWAYS",factor_scores:s.factor_scores||{}})}else{setAction("HOLD","No crypto signal available")}}catch(e){setAction("HOLD","Crypto signal unavailable")}}
+async function loadSignal(ticker=S.ticker,tf=S.tf,opts={}){
+  const t=String(ticker||S.ticker);
+  const frame=String(tf||S.tf||"15m");
+  const cacheKey=`${t}_${frame}`;
+  const cached=signalCache.get(cacheKey);
+  if(cached&&Date.now()-cached.ts<SIGNAL_TTL){
+    renderSignalData(cached.data);
+    if(opts?.useCacheOnly)return cached.data;
+  }else{
+    showSignalSkeleton();
+  }
+  $("sig-time").textContent="updated: fetching...";
+  const signalInterval=signalIntervalFor(frame);
+  const data=await json(`/api/stock-signal?ticker=${encodeURIComponent(t)}&interval=${encodeURIComponent(signalInterval)}`,{cacheTtlMs:0,timeoutMs:10000});
+  if(data){
+    signalCache.set(cacheKey,{data,ts:Date.now()});
+    renderSignalData(data);
+    return data;
+  }
+  if(cached){
+    $("sig-time").textContent="updated: timeout — using last signal";
+    renderSignalData(cached.data);
+    return cached.data;
+  }
+  setAction("HOLD","Signal timeout — click Refresh Signal to retry");
+  $("sig-time").textContent="updated: timeout (retry in 15s)";
+  return null;
+}
+async function selectStock(ticker,assetClass="indian_stock",name=ticker){
+  const t=String(ticker||"");
+  if(!t)return;
+  activeTicker=t;activeAssetClass=assetClass||"indian_stock";
+  S.ticker=t;S.name=name||t;S.tf=activeTF||S.tf||"15m";
+  localStorage.setItem("lastTicker",t);
+  $("t-name").textContent=`${S.name} (${S.ticker})`;
+  if($("bt-ticker"))$("bt-ticker").value=S.ticker;
+  showChartSkeleton();
+  showSignalSkeleton();
+  const key=chartCacheKey(t,S.tf);
+  const cachedChart=prefetchCache.get(key);
+  if(cachedChart?.data?.length)renderChartData(cachedChart);
+  Promise.all([
+    cachedChart?.data?.length?Promise.resolve(cachedChart):loadChart(t,S.tf),
+    loadSignal(t,S.tf)
+  ]).then(()=>{
+    prefetchCache.delete(key);
+    loadOrderFlow(t);
+    refreshNews();
+  }).catch(e=>console.warn("selectStock load error:",e));
+}
+async function signal(){if(terminalMode==="crypto"){await loadCryptoSignal();return}await loadSignal(S.ticker,S.tf)}
+async function loadAsset(t,n){if(terminalMode==="crypto"){await selectCryptoAsset(currentCryptoSymbol,S.name);return}await selectStock(t,isUSAsset(t)?"us_stock":"indian_stock",n||t)}
+async function loadCryptoSignal(symbol){try{if(symbol)currentCryptoSymbol=symbol;if(currentCryptoSymbol==="BTCUSDT"){const s=await json("/api/btc/signal",{timeoutMs:9000,cacheTtlMs:10000});if(s){renderSignalData({signal:s.signal||"HOLD",confidence:s.confidence||0,alpha_score:s.alpha_score||0,net_alpha_score:s.net_alpha_score||0,entry_price:s.entry_price,stop_loss:s.stop_loss,take_profit:s.take_profit,regime:s.regime||"SIDEWAYS",factor_scores:s.factor_scores||{}});return}}const s=await json(`/api/focus-trade?symbol=${encodeURIComponent(currentCryptoSymbol)}`,{timeoutMs:9000,cacheTtlMs:10000});if(s){renderSignalData({signal:s.signal||"HOLD",confidence:s.confidence||0,alpha_score:s.alpha_score||0,net_alpha_score:s.net_alpha_score||0,entry_price:s.entry_price,stop_loss:s.stop_loss,take_profit:s.take_profit,regime:s.regime||"SIDEWAYS",factor_scores:s.factor_scores||{}})}else{setAction("HOLD","No crypto signal available")}}catch(e){setAction("HOLD","Crypto signal unavailable")}}
 function tfToBinance(tf){if(tf==="5m")return"5m";if(tf==="15m")return"15m";if(tf==="1h")return"1h";if(tf==="1D")return"1d";if(tf==="1W")return"1w";return"15m"}
-async function selectCryptoAsset(symbol,name){currentCryptoSymbol=symbol;S.ticker=symbol;S.name=name||symbol;$("t-name").textContent=`${name||symbol} (${symbol})`;showChartLoading();const interval=tfToBinance(S.tf);if(symbol==="BTCUSDT"){const lim=S.tf==="1W"?365:S.tf==="1D"?365:200;const d=await json(`/api/btc/candles?interval=${encodeURIComponent(interval)}&limit=${lim}`,{timeoutMs:9000});const rowsRaw=Array.isArray(d)?d:(Array.isArray(d?.data)?d.data:[]);if(rowsRaw.length){const rows=rowsRaw.map(x=>({time:x.time||x.ts||x.timestamp,open:x.open,high:x.high,low:x.low,close:x.close,volume:x.volume}));cryptoLastCandles=parse(rows);renderChartData({data:rows})}}else{const lim=S.tf==="1W"?365:S.tf==="1D"?365:200;const res=await fetch(`https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${lim}`);const k=await res.json();if(Array.isArray(k)){const rows=k.map(r=>({time:Math.floor(Number(r[0])/1000),open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),close:Number(r[4]),volume:Number(r[5])}));cryptoLastCandles=rows;renderChartData({data:rows});candle.setMarkers([])}}await loadCryptoSignal();renderCryptoOrderFlow();refreshCryptoNews()}
+async function selectCryptoAsset(symbol,name){
+  currentCryptoSymbol=symbol;
+  activeTicker=symbol;
+  activeAssetClass="crypto";
+  S.ticker=symbol;
+  S.name=name||symbol;
+  S.tf=activeTF||S.tf||"15m";
+  $("t-name").textContent=`${name||symbol} (${symbol})`;
+  showChartSkeleton();
+  const interval=tfToBinance(S.tf);
+  if(symbol==="BTCUSDT"){
+    const lim=S.tf==="1W"?365:S.tf==="1D"?365:200;
+    const d=await json(`/api/btc/candles?interval=${encodeURIComponent(interval)}&limit=${lim}`,{timeoutMs:9000});
+    const rowsRaw=Array.isArray(d)?d:(Array.isArray(d?.data)?d.data:[]);
+    if(rowsRaw.length){
+      const rows=rowsRaw.map(x=>({time:x.time||x.ts||x.timestamp,open:x.open,high:x.high,low:x.low,close:x.close,volume:x.volume}));
+      cryptoLastCandles=parse(rows);
+      renderChartData({data:rows});
+    }
+  }else{
+    const lim=S.tf==="1W"?365:S.tf==="1D"?365:200;
+    const res=await fetch(`https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${lim}`);
+    const k=await res.json();
+    if(Array.isArray(k)){
+      const rows=k.map(r=>({time:Math.floor(Number(r[0])/1000),open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),close:Number(r[4]),volume:Number(r[5])}));
+      cryptoLastCandles=rows;
+      renderChartData({data:rows});
+      candle.setMarkers([]);
+    }
+  }
+  await loadCryptoSignal();
+  renderCryptoOrderFlow();
+  refreshCryptoNews();
+}
 function showOrderFlowUnavailable(){["of-volume","of-smart-money","of-money-flow","of-obs"].forEach(id=>{const el=$(id);if(el){el.textContent="--";el.style.color="#475569"}})}
 function calculateRSI(closes,period=14){if(!Array.isArray(closes)||closes.length<=period)return 50;let gains=0,losses=0;for(let i=1;i<=period;i++){const diff=Number(closes[i]||0)-Number(closes[i-1]||0);if(diff>0)gains+=diff;else losses-=diff}const avgGain=gains/period,avgLoss=losses/period;return avgLoss===0?100:100-(100/(1+avgGain/Math.max(avgLoss,1e-9)))}
 async function loadOrderFlow(ticker){
@@ -901,7 +1103,7 @@ function renderCryptoOrderFlow(){if(!Array.isArray(cryptoLastCandles)||cryptoLas
 async function refreshCryptoFunding(){const body=$("funding-body");if(!body)return;body.innerHTML='<tr><td colspan="3"><span class="spinner"></span> Loading...</td></tr>';try{const rows=await Promise.all(CRYPTO_ASSETS.slice(0,8).map(async a=>{const r=await fetch(`https://fapi.binance.com/fapi/v1/fundingRate?symbol=${encodeURIComponent(a.symbol)}&limit=1`);const j=await r.json();const fr=Array.isArray(j)&&j[0]?Number(j[0].fundingRate||0)*100:0;return {sym:a.short,fr}}));body.innerHTML=rows.map(x=>`<tr><td>${x.sym}</td><td class="r" style="color:${x.fr>=0?SELL:BUY}">${x.fr>=0?"+":""}${x.fr.toFixed(4)}%</td><td class="r">${x.fr>0?"Longs paying":"Shorts paying"}</td></tr>`).join("")}catch(e){body.innerHTML='<tr><td colspan="3" class="empty">Funding unavailable</td></tr>'}}
 async function refreshCryptoNews(){const wrap=$("crypto-news-list");if(!wrap)return;wrap.innerHTML='<div class="empty"><span class="spinner"></span> Loading crypto news...</div>';const r=await json('/api/news?symbol=BTC&asset_class=crypto&limit=12',{timeoutMs:9000});const n=r?.news||[];if(!n.length){wrap.innerHTML='<div class="empty">No crypto news</div>';return}wrap.innerHTML=n.map(x=>`<div class="news"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:4px"><span class="sent ${newsClass(x.sentiment)}">${newsClass(x.sentiment)}</span><span class="k">${(x.published||"").toString().slice(0,19).replace("T"," ")}</span></div><div><a href="${x.url||"#"}" target="_blank" rel="noopener">${x.title||"Untitled"}</a></div><div class="k">${x.source||"Unknown source"}</div></div>`).join("")}
 async function market(){return loadMarketOverview()}
-function screener(){const b=$("sbody");const render=()=>{const sf=$("f-signal").value.toUpperCase(),st=$("f-strength").value.toUpperCase(),se=$("f-sector").value.toUpperCase(),k=S.sort.k,dir=S.sort.d==="asc"?1:-1;const arr=S.sdata.filter(x=>sf==="ALL"||x.signal===sf).filter(x=>st==="ALL"||x.strength===st).filter(x=>se==="ALL"||String(x.sector).toUpperCase()===se).sort((a,c)=>["stock","signal","regime"].includes(k)?String(a[k]).localeCompare(String(c[k]))*dir:(Number(a[k]||0)-Number(c[k]||0))*dir);if(!arr.length){b.innerHTML='<tr><td colspan="7" class="empty">No matches</td></tr>';return}b.innerHTML=arr.map(x=>`<tr data-t="${x.stock}"><td>${x.rank}</td><td>${x.stock}</td><td><span class="badge ${cls(x.signal)}">${x.signal}</span></td><td class="r">${Math.round(x.confidence)}%</td><td class="r">${Math.abs(x.alpha)<=1?(Math.abs(x.alpha)*100).toFixed(1):Number(x.alpha).toFixed(1)}</td><td>${x.regime}</td><td class="r">${inr(x.price)}</td></tr>`).join("");b.querySelectorAll("tr[data-t]").forEach(r=>r.onclick=()=>{const a=ALL.find(z=>z.ticker===r.dataset.t);if(a)setAsset(a.ticker,a.name)})};$("scan").onclick=async()=>{b.innerHTML='<tr><td colspan="7"><span class="spinner"></span> Scanning...</td></tr>';const out=[];let rk=1;for(const a of SCREEN){const [sg,ch]=await Promise.all([json(`/api/stock-signal?ticker=${encodeURIComponent(a.ticker)}`),json(`/api/chart-data?ticker=${encodeURIComponent(a.ticker)}&interval=1d&period=5d`)]),rows=ch&&Array.isArray(ch.data)?parse(ch.data):[],last=rows.length?rows[rows.length-1].close:null;out.push({rank:rk++,stock:a.ticker,sector:a.sector,signal:sig(sg?.signal||"HOLD"),strength:String(sg?.strength||"WEAK").toUpperCase(),confidence:Number(sg?.confidence||0),alpha:Number(sg?.alpha_score||0),regime:String(sg?.regime||"SIDEWAYS").toUpperCase(),price:last})}S.sdata=out;render()};["f-signal","f-strength","f-sector"].forEach(id=>$(id).onchange=render);document.querySelectorAll("#l-screener th[data-s]").forEach(th=>th.onclick=()=>{const k=th.dataset.s;if(S.sort.k===k)S.sort.d=S.sort.d==="asc"?"desc":"asc";else{S.sort.k=k;S.sort.d=k==="stock"?"asc":"desc"}render()})}
+function screener(){const b=$("sbody");const render=()=>{const sf=$("f-signal").value.toUpperCase(),st=$("f-strength").value.toUpperCase(),se=$("f-sector").value.toUpperCase(),k=S.sort.k,dir=S.sort.d==="asc"?1:-1;const arr=S.sdata.filter(x=>sf==="ALL"||x.signal===sf).filter(x=>st==="ALL"||x.strength===st).filter(x=>se==="ALL"||String(x.sector).toUpperCase()===se).sort((a,c)=>["stock","signal","regime"].includes(k)?String(a[k]).localeCompare(String(c[k]))*dir:(Number(a[k]||0)-Number(c[k]||0))*dir);if(!arr.length){b.innerHTML='<tr><td colspan="7" class="empty">No matches</td></tr>';return}b.innerHTML=arr.map(x=>`<tr data-t="${x.stock}"><td>${x.rank}</td><td>${x.stock}</td><td><span class="badge ${cls(x.signal)}">${x.signal}</span></td><td class="r">${Math.round(x.confidence)}%</td><td class="r">${Math.abs(x.alpha)<=1?(Math.abs(x.alpha)*100).toFixed(1):Number(x.alpha).toFixed(1)}</td><td>${x.regime}</td><td class="r">${inr(x.price)}</td></tr>`).join("");b.querySelectorAll("tr[data-t]").forEach(r=>r.onclick=()=>{const a=ALL.find(z=>z.ticker===r.dataset.t);if(a)openAssetDashboard(a.ticker,a.name)})};$("scan").onclick=async()=>{b.innerHTML='<tr><td colspan="7"><span class="spinner"></span> Scanning...</td></tr>';const out=[];let rk=1;for(const a of SCREEN){const [sg,ch]=await Promise.all([json(`/api/stock-signal?ticker=${encodeURIComponent(a.ticker)}`),json(`/api/chart-data?ticker=${encodeURIComponent(a.ticker)}&interval=1d&period=5d`)]),rows=ch&&Array.isArray(ch.data)?parse(ch.data):[],last=rows.length?rows[rows.length-1].close:null;out.push({rank:rk++,stock:a.ticker,sector:a.sector,signal:sig(sg?.signal||"HOLD"),strength:String(sg?.strength||"WEAK").toUpperCase(),confidence:Number(sg?.confidence||0),alpha:Number(sg?.alpha_score||0),regime:String(sg?.regime||"SIDEWAYS").toUpperCase(),price:last})}S.sdata=out;render()};["f-signal","f-strength","f-sector"].forEach(id=>$(id).onchange=render);document.querySelectorAll("#l-screener th[data-s]").forEach(th=>th.onclick=()=>{const k=th.dataset.s;if(S.sort.k===k)S.sort.d=S.sort.d==="asc"?"desc":"asc";else{S.sort.k=k;S.sort.d=k==="stock"?"asc":"desc"}render()})}
 function initBT(){const t=$("bt-ticker");t.innerHTML=SCREEN.map(a=>`<option value="${a.ticker}">${a.ticker}</option>`).join("");t.value=S.ticker;const n=new Date(),p=new Date(Date.now()-365*24*3600*1000);$("bt-from").value=p.toISOString().slice(0,10);$("bt-to").value=n.toISOString().slice(0,10);$("bt-status").textContent="Idle";$("bt-status-icon").className="";$("run-bt").onclick=runBT}
 function renderCpcvHistogram(vals){const el=$("bt-cpcv-hist");if(!el)return;const arr=Array.isArray(vals)?vals.map(Number).filter(v=>Number.isFinite(v)):[];if(!arr.length){el.className="empty";el.textContent="Run CPCV mode to view OOS Sharpe distribution";return}const min=Math.min(...arr),max=Math.max(...arr),bins=12,step=(max-min||1)/bins;const h=new Array(bins).fill(0);arr.forEach(v=>{const i=Math.min(bins-1,Math.max(0,Math.floor((v-min)/step)));h[i]++});const mh=Math.max(1,...h);el.className="";el.innerHTML=`<div style="display:flex;align-items:flex-end;gap:4px;height:120px">${h.map((v,i)=>{const ht=Math.max(6,Math.round(v/mh*110));const x=min+i*step;const col=x>=0?BUY:SELL;return `<div title="${x.toFixed(2)}: ${v}" style="flex:1;height:${ht}px;background:${col};opacity:.75;border-radius:3px"></div>`}).join("")}</div><div class="k" style="margin-top:6px">OOS Sharpe bins (${arr.length} trials)</div>`}
 function renderEquityCurve(equityCurve){const container=$("bt-equity-chart");if(!container)return;if(!btEqChart){btEqChart=LightweightCharts.createChart(container,{width:container.clientWidth,height:220,layout:{background:{type:"solid",color:"transparent"},textColor:"#94a3b8",fontFamily:"Sora"},grid:{vertLines:{color:"rgba(148,163,184,.08)"},horzLines:{color:"rgba(148,163,184,.08)"}},rightPriceScale:{borderColor:"rgba(148,163,184,.25)"},timeScale:{borderColor:"rgba(148,163,184,.25)",timeVisible:true}});btEqSeries=btEqChart.addLineSeries({color:"#f97316",lineWidth:2});window.addEventListener("resize",()=>btEqChart&&btEqChart.applyOptions({width:container.clientWidth,height:220}))}const chartData=(equityCurve||[]).map(p=>({time:Number.isFinite(Number(p.time))?Number(p.time):Math.floor(new Date(p.time).getTime()/1000),value:Number(p.value||0)})).filter(x=>Number.isFinite(x.time)&&Number.isFinite(x.value));btEqSeries.setData(chartData);btEqChart.timeScale().fitContent()}
@@ -1037,16 +1239,35 @@ function boot(){
   const pReset=$("paper-reset");if(pReset)pReset.onclick=resetPaperAccount;
   const paperTab=$("tab-paper");if(paperTab)paperTab.addEventListener('click',loadPaperPortfolio);
   const orderFlowTab=$("tab-order-flow");if(orderFlowTab)orderFlowTab.addEventListener('click',()=>loadOrderFlow(S.ticker));
-  $("t-name").textContent=`${S.name} (${S.ticker})`;
-  setAsset(S.ticker,S.name);
-  loadMarketOverview();
-  setTimeout(()=>{refreshPortfolio()},1200);
+  const query=new URLSearchParams(location.search);
+  const modeParam=String(query.get("mode")||"").toLowerCase();
+  const symbolParam=String(query.get("symbol")||"").toUpperCase();
+  const nameParam=String(query.get("name")||"");
   const savedMode=localStorage.getItem("terminalMode")||"stocks";
-  switchTerminalMode(savedMode);
+  const lastTicker=localStorage.getItem("lastTicker")||"RELIANCE.NS";
+  terminalMode=modeParam==="crypto"?"crypto":modeParam==="stocks"?"stocks":savedMode==="crypto"?"crypto":"stocks";
+  activeTicker=terminalMode==="stocks"?lastTicker:"BTCUSDT";
+  activeAssetClass=terminalMode==="stocks"?(isUSAsset(activeTicker)?"us_stock":"indian_stock"):"crypto";
+  activeTF="15m";S.tf=activeTF;S.ticker=activeTicker;S.name=activeTicker;
+  switchTerminalMode(terminalMode);
+  if(terminalMode==="crypto"&&symbolParam){
+    const c=CRYPTO_ASSETS.find(a=>a.symbol===symbolParam||a.short===symbolParam);
+    if(c){
+      selectCryptoAsset(c.symbol,nameParam||c.name);
+    }
+  }
   updateMarketStatus();
+  setTimeout(()=>{refreshPortfolio()},1500);
+  if(terminalMode==="stocks"){
+    setTimeout(()=>refreshWatch({fast:true}),500);
+    setTimeout(()=>loadPaperPortfolio(),1500);
+  }else{
+    setTimeout(()=>loadFearAndGreed(),1000);
+  }
+  setTimeout(()=>{if(terminalMode==="crypto"){loadCryptoSignal()}},2000);
 
   setInterval(()=>{if(terminalMode==="stocks"){signal()}else{loadCryptoSignal()}},15000);
-  setInterval(()=>{if(terminalMode==="stocks")refreshWatch()},60000);
+  setInterval(()=>{if(terminalMode==="stocks")refreshWatch({fast:true})},60000);
   setInterval(()=>{if(terminalMode==="stocks"){loadOrderFlow(S.ticker)}else{renderCryptoOrderFlow()}},60000);
   setInterval(()=>{if(terminalMode==="stocks"){refreshTopBar()}else{loadCryptoPrices();loadCryptoStats()}},30000);
   setInterval(()=>{if(terminalMode==="stocks"){refreshNews()}else{refreshCryptoNews()}},300000);
