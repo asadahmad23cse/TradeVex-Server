@@ -22,6 +22,7 @@ import pandas as pd
 from src.api.connectors import MarketDataConnector
 from src.features.engineer import FeatureEngineer
 from src.alpha.factor_model import AlphaFactorModel
+from src.research.validation import CPCVValidator
 
 logger = logging.getLogger(__name__)
 
@@ -194,3 +195,60 @@ class WFOValidator:
         ic_std = float(np.std(ic_array))
         return ic_mean / ic_std if ic_std > 1e-9 else 0.0
 
+    def run_with_cpcv(self, ticker: str | None = None) -> dict:
+        """Run both WFO and CPCV, return a combined deployment verdict."""
+        tk = ticker or self.ticker
+        df_raw = self.connector.get_daily(tk, period="5y")
+        if df_raw.empty:
+            return {"ticker": tk, "combined_verdict": "FAIL", "error": "no_data"}
+
+        feat_df = self.engineer.compute_all_features(df_raw, timeframe="daily", ticker=tk)
+        if feat_df.empty or len(feat_df) < self.min_train + self.oos_step:
+            return {"ticker": tk, "combined_verdict": "FAIL", "error": "insufficient_data"}
+
+        base_alpha = float(self.alpha_thresholds[0]) if self.alpha_thresholds else 0.30
+        base_ic_window = int(self.ic_windows[0]) if self.ic_windows else 60
+        model = AlphaFactorModel(alpha_threshold=base_alpha, ic_window=base_ic_window)
+        close = feat_df["Close"].astype(float)
+        rets = close.pct_change().fillna(0.0).values
+
+        def _strategy_fn(frame: pd.DataFrame, train_idx: np.ndarray, test_idx: np.ndarray) -> dict:
+            def _build_slice_returns(indices: np.ndarray) -> np.ndarray:
+                sig = np.zeros(len(frame), dtype=float)
+                for i in indices:
+                    if i < 80:
+                        continue
+                    window = frame.iloc[max(0, i - 200): i + 1]
+                    out = model.score(window, asset=tk, asset_class=("indian_stock" if tk.upper().endswith((".NS", ".BO")) else "us_stock"))
+                    raw = str(out.get("signal", "HOLD")).upper()
+                    sig[i] = 1.0 if raw == "BUY" else 0.0
+                pos = np.roll(sig, 1)
+                pos[0] = 0.0
+                r = rets * pos
+                return r[indices]
+
+            return {
+                "is_returns": _build_slice_returns(train_idx),
+                "oos_returns": _build_slice_returns(test_idx),
+            }
+
+        cpcv = CPCVValidator()
+        cpcv_result = cpcv.run_cpcv(feat_df, _strategy_fn)
+        wfo_result = self.run_validation()
+
+        cpcv_pass = str(cpcv_result.get("verdict", "FAIL")).upper() == "PASS"
+        wfo_pass = bool(wfo_result.get("passed", False))
+        if cpcv_pass and wfo_pass:
+            combined = "PASS"
+        elif wfo_pass or str(cpcv_result.get("verdict", "FAIL")).upper() == "WARN":
+            combined = "WARN"
+        else:
+            combined = "FAIL"
+
+        return {
+            "ticker": tk,
+            "wfo": wfo_result,
+            "cpcv": cpcv_result,
+            "combined_verdict": combined,
+            "timestamp": datetime.utcnow().isoformat(),
+        }

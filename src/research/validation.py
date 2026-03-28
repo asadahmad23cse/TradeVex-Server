@@ -31,6 +31,7 @@ import logging
 from itertools import combinations
 
 import numpy as np
+import pandas as pd
 from scipy.stats import norm
 
 logger = logging.getLogger(__name__)
@@ -250,4 +251,138 @@ class ResearchValidator:
             "overall_verdict": overall,
             "dsr_pass": dsr_pass,
             "pbo_pass": pbo_pass,
+        }
+
+
+class CPCVValidator:
+    """
+    López de Prado-style CPCV validator for robust OOS diagnostics.
+    """
+
+    def __init__(self, n_splits: int = 6, n_test_splits: int = 2, embargo_pct: float = 0.01):
+        self.n_splits = max(int(n_splits), 3)
+        self.n_test_splits = max(1, int(n_test_splits))
+        self.embargo_pct = float(np.clip(embargo_pct, 0.0, 0.25))
+
+    @staticmethod
+    def _annualized_sharpe(returns: np.ndarray) -> float:
+        r = np.asarray(returns, dtype=float)
+        r = r[np.isfinite(r)]
+        if r.size < 2:
+            return 0.0
+        sd = float(np.std(r))
+        if sd <= 1e-12:
+            return 0.0
+        return float(np.mean(r) / sd * np.sqrt(252.0))
+
+    def _purge_embargo(self, train_idx, test_idx, embargo_pct) -> np.ndarray:
+        train = np.asarray(train_idx, dtype=int)
+        test = np.asarray(test_idx, dtype=int)
+        if train.size == 0 or test.size == 0:
+            return train
+        embargo = max(1, int(len(np.concatenate([train, test])) * float(embargo_pct)))
+        t_min = int(test.min())
+        t_max = int(test.max())
+        keep = (train < (t_min - embargo)) | (train > (t_max + embargo))
+        return train[keep]
+
+    @staticmethod
+    def _extract_returns(payload: object) -> tuple[np.ndarray, np.ndarray, list[dict]]:
+        if isinstance(payload, dict):
+            is_ret = np.asarray(payload.get("is_returns", []), dtype=float)
+            oos_ret = np.asarray(payload.get("oos_returns", []), dtype=float)
+            curves = payload.get("equity_curve") or payload.get("oos_equity_curve") or []
+            return is_ret, oos_ret, curves if isinstance(curves, list) else []
+        arr = np.asarray(payload if payload is not None else [], dtype=float)
+        return np.array([], dtype=float), arr, []
+
+    def _estimate_pbo(self, oos_sharpes: list) -> float:
+        if not oos_sharpes:
+            return 1.0
+        vals = np.asarray(oos_sharpes, dtype=float)
+        return float(np.mean(vals < 0))
+
+    def run_cpcv(self, feat_df: pd.DataFrame, strategy_fn: callable, n_jobs: int = 4) -> dict:
+        _ = n_jobs  # reserved for future parallel implementation
+        if feat_df is None or feat_df.empty or len(feat_df) < self.n_splits * 20:
+            return {
+                "oos_sharpe_mean": 0.0,
+                "oos_sharpe_std": 0.0,
+                "oos_sharpe_distribution": [],
+                "pbo": 1.0,
+                "dsr": -1.0,
+                "is_sharpe": 0.0,
+                "degradation_ratio": 0.0,
+                "verdict": "FAIL",
+                "n_combinations": 0,
+                "equity_curves": [],
+                "error": "insufficient_data",
+            }
+
+        n = len(feat_df)
+        all_idx = np.arange(n)
+        groups = [np.asarray(g, dtype=int) for g in np.array_split(all_idx, self.n_splits)]
+        combos = list(combinations(range(self.n_splits), self.n_test_splits))
+
+        oos_sharpes: list[float] = []
+        is_sharpes: list[float] = []
+        equity_curves: list = []
+
+        for combo in combos:
+            test_idx = np.concatenate([groups[i] for i in combo]) if combo else np.array([], dtype=int)
+            train_idx = np.concatenate([groups[i] for i in range(self.n_splits) if i not in combo])
+            train_idx = self._purge_embargo(train_idx, test_idx, self.embargo_pct)
+            if train_idx.size < 30 or test_idx.size < 10:
+                continue
+
+            try:
+                payload = strategy_fn(feat_df, train_idx, test_idx)
+                is_ret, oos_ret, curves = self._extract_returns(payload)
+                is_sr = self._annualized_sharpe(is_ret)
+                oos_sr = self._annualized_sharpe(oos_ret)
+                is_sharpes.append(is_sr)
+                oos_sharpes.append(oos_sr)
+                if curves:
+                    equity_curves.append(curves)
+                elif oos_ret.size:
+                    eq = np.cumprod(1.0 + np.clip(oos_ret, -0.95, 10.0))
+                    equity_curves.append([
+                        {"time": str(feat_df.index[int(i)]), "value": float(v)}
+                        for i, v in zip(test_idx[: len(eq)], eq)
+                    ])
+            except Exception as exc:
+                logger.debug("CPCV combo failed: %s", exc)
+                continue
+
+        oos_mean = float(np.mean(oos_sharpes)) if oos_sharpes else 0.0
+        oos_std = float(np.std(oos_sharpes)) if oos_sharpes else 0.0
+        is_mean = float(np.mean(is_sharpes)) if is_sharpes else 0.0
+        pbo = self._estimate_pbo(oos_sharpes)
+
+        dsr_pack = ResearchValidator.deflated_sharpe(
+            sharpe_obs=is_mean,
+            n_trials=max(len(oos_sharpes), 1),
+            n_obs=max(len(feat_df), 1),
+        )
+        dsr = float(dsr_pack.get("dsr", 0.0))
+        degradation = float(oos_mean / is_mean) if abs(is_mean) > 1e-9 else 0.0
+
+        if pbo < 0.3 and dsr > 0 and degradation > 0.5:
+            verdict = "PASS"
+        elif pbo <= 0.5 and dsr > -0.5 and degradation > 0.25:
+            verdict = "WARN"
+        else:
+            verdict = "FAIL"
+
+        return {
+            "oos_sharpe_mean": round(oos_mean, 4),
+            "oos_sharpe_std": round(oos_std, 4),
+            "oos_sharpe_distribution": [round(float(x), 4) for x in oos_sharpes],
+            "pbo": round(float(pbo), 4),
+            "dsr": round(float(dsr), 4),
+            "is_sharpe": round(is_mean, 4),
+            "degradation_ratio": round(degradation, 4),
+            "verdict": verdict,
+            "n_combinations": len(oos_sharpes),
+            "equity_curves": equity_curves,
         }

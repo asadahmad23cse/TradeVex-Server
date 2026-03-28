@@ -30,6 +30,7 @@ Confidence:
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from calendar import monthrange
 from datetime import date, datetime, timedelta, timezone
@@ -58,8 +59,15 @@ TURNOVER_AUTOCORR_THRESHOLD = 0.30
 IC_WINDOWS = (10, 21, 63)
 IC_BLEND_WEIGHTS = (0.2, 0.5, 0.3)
 VIX_CACHE_TTL_SEC = 300
+IC_CACHE_TTL_SEC = 300
 
 _vix_cache: dict[str, float] = {"value": 18.0, "ts": 0.0}
+_ic_weight_cache: dict[str, dict[str, object]] = {}
+_ic_refresh_context: dict[str, dict[str, object]] = {}
+_ic_cache_lock = threading.Lock()
+_ic_refresh_started = False
+_model_cache: dict[str, "AlphaFactorModel"] = {}
+_model_cache_lock = threading.Lock()
 
 
 def _zscore(series: pd.Series, window: int = 60) -> pd.Series:
@@ -153,6 +161,80 @@ def _in_expiry_window(d: date, lookback_days: int = 5) -> bool:
     return 0 <= days_to_expiry <= lookback_days
 
 
+def _compute_effective_ic_bundle(
+    factors: dict[str, pd.Series],
+    fwd_ret: pd.Series,
+) -> tuple[dict[str, float], dict[str, dict[str, float | bool]]]:
+    """
+    Compute effective IC weights + metadata bundle for all factors.
+    This is shared by request-time scoring and background refresh.
+    """
+    ics: dict[str, float] = {}
+    factor_meta: dict[str, dict[str, float | bool]] = {}
+    for name, factor in factors.items():
+        ic_vals: list[float] = []
+        for w in IC_WINDOWS:
+            ic_series = _rolling_ic(factor, fwd_ret, w)
+            ic_vals.append(_latest_usable_ic(ic_series))
+        composite_ic = float(
+            IC_BLEND_WEIGHTS[0] * ic_vals[0]
+            + IC_BLEND_WEIGHTS[1] * ic_vals[1]
+            + IC_BLEND_WEIGHTS[2] * ic_vals[2]
+        )
+
+        ci_center, ci_low, ci_high = _bootstrap_ic_ci(factor, fwd_ret)
+        penalty, autocorr = _turnover_penalty(factor)
+
+        effective_ic = composite_ic
+        if composite_ic < 0.0:
+            effective_ic = 0.0
+        if composite_ic > 0.08:
+            effective_ic *= 1.2
+        effective_ic *= penalty
+        if ci_high < 0.0:
+            effective_ic = 0.0
+
+        ics[name] = float(effective_ic)
+        factor_meta[name] = {
+            "ic_10": round(float(ic_vals[0]), 4),
+            "ic_21": round(float(ic_vals[1]), 4),
+            "ic_63": round(float(ic_vals[2]), 4),
+            "ic_composite": round(float(composite_ic), 4),
+            "ic_ci_center": round(float(ci_center), 4),
+            "ic_ci_low": round(float(ci_low), 4),
+            "ic_ci_high": round(float(ci_high), 4),
+            "lag1_autocorr": round(float(autocorr), 4),
+            "turnover_penalty": round(float(penalty), 4),
+            "ic_boosted": bool(composite_ic > 0.08),
+            "zero_weighted": bool((composite_ic < 0.0) or (ci_high < 0.0)),
+        }
+    return ics, factor_meta
+
+
+def _refresh_ic_cache_worker() -> None:
+    while True:
+        time.sleep(IC_CACHE_TTL_SEC)
+        with _ic_cache_lock:
+            contexts = list(_ic_refresh_context.items())
+        if not contexts:
+            continue
+        for key, ctx in contexts:
+            factors = ctx.get("factors")
+            fwd_ret = ctx.get("fwd_ret")
+            if not isinstance(factors, dict) or not isinstance(fwd_ret, pd.Series):
+                continue
+            try:
+                ics, factor_meta = _compute_effective_ic_bundle(factors, fwd_ret)
+                with _ic_cache_lock:
+                    _ic_weight_cache[key] = {
+                        "ts": time.time(),
+                        "ics": ics,
+                        "factor_meta": factor_meta,
+                    }
+            except Exception as exc:
+                logger.debug("IC background refresh failed for %s: %s", key, exc)
+
+
 class AlphaFactorModel:
     """Computes the IC-weighted alpha score for a single asset."""
 
@@ -163,6 +245,51 @@ class AlphaFactorModel:
     ):
         self.alpha_threshold = alpha_threshold
         self.ic_window = ic_window
+        global _ic_refresh_started
+        if not _ic_refresh_started:
+            with _ic_cache_lock:
+                if not _ic_refresh_started:
+                    th = threading.Thread(
+                        target=_refresh_ic_cache_worker,
+                        name="alpha-ic-refresh",
+                        daemon=True,
+                    )
+                    th.start()
+                    _ic_refresh_started = True
+
+    @staticmethod
+    def _ic_cache_key(
+        asset: str | None,
+        asset_class: str | None,
+        n_rows: int,
+        last_ts: object,
+    ) -> str:
+        return f"{(asset or 'UNKNOWN').upper()}:{(asset_class or 'unknown').lower()}:{n_rows}:{last_ts}"
+
+    def _get_cached_ic_bundle(
+        self,
+        cache_key: str,
+        factors: dict[str, pd.Series],
+        fwd_ret: pd.Series,
+    ) -> tuple[dict[str, float], dict[str, dict[str, float | bool]]]:
+        now = time.time()
+        with _ic_cache_lock:
+            entry = _ic_weight_cache.get(cache_key)
+            if entry and (now - float(entry.get("ts", 0.0)) < IC_CACHE_TTL_SEC):
+                ics = entry.get("ics")
+                meta = entry.get("factor_meta")
+                if isinstance(ics, dict) and isinstance(meta, dict):
+                    return ics, meta  # type: ignore[return-value]
+
+        ics, factor_meta = _compute_effective_ic_bundle(factors, fwd_ret)
+        with _ic_cache_lock:
+            _ic_weight_cache[cache_key] = {"ts": now, "ics": ics, "factor_meta": factor_meta}
+            # store small rolling context for async refresh
+            _ic_refresh_context[cache_key] = {
+                "factors": {k: v.tail(700).copy() for k, v in factors.items()},
+                "fwd_ret": fwd_ret.tail(700).copy(),
+            }
+        return ics, factor_meta
 
     # ------------------------------------------------------------------
     # Individual factors
@@ -516,33 +643,13 @@ class AlphaFactorModel:
             "F12": f12,
         }
 
-        ics: dict[str, float] = {}
-        factor_meta: dict[str, dict] = {}
-        for name, factor in factors.items():
-            composite_ic, ic_parts = self._composite_ic(factor, fwd_ret)
-            ci_center, ci_low, ci_high = _bootstrap_ic_ci(factor, fwd_ret)
-            penalty, autocorr = _turnover_penalty(factor)
-
-            effective_ic = composite_ic
-            if composite_ic < 0.0:
-                effective_ic = 0.0
-            if composite_ic > 0.08:
-                effective_ic *= 1.2
-            effective_ic *= penalty
-            if ci_high < 0.0:
-                effective_ic = 0.0
-
-            ics[name] = effective_ic
-            factor_meta[name] = {
-                **ic_parts,
-                "ic_ci_center": round(ci_center, 4),
-                "ic_ci_low": round(ci_low, 4),
-                "ic_ci_high": round(ci_high, 4),
-                "lag1_autocorr": round(autocorr, 4),
-                "turnover_penalty": round(penalty, 4),
-                "ic_boosted": composite_ic > 0.08,
-                "zero_weighted": (composite_ic < 0.0) or (ci_high < 0.0),
-            }
+        cache_key = self._ic_cache_key(
+            asset=asset,
+            asset_class=asset_class,
+            n_rows=len(df),
+            last_ts=df.index[-1] if len(df.index) else "na",
+        )
+        ics, factor_meta = self._get_cached_ic_bundle(cache_key, factors, fwd_ret)
 
         latest: dict[str, float] = {
             name: float(series.iloc[-1]) if not series.empty else 0.0
@@ -610,3 +717,20 @@ class AlphaFactorModel:
             "factor_meta": {},
             "reason": reason,
         }
+
+
+def get_cached_alpha_model(
+    asset_class: str = "default",
+    alpha_threshold: float = ALPHA_THRESHOLD,
+    ic_window: int = IC_WINDOW,
+) -> AlphaFactorModel:
+    """
+    Reuse model instances per asset class for lower request-time overhead.
+    """
+    key = f"{(asset_class or 'default').lower()}:{alpha_threshold:.4f}:{ic_window}"
+    with _model_cache_lock:
+        model = _model_cache.get(key)
+        if model is None:
+            model = AlphaFactorModel(alpha_threshold=alpha_threshold, ic_window=ic_window)
+            _model_cache[key] = model
+    return model

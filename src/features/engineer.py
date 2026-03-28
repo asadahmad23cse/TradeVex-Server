@@ -9,10 +9,16 @@ Usage:
     df = fe.compute_all_features(ohlcv_df, timeframe='intraday')
 """
 
+import time
+
 import numpy as np  # type: ignore[import]
 import pandas as pd  # type: ignore[import]
 
 from src.alpha.orderbook import OrderFlowAnalyser  # type: ignore[import]
+
+_FEATURE_CACHE: dict[str, dict[str, object]] = {}
+_INTRADAY_TTL_SEC = 60
+_DAILY_TTL_SEC = 300
 
 
 class FeatureEngineer:
@@ -26,6 +32,7 @@ class FeatureEngineer:
         df: pd.DataFrame,
         timeframe: str = "daily",  # 'intraday' | 'daily'
         benchmark: pd.Series | None = None,
+        ticker: str | None = None,
     ) -> pd.DataFrame:
         """
         Run all feature groups in order.
@@ -40,6 +47,33 @@ class FeatureEngineer:
         benchmark : pd.Series, optional
             Benchmark daily returns aligned to df.index for Beta calculation.
         """
+        if df is None or df.empty:
+            return pd.DataFrame() if df is None else df.copy()
+
+        last_ts = str(df.index[-1])
+        close_head = float(df["Close"].iloc[0]) if "Close" in df.columns else 0.0
+        close_tail = float(df["Close"].iloc[-1]) if "Close" in df.columns else 0.0
+        cache_key = (
+            f"{(ticker or 'UNKNOWN').upper()}_{timeframe}_{last_ts}_"
+            f"{len(df)}_{close_head:.6f}_{close_tail:.6f}"
+        )
+        ttl = _INTRADAY_TTL_SEC if timeframe == "intraday" else _DAILY_TTL_SEC
+        now = time.time()
+        cached = _FEATURE_CACHE.get(cache_key)
+        if cached and (now - float(cached.get("ts", 0.0)) < ttl):
+            out = cached.get("data")
+            if isinstance(out, pd.DataFrame):
+                return out.copy()
+
+        # Opportunistic eviction to keep memory bounded.
+        stale_cutoff = now - max(_DAILY_TTL_SEC, _INTRADAY_TTL_SEC) * 4
+        stale_keys = [
+            k for k, v in _FEATURE_CACHE.items()
+            if float(v.get("ts", 0.0)) < stale_cutoff
+        ]
+        for k in stale_keys:
+            _FEATURE_CACHE.pop(k, None)
+
         df = df.copy()
         df = self.add_technical_indicators(df)
         df = self.add_extended_trend(df)
@@ -70,7 +104,9 @@ class FeatureEngineer:
         ]
         subset = [col for col in required_cols if col in df.columns]
         df = df.replace([np.inf, -np.inf], np.nan)
-        return df.dropna(subset=subset)
+        out = df.dropna(subset=subset)
+        _FEATURE_CACHE[cache_key] = {"ts": now, "data": out.copy()}
+        return out
 
     # ------------------------------------------------------------------
     # Layer 1 — Core indicators (existing, preserved)
@@ -223,14 +259,11 @@ class FeatureEngineer:
     def _compute_vwap(df: pd.DataFrame) -> pd.Series:
         """VWAP resets at each calendar day."""
         tp = (df["High"] + df["Low"] + df["Close"]) / 3
-        vwap = pd.Series(index=df.index, dtype=float)
-        for _, grp_idx in df.groupby(df.index.normalize()).groups.items():
-            tp_grp = tp.loc[grp_idx]
-            vol_grp = df["Volume"].loc[grp_idx]
-            cum_tpv = (tp_grp * vol_grp).cumsum()
-            cum_vol = vol_grp.cumsum().replace(0, np.nan)
-            vwap.loc[grp_idx] = cum_tpv / cum_vol
-        return vwap
+        vol = df["Volume"].fillna(0.0)
+        day_group = df.index.normalize()
+        cum_tpv = (tp * vol).groupby(day_group).cumsum()
+        cum_vol = vol.groupby(day_group).cumsum().replace(0, np.nan)
+        return (cum_tpv / cum_vol).replace([np.inf, -np.inf], np.nan)
 
     # ------------------------------------------------------------------
     # Layer 4 — Extended volatility indicators
@@ -308,21 +341,10 @@ class FeatureEngineer:
         asset_ret = df["Returns"].fillna(0)
         bench = benchmark_returns.reindex(df.index).fillna(0)
 
-        a_arr = asset_ret.values
-        b_arr = bench.values
-
-        def _beta(start_idx: int, end_idx: int) -> float:
-            a = a_arr[start_idx:end_idx]
-            b = b_arr[start_idx:end_idx]
-            cov = np.cov(a, b)
-            var_b = float(np.var(b))
-            return float(cov[0, 1] / var_b) if var_b != 0 else 1.0
-
-        betas = pd.Series(index=df.index, dtype=float)
-        for i in range(window, len(df)):
-            betas.iloc[i] = _beta(i - window, i)
-
-        df["Rolling_Beta"] = betas
+        cov = asset_ret.rolling(window).cov(bench)
+        var_b = bench.rolling(window).var().replace(0, np.nan)
+        beta = (cov / var_b).replace([np.inf, -np.inf], np.nan)
+        df["Rolling_Beta"] = beta.fillna(1.0)
         return df
 
     # ------------------------------------------------------------------
@@ -474,4 +496,3 @@ class FeatureEngineer:
                 if col not in df.columns:
                     df[col] = 0.0
         return df
-
