@@ -311,7 +311,209 @@ def btc_news(limit: int = 8):
 @app.get("/api/news")
 def get_news(symbol: str = "BTC", asset_class: str = "crypto", limit: int = 8):
     from src.data.news_feed import get_news_for_asset
-    return {"news": get_news_for_asset(symbol, asset_class, limit)}
+    cls = (asset_class or "crypto").lower().strip()
+    if cls in {"indian_stock", "us_stock", "stocks"}:
+        cls = "stock"
+    return {"news": get_news_for_asset(symbol, cls, limit)}
+
+
+@app.post("/api/backtest")
+async def run_backtest_endpoint(payload: dict):
+    """
+    Run a quick vectorised backtest for a ticker + strategy.
+    Returns: metrics dict + equity curve + trade log.
+    """
+    ticker = payload.get("ticker", "RELIANCE.NS")
+    strategy = str(payload.get("strategy", "quant_alpha")).lower()
+    from_date = payload.get("from_date")  # "YYYY-MM-DD"
+    to_date = payload.get("to_date")      # "YYYY-MM-DD"
+    capital = float(payload.get("capital", 100000))
+
+    try:
+        import yfinance as yf  # type: ignore[import]
+        import numpy as np  # type: ignore[import]
+        import pandas as pd  # type: ignore[import]
+        from src.features.engineer import FeatureEngineer  # type: ignore[import]
+        from src.alpha.factor_model import AlphaFactorModel  # type: ignore[import]
+    except Exception as e:
+        return {"error": f"Backtest dependency missing: {e}"}
+
+    # Fetch data
+    try:
+        df = yf.download(ticker, start=from_date, end=to_date, progress=False)
+    except Exception as e:
+        return {"error": f"Data fetch failed: {e}"}
+    if df.empty or len(df) < 30:
+        return {"error": "Insufficient data for backtest"}
+
+    if hasattr(df.columns, "levels"):
+        df.columns = df.columns.get_level_values(0)
+
+    # Compute features
+    eng = FeatureEngineer()
+    feat_df = eng.compute_all_features(df, timeframe="daily")
+    if feat_df.empty:
+        return {"error": "Feature computation failed"}
+
+    close = feat_df["Close"].astype(float)
+    sma20 = close.rolling(20).mean()
+    sma50 = close.rolling(50).mean()
+    rsi14 = feat_df.get("RSI_14", pd.Series([50.0] * len(feat_df), index=feat_df.index)).astype(float)
+    roc5 = feat_df.get("ROC_5d", close.pct_change(5) * 100).astype(float)
+
+    signals = ["HOLD"] * len(feat_df)
+
+    if strategy == "quant_alpha":
+        model = AlphaFactorModel(alpha_threshold=0.25)
+        for i in range(50, len(feat_df)):
+            window = feat_df.iloc[: i + 1]
+            try:
+                result = model.score(window)
+                signals[i] = str(result.get("signal", "HOLD")).upper()
+            except Exception:
+                signals[i] = "HOLD"
+    elif strategy == "momentum_only":
+        for i in range(50, len(feat_df)):
+            if pd.notna(roc5.iloc[i]) and pd.notna(sma20.iloc[i]):
+                if roc5.iloc[i] > 0.5 and close.iloc[i] > sma20.iloc[i]:
+                    signals[i] = "BUY"
+                elif roc5.iloc[i] < -0.5 and close.iloc[i] < sma20.iloc[i]:
+                    signals[i] = "SELL"
+    elif strategy == "mean_reversion_only":
+        for i in range(50, len(feat_df)):
+            if pd.notna(rsi14.iloc[i]):
+                if rsi14.iloc[i] < 35:
+                    signals[i] = "BUY"
+                elif rsi14.iloc[i] > 65:
+                    signals[i] = "SELL"
+    elif strategy == "ma_crossover":
+        prev_spread = None
+        for i in range(50, len(feat_df)):
+            if pd.notna(sma20.iloc[i]) and pd.notna(sma50.iloc[i]):
+                spread = float(sma20.iloc[i] - sma50.iloc[i])
+                if prev_spread is not None:
+                    if spread > 0 and prev_spread <= 0:
+                        signals[i] = "BUY"
+                    elif spread < 0 and prev_spread >= 0:
+                        signals[i] = "SELL"
+                prev_spread = spread
+    else:
+        return {"error": f"Unknown strategy: {strategy}"}
+
+    feat_df["signal"] = signals
+
+    # Simulate trades
+    position = 0.0
+    cash = capital
+    equity = [capital]
+    trades: list[dict[str, Any]] = []
+    entry_price = 0.0
+    entry_date: str | None = None
+    entry_idx: int | None = None
+
+    for i in range(1, len(feat_df)):
+        price = float(feat_df["Close"].iloc[i])
+        sig = str(feat_df["signal"].iloc[i]).upper()
+        date = str(feat_df.index[i].date())
+
+        if sig == "BUY" and position == 0:
+            position = cash / price if price > 0 else 0
+            entry_price = price
+            entry_date = date
+            entry_idx = i
+            cash = 0
+        elif sig == "SELL" and position > 0:
+            exit_value = position * price
+            pnl_pct = round((price - entry_price) / max(entry_price, 1e-12) * 100, 2)
+            hold_days = max(1, (i - (entry_idx or i)))
+            trades.append(
+                {
+                    "entry_date": entry_date,
+                    "exit_date": date,
+                    "signal": "LONG",
+                    "entry": round(entry_price, 2),
+                    "exit": round(price, 2),
+                    "pnl_pct": pnl_pct,
+                    "result": "WIN" if pnl_pct > 0 else "LOSS",
+                    "hold_days": hold_days,
+                }
+            )
+            cash = exit_value
+            position = 0
+            entry_idx = None
+
+        current_value = cash + (position * price if position > 0 else 0)
+        equity.append(round(current_value, 2))
+
+    # Close open position at end for complete accounting
+    if position > 0:
+        price = float(feat_df["Close"].iloc[-1])
+        date = str(feat_df.index[-1].date())
+        pnl_pct = round((price - entry_price) / max(entry_price, 1e-12) * 100, 2)
+        hold_days = max(1, (len(feat_df) - 1 - (entry_idx or len(feat_df) - 1)))
+        trades.append(
+            {
+                "entry_date": entry_date,
+                "exit_date": date,
+                "signal": "LONG",
+                "entry": round(entry_price, 2),
+                "exit": round(price, 2),
+                "pnl_pct": pnl_pct,
+                "result": "WIN" if pnl_pct > 0 else "LOSS",
+                "hold_days": hold_days,
+            }
+        )
+        cash = position * price
+        position = 0
+        equity[-1] = round(cash, 2)
+
+    # Metrics
+    final_value = equity[-1]
+    total_return = round((final_value - capital) / max(capital, 1e-12) * 100, 2)
+    returns = np.diff(equity) / np.maximum(np.array(equity[:-1]), 1e-12)
+    returns = returns[np.isfinite(returns)]
+    returns = returns[returns != 0]
+    sharpe = (
+        round(float(np.mean(returns) / max(np.std(returns), 1e-10)) * np.sqrt(252), 2)
+        if len(returns) > 1
+        else 0.0
+    )
+    wins = [t for t in trades if t["result"] == "WIN"]
+    losses = [t for t in trades if t["result"] == "LOSS"]
+
+    peak = capital
+    max_dd = 0.0
+    for v in equity:
+        if v > peak:
+            peak = v
+        dd = (v - peak) / max(peak, 1e-12) * 100
+        if dd < max_dd:
+            max_dd = dd
+
+    avg_hold = round(float(np.mean([t.get("hold_days", 0) for t in trades])) if trades else 0.0, 1)
+
+    # Equity curve for chart (sampled to 200 points max)
+    step = max(1, len(equity) // 200)
+    dates = [str(feat_df.index[min(i, len(feat_df) - 1)].date()) for i in range(0, len(equity), step)]
+    eq_sampled = equity[::step]
+
+    return {
+        "metrics": {
+            "total_return_pct": total_return,
+            "final_value": round(final_value, 2),
+            "sharpe_ratio": sharpe,
+            "max_drawdown_pct": round(max_dd, 2),
+            "total_trades": len(trades),
+            "wins": len(wins),
+            "losses": len(losses),
+            "win_rate_pct": round(len(wins) / max(len(trades), 1) * 100, 1),
+            "best_trade_pct": max((t["pnl_pct"] for t in trades), default=0),
+            "worst_trade_pct": min((t["pnl_pct"] for t in trades), default=0),
+            "avg_hold_days": avg_hold,
+        },
+        "equity_curve": [{"time": d, "value": v} for d, v in zip(dates, eq_sampled)],
+        "trades": trades[-50:],
+    }
 
 
 @app.get("/api/stock-signal")
@@ -780,6 +982,11 @@ def _read_html(name: str) -> str:
 @app.get("/", response_class=HTMLResponse)
 def index():
     return _read_html("index.html")
+
+
+@app.get("/terminal", response_class=HTMLResponse)
+def terminal_page():
+    return _read_html("terminal.html")
 
 
 @app.get("/portfolio", response_class=HTMLResponse)

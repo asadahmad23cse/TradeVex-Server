@@ -131,6 +131,23 @@ body{
   font-size:11px;
   line-height:1;
 }
+.wait-tag.cooldown{
+  border-color: rgba(249,115,22,.5);
+  background: rgba(124,45,18,.55);
+  color: #ffb074;
+}
+.active-trade-banner{
+  display:none;
+  margin-top:-2px;
+  margin-bottom:8px;
+  padding:8px 10px;
+  border-radius:8px;
+  border:1px solid rgba(52,211,153,.45);
+  background:rgba(6,32,23,.75);
+  color:#34d399;
+  font-size:12px;
+  font-weight:700;
+}
 .wait-meta{
   display:flex;
   justify-content:space-between;
@@ -296,6 +313,7 @@ body{
             <div id="action-text" style="font-size:22px; font-weight:700; letter-spacing:1px;">WAITING</div>
             <div id="action-detail" style="font-size:12px; margin-top:4px; opacity:0.8;"></div>
           </div>
+          <div id="active-trade-banner" class="active-trade-banner">● Active Position Open</div>
           <div id="wait-insights" class="wait-insights">
             <div class="wait-title">NO-TRADE FILTERS ACTIVE</div>
             <div id="wait-tags" class="wait-tags">
@@ -433,13 +451,20 @@ const SIGNAL_REFRESH_MS = 15000;
 const REST_REFRESH_MS = 15000;
 const RECONNECT_MS = 3000;
 const LIMIT_MAP = {
-  "5m": 500,
-  "15m": 400,
-  "1h": 300,
-  "4h": 200,
+  "5m": 288,
+  "15m": 200,
+  "1h": 168,
+  "4h": 120,
   "1d": 365,
 };
 const INTERVAL_SECONDS = {"5m":300,"15m":900,"1h":3600,"4h":14400,"1d":86400};
+const MARKER_FETCH_MAP = {
+  "5m": { interval: "15m", limit: 500 },
+  "15m": { interval: "15m", limit: 500 },
+  "1h": { interval: "1h", limit: 500 },
+  "4h": { interval: "1h", limit: 500 },
+  "1d": { interval: "1d", limit: 365 },
+};
 
 let chart, candleSeries, volumeSeries, ema21Series, ema50Series;
 let points = [];
@@ -450,7 +475,10 @@ let ws = null;
 let reconnectTimer = null;
 let lastPrice = null;
 let lastSignalPayload = null;
-let currentInterval = "15m";
+let activeTF = "15m";
+let markerSourceInterval = "15m";
+let hasOpenTrade = false;
+let openTradeSignal = "LONG";
 let sessionDayKey = null;
 let sessionHigh = null;
 let sessionLow = null;
@@ -557,7 +585,7 @@ function utcDayKey(ms){return new Date(ms).toISOString().slice(0,10);}
 
 function setTfActive(){
   document.querySelectorAll('.tf-btn').forEach(btn=>{
-    btn.classList.toggle('active', btn.dataset.tf===currentInterval);
+    btn.classList.toggle('active', btn.dataset.tf===activeTF);
   });
 }
 
@@ -599,8 +627,7 @@ function initChart(){
       return;
     }
     const conf = m.confidence!==undefined ? `${Math.round(Number(m.confidence))}%` : "--";
-    const entry = fmtPx(m.entry);
-    tip.textContent = `${m.signal||"--"} | Conf: ${conf} | Entry: ${entry}`;
+    tip.textContent = `${m.signal||"--"} | Conf: ${conf}`;
     tip.style.display='block';
     tip.style.left = `${Math.max(8, Math.min(param.point.x + 12, c.clientWidth - 220))}px`;
     tip.style.top = `${Math.max(8, param.point.y - 28)}px`;
@@ -665,7 +692,7 @@ function updateCards(price, nowMs){
 }
 
 function bucketTsSec(ms){
-  const step = INTERVAL_SECONDS[currentInterval] || 900;
+  const step = INTERVAL_SECONDS[activeTF] || 900;
   return Math.floor((ms/1000)/step) * step;
 }
 
@@ -781,7 +808,7 @@ function rebuildMarkerMap(){
 }
 
 function reduceOverlap(markers){
-  const gap = (INTERVAL_SECONDS[currentInterval]||900) * 2;
+  const gap = (INTERVAL_SECONDS[markerSourceInterval]||900) * 2;
   const out=[];
   let lastT=null;
   for(const m of markers){
@@ -824,8 +851,8 @@ function updateLiveSignalMarker(signalPayload){
 }
 
 async function loadCandles(){
-  const limit = LIMIT_MAP[currentInterval] || 200;
-  const res = await fetch(`/api/btc/candles?interval=${encodeURIComponent(currentInterval)}&limit=${limit}`, {cache:"no-store"});
+  const limit = LIMIT_MAP[activeTF] || 200;
+  const res = await fetch(`/api/btc/candles?interval=${encodeURIComponent(activeTF)}&limit=${limit}`, {cache:"no-store"});
   if(!res.ok) throw new Error(`candles HTTP ${res.status}`);
   const json = await res.json();
   const data=(json.data||[]).map(d=>({
@@ -842,12 +869,14 @@ async function loadCandles(){
   const last=points[points.length-1];
   updateCards(last.close,last.time*1000);
   bootstrapSessionFromSeries(last.close);
-  document.getElementById("status").textContent=`${currentInterval} | last ${data.length} candles`;
+  document.getElementById("status").textContent=`${activeTF} | last ${data.length} candles`;
 }
 
 async function loadSignalMarkers(){
   try{
-    const res=await fetch(`/api/btc/markers?interval=${encodeURIComponent(currentInterval)}&limit=800`,{cache:"no-store"});
+    const markerCfg = MARKER_FETCH_MAP[activeTF] || { interval: activeTF, limit: 500 };
+    markerSourceInterval = markerCfg.interval;
+    const res=await fetch(`/api/btc/markers?interval=${encodeURIComponent(markerCfg.interval)}&limit=${markerCfg.limit}`,{cache:"no-store"});
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
     const data=await res.json();
     const minT = points.length ? Number(points[0].time) : 0;
@@ -865,7 +894,6 @@ async function loadSignalMarkers(){
         text:"",
         signal:m.signal,
         confidence:m.confidence,
-        entry:m.entry,
       }
     ));
     rebuildMarkerMap();
@@ -924,6 +952,7 @@ function applySignalPayload(s, source){
   const waitTags = document.getElementById("wait-tags");
   const waitConf = document.getElementById("wait-confidence");
   const waitNext = document.getElementById("wait-next");
+  const activeTradeBanner = document.getElementById("active-trade-banner");
   box.classList.remove("pulse-long", "pulse-short", "pulse-hold");
   if(sig === "LONG" && Boolean(s.validated)){
     box.style.background = "rgba(0,200,83,0.15)";
@@ -956,13 +985,38 @@ function applySignalPayload(s, source){
     waitInsights.style.display = "block";
     waitConf.textContent = `AI confidence: ${Math.round(conf)}%`;
     waitNext.textContent = `next scan: ${Math.round(SIGNAL_REFRESH_MS/1000)}s`;
-    waitTags.innerHTML = (blockers.length ? blockers : ["Scanning live market conditions"]).map(tag =>
-      `<span class="wait-tag">${escapeHtml(tag)}</span>`
+    waitTags.innerHTML = (blockers.length ? blockers : ["Scanning live market conditions"]).map(tag => {
+      const isCooldown = /cooldown/i.test(tag);
+      const extraClass = isCooldown ? " cooldown" : "";
+      const tip = isCooldown ? ' title="A trade is already running"' : "";
+      return `<span class="wait-tag${extraClass}"${tip}>${escapeHtml(tag)}</span>`;
+    }
     ).join("");
   }
 
+  const hasCooldownReason = /cooldown/i.test(String(s.reason || ""));
+  if(hasOpenTrade && active==="HOLD"){
+    box.style.background = "#7c2d12";
+    box.style.border = "2px solid #f97316";
+    txt.style.color = "#f97316";
+    txt.textContent = "TRADE ACTIVE — MONITORING";
+    det.textContent = `✓ ${openTradeSignal === "SHORT" ? "Short" : "Long"} open — waiting for exit condition`;
+    det.style.color = "#fdba74";
+    waitInsights.style.display = "block";
+    if(!hasCooldownReason){
+      waitTags.innerHTML = `<span class="wait-tag cooldown" title="A trade is already running">A trade is already running</span>` + waitTags.innerHTML;
+    }
+    box.classList.remove("pulse-hold");
+  }
+  activeTradeBanner.style.display = hasOpenTrade ? "block" : "none";
+
   if(active==="HOLD"){
     setTradeRowsVisible(false);
+    const noTradeMsg = document.querySelector("#no-trade .no-trade");
+    if(noTradeMsg){
+      noTradeMsg.textContent = hasOpenTrade ? "● Position open - monitoring exit conditions" : "⏸ No trade - waiting for conditions";
+      noTradeMsg.style.color = hasOpenTrade ? "#34d399" : "var(--hold)";
+    }
     document.getElementById("entry-zone").textContent="—";
     document.getElementById("sl").textContent="—";
     document.getElementById("tp1").textContent="—";
@@ -1052,7 +1106,21 @@ function applySignalPayload(s, source){
 
 async function loadSignal(){
   try{
-    const res=await fetch(`/api/btc/signal?interval=${encodeURIComponent(currentInterval)}`,{cache:"no-store"});
+    hasOpenTrade = false;
+    openTradeSignal = "LONG";
+    const [res, histResp] = await Promise.all([
+      fetch(`/api/btc/signal?interval=${encodeURIComponent(activeTF)}`,{cache:"no-store"}),
+      fetch('/api/btc/signal/history?limit=20', {cache:"no-store"}),
+    ]);
+    if(histResp.ok){
+      const histJson = await histResp.json();
+      const signals = Array.isArray(histJson?.signals) ? histJson.signals : [];
+      const open = signals.find(x => String(x?.status || "").toUpperCase() === "OPEN");
+      hasOpenTrade = Boolean(open);
+      if(open){
+        openTradeSignal = normalizeSignal(open.signal || "LONG");
+      }
+    }
     if(!res.ok) throw new Error(`HTTP ${res.status}`);
     const s=await res.json();
     applySignalPayload(s, "btc_service");
@@ -1157,7 +1225,7 @@ async function fetchNews() {
 function processTick(price, eventTimeMs, source){
   upsertPointFromTick(price, eventTimeMs);
   updateCards(price, eventTimeMs);
-  document.getElementById("status").textContent=`${currentInterval} | ${source} | ${new Date(eventTimeMs).toISOString()}`;
+  document.getElementById("status").textContent=`${activeTF} | ${source} | ${new Date(eventTimeMs).toISOString()}`;
   if(lastSignalPayload) updateLiveSignalMarker(lastSignalPayload);
 }
 
@@ -1194,15 +1262,23 @@ function connectWebSocket(){
 }
 
 async function switchTimeframe(tf){
-  currentInterval=tf;
+  activeTF=tf;
   setTfActive();
-  clearSignalLines();
+  points = [];
+  candleSeries.setData([]);
+  volumeSeries.setData([]);
+  ema21Series.setData([]);
+  ema50Series.setData([]);
+  markersRaw = [];
+  markersMap.clear();
   liveSignalMarker = null;
-  rebuildMarkerMap();
+  applyMarkers();
+  clearSignalLines();
   try{
     await loadCandles();
     await loadSignalMarkers();
     await loadSignal();
+    chart.timeScale().fitContent();
   }catch(err){
     document.getElementById("status").textContent=`Load failed (${err.message})`;
   }
