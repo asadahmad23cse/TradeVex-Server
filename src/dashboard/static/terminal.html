@@ -55,6 +55,20 @@
 .spinner{display:inline-block;width:14px;height:14px;border:2px solid rgba(148,163,184,.3);border-top-color:#60a5fa;border-radius:50%;animation:spin .9s linear infinite}.success-icon{display:inline-block;width:14px;height:14px;border-radius:50%;background:#22c55e}.error-icon{display:inline-block;width:14px;height:14px;border-radius:50%;background:#ef4444}@keyframes spin{to{transform:rotate(360deg)}}.fo-grid{display:grid;grid-template-columns:360px 1fr;gap:10px}.fo-card{padding:10px;background:#0f1724;border:1px solid rgba(148,163,184,.16);border-radius:10px}.fo-head{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}.fo-gauge{height:12px;border-radius:999px;background:rgba(148,163,184,.2);overflow:hidden}.fo-gfill{height:100%;width:0;background:#60a5fa}.fo-count{font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700}.fo-chain{max-height:330px;overflow:auto;border:1px solid rgba(148,163,184,.16);border-radius:8px}.fo-chain table{font-family:"JetBrains Mono",monospace}.fo-atm{background:rgba(250,204,21,.12)!important}.fo-itm-ce{background:rgba(52,211,153,.08)}.fo-itm-pe{background:rgba(248,113,113,.08)}.fo-hi-oi{font-weight:800}
 .toast-notification{position:fixed;bottom:20px;right:20px;background:#1e293b;border:1px solid #334155;color:#f1f5f9;padding:12px 20px;border-radius:8px;z-index:9999;animation:slideIn .3s ease}
 @keyframes slideIn{from{transform:translateY(12px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes slideInRight{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes fadeOut{from{opacity:1}to{opacity:0}}
+.btn-execute-big:disabled{opacity:.65;cursor:not-allowed}
+.port-cards-grid{display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:12px 0}
+@media(max-width:1100px){.port-cards-grid{grid-template-columns:repeat(3,1fr)}}
+.port-card{background:#131f2e;border-radius:8px;padding:12px;border:1px solid #1e3048}
+.pc-label{font-size:10px;color:#475569;text-transform:uppercase;letter-spacing:.5px}
+.pc-value{font-size:16px;font-weight:700;color:#f1f5f9;margin-top:4px}
+.port-section{background:#0f1824;border-radius:8px;border:1px solid #1e3048;overflow:hidden}
+.port-section-title{padding:10px 14px;background:#131f2e;font-size:12px;font-weight:600;color:#94a3b8;border-bottom:1px solid #1e3048}
+.port-table{width:100%;border-collapse:collapse;font-size:12px}
+.port-table th{padding:8px 10px;background:#0a0f1a;color:#475569;font-size:10px;text-transform:uppercase;border-bottom:1px solid #1e3048;text-align:left}
+.port-table td{padding:8px 10px;border-bottom:1px solid #0a0f1a;color:#f1f5f9}
+.port-table tr:hover td{background:#131f2e}
 @media (max-width:1040px){.top{grid-template-columns:1fr}.strip{grid-template-columns:repeat(2,minmax(0,1fr))}.main{grid-template-columns:1fr}#chart{height:420px}} @media (max-width:760px){.strip{grid-template-columns:1fr}.g2{grid-template-columns:1fr}.metrics{grid-template-columns:1fr 1fr}}
 </style>
 </head>
@@ -154,7 +168,7 @@
   </div>
 
   <div class="bottom">
-    <div id="stocks-tabs" class="btabs"><button id="tab-order-flow" class="btab active" data-b="orderflow">Order Flow</button><button class="btab" data-b="backtest">Backtest</button><button class="btab" data-b="portfolio">Portfolio</button><button class="btab" data-b="news">News</button><button class="btab" data-b="fo">F&O</button><button id="tab-paper" class="btab" data-b="paper">Paper</button></div>
+    <div id="stocks-tabs" class="btabs"><button id="tab-order-flow" class="btab active" data-b="orderflow">Order Flow</button><button class="btab" data-b="backtest">Backtest</button><button class="btab" data-b="portfolio">Portfolio</button><button id="tab-news" class="btab" data-b="news">News</button><button class="btab" data-b="fo">F&O</button><button id="tab-paper" class="btab" data-b="paper">Paper</button></div>
     <div id="crypto-tabs" class="btabs" style="display:none">
       <button class="ctab btab active" data-cb="orderflow" onclick="switchCryptoTab('order-flow', event)">Order Flow</button>
       <button class="ctab btab" data-cb="funding" onclick="switchCryptoTab('funding-rate', event)">Funding Rate</button>
@@ -191,25 +205,50 @@
       </div>
     </div>
     <div id="b-portfolio" class="bpanel">
-      <div class="g2">
-        <div><div id="pf-m" class="metrics"></div><div class="tbl" style="margin-top:10px;max-height:190px"><table><thead><tr><th>Asset</th><th class="r">Entry</th><th class="r">Current</th><th class="r">P&L%</th><th>Signal</th><th class="r">SL</th><th class="r">TP</th></tr></thead><tbody id="pf-open"><tr><td colspan="7" class="empty">Loading...</td></tr></tbody></table></div></div>
-        <div><div id="pf-chart" style="height:220px;border:1px solid rgba(148,163,184,.16);border-radius:8px"></div><div class="tbl" style="margin-top:10px;max-height:190px"><table><thead><tr><th>Date</th><th>Asset</th><th>Signal</th><th class="r">Conf</th><th class="r">Alpha</th></tr></thead><tbody id="pf-closed"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody></table></div></div>
+      <div class="port-cards-grid">
+        <div class="port-card"><div class="pc-label">Total Capital</div><div class="pc-value" id="port-capital">₹ 1,00,000</div></div>
+        <div class="port-card"><div class="pc-label">Current Value</div><div class="pc-value" id="port-value">₹ 1,00,000</div></div>
+        <div class="port-card"><div class="pc-label">Total P&L</div><div class="pc-value" id="port-pnl">+₹0 (0.00%)</div></div>
+        <div class="port-card"><div class="pc-label">Win Rate</div><div class="pc-value" id="port-winrate">0.0%</div></div>
+        <div class="port-card"><div class="pc-label">Sharpe Ratio</div><div class="pc-value" id="port-sharpe">0.00</div></div>
+        <div class="port-card"><div class="pc-label">Max Drawdown</div><div class="pc-value" id="port-maxdd">0.00%</div></div>
       </div>
-      <div class="g2" style="margin-top:10px">
-        <div>
-          <div class="k" style="margin-bottom:6px">True P&L (after charges)</div>
-          <div class="tbl" style="max-height:200px"><table><thead><tr><th>Asset</th><th class="r">Gross</th><th class="r">STT</th><th class="r">GST</th><th class="r">Net</th></tr></thead><tbody id="pf-true-cost"><tr><td colspan="5" class="empty">Loading...</td></tr></tbody></table></div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:12px 0">
+        <div class="port-section">
+          <div class="port-section-title">📈 Equity Curve</div>
+          <div id="port-equity-chart" style="height:180px"></div>
         </div>
-        <div>
-          <div class="k" style="margin-bottom:6px">Tax Summary</div>
-          <div id="pf-tax" class="metrics"></div>
-          <button id="pf-export-itr" class="btn" style="margin-top:8px">Export ITR-3 CSV</button>
+        <div class="port-section">
+          <div class="port-section-title">📊 Open Positions</div>
+          <table class="port-table">
+            <thead><tr><th>Asset</th><th>Dir</th><th>Entry</th><th>Current</th><th>P&L</th><th>SL</th><th>TP</th></tr></thead>
+            <tbody id="port-positions"><tr><td colspan="7" style="text-align:center;color:#475569;padding:16px">No open positions — execute a paper trade to get started</td></tr></tbody>
+          </table>
         </div>
+      </div>
+
+      <div class="port-section" style="margin:0 0 12px">
+        <div class="port-section-title">📋 Trade History</div>
+        <div style="overflow-x:auto">
+          <table class="port-table">
+            <thead><tr><th>#</th><th>Time</th><th>Asset</th><th>Dir</th><th>Entry</th><th>Exit</th><th>P&L%</th><th>Result</th></tr></thead>
+            <tbody id="port-trades"><tr><td colspan="8" style="text-align:center;color:#475569;padding:16px">No trades yet</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="port-section">
+        <div class="port-section-title">🤖 Live Signals (Last 10)</div>
+        <table class="port-table">
+          <thead><tr><th>Time</th><th>Asset</th><th>Signal</th><th>Conf</th><th>Alpha</th><th>Regime</th></tr></thead>
+          <tbody id="port-signals"><tr><td colspan="6" style="text-align:center;color:#475569;padding:16px">No signals — run live mode</td></tr></tbody>
+        </table>
       </div>
     </div>
     <div id="b-news" class="bpanel">
       <div class="g2"><div class="metric"><div class="k">Sentiment Summary</div><div id="sent"></div></div><div class="k">Auto refresh every 5 minutes</div></div>
-      <div id="news-list" style="margin-top:8px;max-height:300px;overflow:auto"><div class="empty">Loading news...</div></div>
+      <div id="news-container" style="margin-top:8px;max-height:300px;overflow:auto"><div class="empty">Loading news...</div></div>
     </div>
     <div id="b-fo" class="bpanel">
       <div class="fo-head">
@@ -299,11 +338,12 @@
       </div>
 
       <div style="margin-top:10px">
-        <div class="srow"><span class="k">Open Positions</span><button id="paper-exec-active" class="btn">Execute Signal for active stock</button></div>
+        <div class="srow"><span class="k">Active: <span id="paper-active-ticker">--</span></span><span id="paper-active-signal" class="badge hold">HOLD</span></div>
+        <div class="srow" style="margin-top:8px"><span class="k">Open Positions <span id="open-pos-count" class="k">(0)</span></span><button id="paper-exec-active" class="btn btn-execute-big">⚡ Execute Paper Trade</button></div>
         <div class="tbl" style="margin-top:8px;max-height:220px">
           <table>
-            <thead><tr><th>Ticker</th><th>Dir</th><th class="r">Entry</th><th class="r">Current</th><th class="r">Unreal P&L</th><th class="r">SL</th><th class="r">TP</th><th>Close</th></tr></thead>
-            <tbody id="paper-open-body"><tr><td colspan="8" class="empty">No open positions</td></tr></tbody>
+            <thead><tr><th>Ticker</th><th>Dir</th><th class="r">Entry</th><th class="r">Current</th><th class="r">Unreal P&L</th><th class="r">SL</th><th class="r">TP</th><th>Held</th><th>Close</th></tr></thead>
+            <tbody id="open-positions-tbody"><tr><td colspan="9" class="empty">No open positions</td></tr></tbody>
           </table>
         </div>
       </div>
@@ -383,6 +423,18 @@ let terminalMode="stocks";
 let activeTicker="RELIANCE.NS";
 let activeAssetClass="indian_stock";
 let activeTF="15m";
+const APP_STATE={
+  mode:"stocks",
+  ticker:"RELIANCE.NS",
+  assetClass:"indian_stock",
+  name:"Reliance",
+  currency:"₹",
+  tf:"15m",
+  exchange:"NSE",
+  isCrypto:false,
+  isUS:false,
+  isIndia:true
+};
 let cryptoPriceInterval=null;
 let fearGreedInterval=null;
 let currentCryptoSymbol="BTCUSDT";
@@ -453,13 +505,155 @@ const parse=rows=>Array.isArray(rows)?rows.map(x=>({time:Number.isFinite(Number(
 const sma=(d,p)=>{let s=0,o=[];for(let i=0;i<d.length;i++){s+=d[i].close;if(i>=p)s-=d[i-p].close;if(i>=p-1)o.push({time:d[i].time,value:Number((s/p).toFixed(2))})}return o};
 const f2p=v=>Math.max(0,Math.min(100,(Number(v||0)+2)*25));
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+function currencyForTicker(ticker,assetClass){
+  const t=String(ticker||"");
+  const c=String(assetClass||"").toLowerCase();
+  if(!t)return "₹";
+  if(c==="crypto"||t.endsWith("USDT"))return "$";
+  if(c==="us_stock")return "$";
+  if(c==="index"||t.startsWith("^NSE")||t.startsWith("^BSE"))return "₹";
+  if(t.endsWith(".NS")||t.endsWith(".BO"))return "₹";
+  return "$";
+}
+function getCurrencyForTicker(ticker){
+  const t=String(ticker||"").toUpperCase();
+  if(!t)return "₹";
+  if(t.includes("USDT")||t.includes("BTC")||t.includes("ETH")||t.includes("BNB")||t.includes("SOL")||t.includes("XRP"))return "$";
+  if(t.endsWith(".NS")||t.endsWith(".BO"))return "₹";
+  if(t.startsWith("^NSE")||t.startsWith("^BSE"))return "₹";
+  if(t==="NIFTY"||t==="SENSEX"||t==="BANKNIFTY")return "₹";
+  const US_STOCK_SET=new Set(["AAPL","MSFT","GOOGL","NVDA","TSLA","AMZN","META","JPM","GS","AMD","NFLX","SPY","QQQ","IWM","TLT","XOM","BA","DIS","UBER","COIN"]);
+  if(US_STOCK_SET.has(t))return "$";
+  if(t.startsWith("^"))return "₹";
+  if(t.includes("="))return "$";
+  if(t.includes("."))return "₹";
+  return "$";
+}
+function formatByTicker(ticker,value){
+  const cur=getCurrencyForTicker(ticker);
+  const locale=cur==="$"?"en-US":"en-IN";
+  return `${cur}${Number(value||0).toLocaleString(locale,{maximumFractionDigits:2})}`;
+}
+function formatPnlByTicker(ticker,value){
+  const cur=getCurrencyForTicker(ticker);
+  const n=Number(value||0);
+  return `${n>=0?"+":""}${cur}${Math.abs(n).toFixed(0)}`;
+}
+function detectAssetClass(ticker){
+  const t=String(ticker||"").toUpperCase();
+  if(t.endsWith("USDT"))return "crypto";
+  if(t.endsWith(".NS")||t.endsWith(".BO")||t.startsWith("^"))return "indian_stock";
+  return "us_stock";
+}
+function money(v,currency){
+  const n=Number(v);
+  if(!Number.isFinite(n))return `${currency||APP_STATE.currency} --`;
+  const c=currency||APP_STATE.currency||"₹";
+  const locale=c==="$"?"en-US":"en-IN";
+  return `${c} ${n.toLocaleString(locale,{maximumFractionDigits:2})}`;
+}
+function inferAssetClass(ticker,assetClass){
+  const t=String(ticker||"").toUpperCase();
+  if(assetClass)return assetClass;
+  if(t.endsWith("USDT")||t==="BTC"||t==="ETH")return "crypto";
+  if(t.endsWith(".NS")||t.endsWith(".BO")||t.startsWith("^"))return "indian_stock";
+  return "us_stock";
+}
+function syncLegacyFromState(){
+  terminalMode=APP_STATE.mode;
+  activeTicker=APP_STATE.ticker;
+  activeAssetClass=APP_STATE.assetClass;
+  activeTF=APP_STATE.tf;
+  S.ticker=APP_STATE.ticker;
+  S.name=APP_STATE.name;
+  S.tf=APP_STATE.tf;
+  if(APP_STATE.isCrypto)currentCryptoSymbol=APP_STATE.ticker;
+}
+function applyModeVisibility(mode){
+  const isCrypto=mode==="crypto";
+  const bs=$("mode-stocks"),bc=$("mode-crypto"),sp=$("stocks-panel"),cp=$("crypto-panel"),st=$("stocks-tabs"),ct=$("crypto-tabs");
+  if(sp)sp.style.display=isCrypto?"none":"";
+  if(cp)cp.style.display=isCrypto?"":"none";
+  if(st)st.style.display=isCrypto?"none":"";
+  if(ct)ct.style.display=isCrypto?"":"none";
+  if(bs)bs.classList.toggle("active",!isCrypto);
+  if(bc)bc.classList.toggle("active",isCrypto);
+}
+function updateChartHeader(){
+  const n=$("t-name");
+  if(n)n.textContent=`${APP_STATE.name||APP_STATE.ticker} (${APP_STATE.ticker})`;
+}
+function updateCurrencySymbols(){
+  const ltp=$("t-ltp");
+  if(ltp&&/^[₹$]/.test(ltp.textContent||"")){
+    const num=Number(String(ltp.textContent||"").replace(/[^\d.-]/g,""));
+    if(Number.isFinite(num))ltp.textContent=money(num);
+  }
+}
+async function loadStockChart(ticker,tf){
+  APP_STATE.tf=tf||APP_STATE.tf||"15m";
+  syncLegacyFromState();
+  return loadChart(ticker,APP_STATE.tf);
+}
+async function loadStockSignal(ticker){
+  return loadSignal(ticker,APP_STATE.tf);
+}
+async function loadAssetData(){
+  syncLegacyFromState();
+  showChartSkeleton();
+  showSignalSkeleton();
+  if(APP_STATE.isCrypto){
+    await Promise.all([
+      loadCryptoChart(APP_STATE.ticker),
+      loadCryptoSignal(APP_STATE.ticker)
+    ]);
+  }else{
+    await Promise.all([
+      loadStockChart(APP_STATE.ticker,APP_STATE.tf),
+      loadStockSignal(APP_STATE.ticker)
+    ]);
+  }
+  if(APP_STATE.isCrypto){
+    renderCryptoOrderFlow();
+  }else{
+    loadOrderFlow(APP_STATE.ticker);
+  }
+  loadNews(APP_STATE.ticker,APP_STATE.assetClass);
+  if(APP_STATE.mode==="stocks")loadMarketOverview();
+  updatePaperActiveStock();
+}
+function setActiveAsset(ticker,assetClass,name){
+  const t=String(ticker||"").trim();
+  if(!t)return;
+  const cls=inferAssetClass(t,assetClass);
+  APP_STATE.ticker=t;
+  APP_STATE.assetClass=cls;
+  APP_STATE.name=name||t;
+  APP_STATE.isCrypto=cls==="crypto"||t.toUpperCase().endsWith("USDT");
+  APP_STATE.isUS=cls==="us_stock";
+  APP_STATE.isIndia=cls==="indian_stock"||cls==="index"||t.toUpperCase().endsWith(".NS")||t.toUpperCase().endsWith(".BO")||t.startsWith("^");
+  APP_STATE.currency=currencyForTicker(t,cls);
+  APP_STATE.mode=APP_STATE.isCrypto?"crypto":"stocks";
+  APP_STATE.exchange=APP_STATE.isCrypto?"CRYPTO":APP_STATE.isUS?"NYSE":"NSE";
+  APP_STATE.tf=activeTF||APP_STATE.tf||"15m";
+  localStorage.setItem("lastTicker",APP_STATE.ticker);
+  localStorage.setItem("lastAssetClass",APP_STATE.assetClass);
+  localStorage.setItem("terminalMode",APP_STATE.mode);
+  if(!APP_STATE.isCrypto)localStorage.setItem("lastStockTicker",APP_STATE.ticker);
+  syncLegacyFromState();
+  applyModeVisibility(APP_STATE.mode);
+  updateChartHeader();
+  updateCurrencySymbols();
+  updatePaperActiveStock();
+  loadAssetData().catch(e=>console.warn("loadAssetData error:",e));
+}
 function isUSAsset(ticker){
   const t=String(ticker||"");
   return !t.endsWith(".NS")&&!t.endsWith(".BO")&&!t.startsWith("^")&&!t.includes("USDT");
 }
 function resolveChartParams(ticker,tf){
-  const t=String(ticker||S.ticker);
-  const frame=String(tf||S.tf||"15m");
+  const t=String(ticker||APP_STATE.ticker);
+  const frame=String(tf||APP_STATE.tf||"15m");
   if(isUSAsset(t)){
     const avMap={"5m":"5m","15m":"15m","1h":"1h","1D":"1d","1W":"1d"};
     return { interval: avMap[frame]||"15m", period: frame==="1W"?"3mo":frame==="1D"?"1y":"1mo" };
@@ -480,9 +674,9 @@ function setCachedPrice(ticker,data){_priceCache.set(String(ticker),{data,ts:Dat
 
 function setupTop(){
   const nifty=$("card-nifty"),sensex=$("card-sensex"),bank=$("card-bank");
-  if(nifty)nifty.onclick=()=>{if(terminalMode==="stocks")openAssetDashboard("^NSEI","NIFTY 50")};
-  if(sensex)sensex.onclick=()=>{if(terminalMode==="stocks")openAssetDashboard("^BSESN","SENSEX")};
-  if(bank)bank.onclick=()=>{if(terminalMode==="stocks")openAssetDashboard("^NSEBANK","BANK NIFTY")};
+  if(nifty)nifty.onclick=()=>{if(APP_STATE.mode==="stocks")setActiveAsset("^NSEI","indian_stock","NIFTY 50")};
+  if(sensex)sensex.onclick=()=>{if(APP_STATE.mode==="stocks")setActiveAsset("^BSESN","indian_stock","SENSEX")};
+  if(bank)bank.onclick=()=>{if(APP_STATE.mode==="stocks")setActiveAsset("^NSEBANK","indian_stock","BANK NIFTY")};
 }
 function setupLeftTabs(){document.querySelectorAll(".tbtn").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tbtn").forEach(x=>x.classList.remove("active"));b.classList.add("active");document.querySelectorAll(".ltab").forEach(x=>x.classList.remove("active"));$(`l-${b.dataset.l}`).classList.add("active")})}
 function setupBottom(){
@@ -492,11 +686,11 @@ function setupBottom(){
     document.querySelectorAll(".bpanel[id^='b-']").forEach(x=>x.classList.remove("active"));
     const panel=$(`b-${b.dataset.b}`);
     if(panel)panel.classList.add("active");
-    if(b.dataset.b==="portfolio")refreshPortfolio();
-    if(b.dataset.b==="news")refreshNews();
+    if(b.dataset.b==="portfolio")loadPortfolio();
+    if(b.dataset.b==="news")loadNews(APP_STATE.ticker,APP_STATE.assetClass);
     if(b.dataset.b==="fo")refreshFO();
-    if(b.dataset.b==="orderflow")loadOrderFlow(S.ticker);
-    if(b.dataset.b==="paper")loadPaperPortfolio();
+    if(b.dataset.b==="orderflow")loadOrderFlow(APP_STATE.ticker);
+    if(b.dataset.b==="paper"){updatePaperActiveStock();loadPaperPortfolio();}
   });
   document.querySelectorAll("#crypto-tabs .ctab").forEach(b=>{
     b.onclick=e=>{
@@ -504,6 +698,16 @@ function setupBottom(){
       switchCryptoTab(key,e);
     };
   });
+}
+function switchTab(tabName){
+  const tabMap={orderflow:"orderflow","order-flow":"orderflow",backtest:"backtest",portfolio:"portfolio",news:"news",fo:"fo",paper:"paper"};
+  const key=tabMap[String(tabName||"").toLowerCase()]||"orderflow";
+  const btn=document.querySelector(`#stocks-tabs .btab[data-b="${key}"]`);
+  if(btn&&typeof btn.click==="function"){btn.click();return}
+  if(key==="news")loadNews(APP_STATE.ticker,APP_STATE.assetClass);
+  if(key==="paper"){updatePaperActiveStock();loadPaperPortfolio()}
+  if(key==="portfolio")loadPortfolio();
+  if(key==="orderflow")loadOrderFlow(APP_STATE.ticker);
 }
 function switchCryptoTab(tab,event){
   document.querySelectorAll(".crypto-tab-panel").forEach(p=>p.style.display="none");
@@ -516,6 +720,7 @@ function switchCryptoTab(tab,event){
   const paperPanel=$("b-paper");
   if(tab==="paper"){
     if(paperPanel){paperPanel.style.display="block";paperPanel.classList.add("active")}
+    updatePaperActiveStock();
     loadPaperPortfolio();
   }else if(tab==="funding-rate"){
     if(fundingPanel)fundingPanel.style.display="block";
@@ -530,24 +735,25 @@ function switchCryptoTab(tab,event){
 }
 function openAssetDashboard(t,n){
   const tickerRaw=String(t||"").trim();
+  if(!tickerRaw)return;
   const ticker=tickerRaw.toUpperCase();
   const cryptoByShort=CRYPTO_ASSETS.find(a=>a.short===ticker);
   const cryptoBySymbol=CRYPTO_ASSETS.find(a=>a.symbol===ticker);
   const cryptoAsset=cryptoByShort||cryptoBySymbol||null;
   const cryptoSymbol=cryptoAsset?.symbol||(ticker.endsWith("USDT")?ticker:"");
-  if(ticker==="BTC"||ticker==="BTCUSDT"){location.href="/";return}
   if(cryptoSymbol){
-    location.href=`/terminal?mode=crypto&symbol=${encodeURIComponent(cryptoSymbol)}&name=${encodeURIComponent(cryptoAsset?.name||n||cryptoSymbol)}`;
+    setActiveAsset(cryptoSymbol,"crypto",cryptoAsset?.name||n||cryptoSymbol);
     return;
   }
-  location.href=`/stock-terminal?ticker=${encodeURIComponent(tickerRaw)}&name=${encodeURIComponent(n||tickerRaw)}`;
+  setActiveAsset(tickerRaw,inferAssetClass(tickerRaw),n||tickerRaw);
 }
 function setupSearch(){
   const i=$("search"),r=$("results");
   if(!i||!r)return;
   const goToAsset=(asset)=>{
     if(!asset)return;
-    openAssetDashboard(asset.ticker,asset.name);
+    const cls=inferAssetClass(asset.ticker,asset.ticker.endsWith("USDT")||asset.sector==="Crypto"?"crypto":undefined);
+    setActiveAsset(asset.ticker,cls,asset.name);
   };
   i.oninput=()=>{
     const q=i.value.trim().toLowerCase();
@@ -575,7 +781,7 @@ function setupSearch(){
 function setupMarketTabs(){document.querySelectorAll(".mtab").forEach(b=>b.onclick=()=>{document.querySelectorAll(".mtab").forEach(x=>x.classList.remove("active"));b.classList.add("active");S.market=b.dataset.m||"india";renderWatch()})}
 
 function watchAssets(){return S.market==="us"?W.us:W.india}
-function buildIndices(){const l=$("indices");l.innerHTML=W.indices.map(a=>`<div class="row" data-t="${a[1]}" data-n="${a[0]}"><div><div class="name">${a[0]}</div><div class="meta">${a[1]}</div></div><div class="mono">--</div><div class="badge hold">INDEX</div></div>`).join("");l.querySelectorAll(".row").forEach(r=>r.onclick=()=>openAssetDashboard(r.dataset.t,r.dataset.n))}
+function buildIndices(){const l=$("indices");l.innerHTML=W.indices.map(a=>`<div class="row" data-t="${a[1]}" data-n="${a[0]}"><div><div class="name">${a[0]}</div><div class="meta">${a[1]}</div></div><div class="mono">--</div><div class="badge hold">INDEX</div></div>`).join("");l.querySelectorAll(".row").forEach(r=>r.onclick=()=>setActiveAsset(r.dataset.t,"indian_stock",r.dataset.n))}
 function buildWatchlistInstant(stocks,containerId="watchlist"){
   const container=$(containerId);
   if(!container)return;
@@ -600,7 +806,11 @@ function buildWatchlistInstant(stocks,containerId="watchlist"){
   container.querySelectorAll(".row").forEach(r=>{
     const t=String(r.dataset.ticker||"");
     S.rows.set(t,r);
-    r.onclick=()=>openAssetDashboard(t,r.dataset.name||t);
+    r.onclick=()=>{
+      document.querySelectorAll(".watchlist-row").forEach(x=>x.classList.remove("active"));
+      r.classList.add("active");
+      setActiveAsset(t,isUSAsset(t)?"us_stock":"indian_stock",r.dataset.name||t);
+    };
   });
   const tickers=(stocks||[]).map(s=>String(s[1]));
   attachAllHoverPrefetch(tickers);
@@ -709,7 +919,7 @@ async function loadWatchlistPrices(tickers,opts={}){
   }
 }
 async function refreshWatch(opts={}){buildWatchlistInstant(watchAssets(),"watchlist")}
-function buildCryptoWatchlist(){const wrap=$("crypto-watchlist");if(!wrap)return;wrap.innerHTML=CRYPTO_ASSETS.map(a=>`<div class="crypto-row" data-csym="${a.symbol}"><div><span class="crypto-icon" style="color:${a.color}">${a.icon}</span><span class="name">${a.short}</span><div class="meta">${a.name}</div></div><div class="mono"><div data-crypto-price="${a.symbol}">$ --</div><div class="k" data-crypto-change="${a.symbol}">--</div></div><div class="badge hold">LIVE</div></div>`).join("");wrap.querySelectorAll(".crypto-row").forEach(r=>r.onclick=()=>{const a=CRYPTO_ASSETS.find(x=>x.symbol===r.dataset.csym);if(!a)return;openAssetDashboard(a.symbol,a.name)})}
+function buildCryptoWatchlist(){const wrap=$("crypto-watchlist");if(!wrap)return;wrap.innerHTML=CRYPTO_ASSETS.map(a=>`<div class="crypto-row watchlist-row" data-csym="${a.symbol}"><div><span class="crypto-icon" style="color:${a.color}">${a.icon}</span><span class="name">${a.short}</span><div class="meta">${a.name}</div></div><div class="mono"><div data-crypto-price="${a.symbol}">$ --</div><div class="k" data-crypto-change="${a.symbol}">--</div></div><div class="badge hold">LIVE</div></div>`).join("");wrap.querySelectorAll(".crypto-row").forEach(r=>r.onclick=()=>{const a=CRYPTO_ASSETS.find(x=>x.symbol===r.dataset.csym);if(!a)return;wrap.querySelectorAll(".crypto-row").forEach(x=>x.classList.remove("active"));r.classList.add("active");setActiveAsset(a.symbol,"crypto",a.name)})}
 function updateCryptoRow(symbol,price,changePct){const priceEl=document.querySelector(`[data-crypto-price="${symbol}"]`);const changeEl=document.querySelector(`[data-crypto-change="${symbol}"]`);if(priceEl){priceEl.textContent=price>100?`$${price.toLocaleString("en-US",{maximumFractionDigits:2})}`:`$${price.toFixed(4)}`}if(changeEl){changeEl.textContent=(changePct>=0?"+":"")+changePct.toFixed(2)+"%";changeEl.style.color=changePct>=0?BUY:SELL}}
 function updateStocksTopBar(data){
   const cardMap=[
@@ -768,7 +978,7 @@ async function loadCryptoPrices(){
     });
     cryptoTopBarState.btcPrice=btc||cryptoTopBarState.btcPrice;
     cryptoTopBarState.ethPrice=eth||cryptoTopBarState.ethPrice;
-    if(terminalMode==="crypto"){
+    if(APP_STATE.mode==="crypto"){
       updateCryptoTopBar(
         cryptoTopBarState.btcPrice,
         cryptoTopBarState.ethPrice,
@@ -792,7 +1002,7 @@ async function loadFearAndGreed(){
       fgEl.style.color=v<30?SELL:v>70?BUY:"#f97316";
     }
     cryptoTopBarState.fearGreed=`${value} - ${label}`;
-    if(terminalMode==="crypto"){
+    if(APP_STATE.mode==="crypto"){
       updateCryptoTopBar(
         cryptoTopBarState.btcPrice,
         cryptoTopBarState.ethPrice,
@@ -815,7 +1025,7 @@ async function loadCryptoStats(){
     $("btc-dominance").textContent=`${Number(d.market_cap_percentage?.btc||0).toFixed(1)}%`;
     $("total-mcap").textContent=mcap?("$"+mcap.toLocaleString("en-US",{maximumFractionDigits:0})):"--";
     cryptoTopBarState.marketCap=mcap;
-    if(terminalMode==="crypto"){
+    if(APP_STATE.mode==="crypto"){
       updateCryptoTopBar(
         cryptoTopBarState.btcPrice,
         cryptoTopBarState.ethPrice,
@@ -825,27 +1035,16 @@ async function loadCryptoStats(){
     }
   }catch(e){console.warn("Crypto stats failed",e)}
 }
-function updateMarketStatus(){const now=new Date();const ist=new Date(now.toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));const istDay=ist.getDay(),istMin=ist.getHours()*60+ist.getMinutes(),nseOpen=istDay>=1&&istDay<=5&&istMin>=555&&istMin<=930;const est=new Date(now.toLocaleString("en-US",{timeZone:"America/New_York"}));const estDay=est.getDay(),estMin=est.getHours()*60+est.getMinutes(),nyseOpen=estDay>=1&&estDay<=5&&estMin>=570&&estMin<=960;const statusEl=$("market-status");if(!statusEl)return;if(terminalMode==="crypto"){statusEl.innerHTML="🟢 Crypto 24/7";statusEl.style.color=BUY}else{statusEl.innerHTML=`${nseOpen?"🟢 NSE Open":"🔴 NSE Closed"} ${nyseOpen?"🟢 NYSE Open":"🔴 NYSE Closed"}`;statusEl.style.color="#e2e8f0"}}
-function refreshTopBar(){if(terminalMode==="stocks"){loadMarketOverview()}}
+function updateMarketStatus(){const now=new Date();const ist=new Date(now.toLocaleString("en-US",{timeZone:"Asia/Kolkata"}));const istDay=ist.getDay(),istMin=ist.getHours()*60+ist.getMinutes(),nseOpen=istDay>=1&&istDay<=5&&istMin>=555&&istMin<=930;const est=new Date(now.toLocaleString("en-US",{timeZone:"America/New_York"}));const estDay=est.getDay(),estMin=est.getHours()*60+est.getMinutes(),nyseOpen=estDay>=1&&estDay<=5&&estMin>=570&&estMin<=960;const statusEl=$("market-status");if(!statusEl)return;if(APP_STATE.mode==="crypto"){statusEl.innerHTML="🟢 Crypto 24/7";statusEl.style.color=BUY}else{statusEl.innerHTML=`${nseOpen?"🟢 NSE Open":"🔴 NSE Closed"} ${nyseOpen?"🟢 NYSE Open":"🔴 NYSE Closed"}`;statusEl.style.color="#e2e8f0"}}
+function refreshTopBar(){if(APP_STATE.mode==="stocks"){loadMarketOverview()}}
 function switchTerminalMode(mode){
-  terminalMode=mode==="crypto"?"crypto":"stocks";
-  const bs=$("mode-stocks"),bc=$("mode-crypto"),sp=$("stocks-panel"),cp=$("crypto-panel"),st=$("stocks-tabs"),ct=$("crypto-tabs");
-  if(sp)sp.style.display=terminalMode==="stocks"?"":"none";
-  if(cp)cp.style.display=terminalMode==="crypto"?"":"none";
-  if(st)st.style.display=terminalMode==="stocks"?"":"none";
-  if(ct)ct.style.display=terminalMode==="crypto"?"":"none";
-  if(bs)bs.classList.toggle("active",terminalMode==="stocks");
-  if(bc)bc.classList.toggle("active",terminalMode==="crypto");
+  APP_STATE.mode=mode==="crypto"?"crypto":"stocks";
+  applyModeVisibility(APP_STATE.mode);
   showChartSkeleton();
   showSignalSkeleton();
-  if(terminalMode==="stocks"){
+  if(APP_STATE.mode==="stocks"){
     if(cryptoPriceInterval){clearInterval(cryptoPriceInterval);cryptoPriceInterval=null}
     if(fearGreedInterval){clearInterval(fearGreedInterval);fearGreedInterval=null}
-    const lastTicker=localStorage.getItem("lastTicker")||"RELIANCE.NS";
-    activeTicker=lastTicker;activeAssetClass=isUSAsset(lastTicker)?"us_stock":"indian_stock";
-    const picked=ALL.find(a=>a.ticker===activeTicker);
-    activeTF="15m";S.tf=activeTF;S.ticker=activeTicker;S.name=picked?.name||activeTicker;
-    document.querySelectorAll(".tf").forEach(x=>x.classList.toggle("active",x.dataset.tf===activeTF));
     const firstStockTab=document.querySelector('#stocks-tabs .btab[data-b="orderflow"]');
     document.querySelectorAll("#stocks-tabs .btab").forEach(x=>x.classList.remove("active"));
     if(firstStockTab)firstStockTab.classList.add("active");
@@ -854,39 +1053,78 @@ function switchTerminalMode(mode){
     if($("b-orderflow"))$("b-orderflow").classList.add("active");
     document.querySelectorAll(".bpanel[id^='cb-']").forEach(x=>x.style.display="none");
     renderWatch();
-    Promise.all([loadChart(activeTicker,activeTF),loadSignal(activeTicker,activeTF),loadMarketOverview()]).catch(e=>console.warn("Mode switch load error:",e));
+    loadMarketOverview();
+    const fallback=localStorage.getItem("lastStockTicker")||"RELIANCE.NS";
+    const currentIsCrypto=(APP_STATE.assetClass==="crypto"||String(APP_STATE.ticker||"").endsWith("USDT"));
+    if(currentIsCrypto){
+      setActiveAsset(fallback,inferAssetClass(fallback),ALL.find(a=>a.ticker===fallback)?.name||fallback);
+    }else{
+      setActiveAsset(APP_STATE.ticker||fallback,APP_STATE.assetClass||inferAssetClass(fallback),APP_STATE.name||fallback);
+    }
   }else{
-    activeTicker="BTCUSDT";activeAssetClass="crypto";activeTF="15m";
-    S.tf=activeTF;S.ticker=activeTicker;S.name="Bitcoin";
-    document.querySelectorAll(".tf").forEach(x=>x.classList.toggle("active",x.dataset.tf===activeTF));
+    const firstCryptoTab=document.querySelector('#crypto-tabs .ctab[data-cb="orderflow"]');
     document.querySelectorAll(".bpanel[id^='b-']").forEach(x=>x.classList.remove("active"));
     document.querySelectorAll(".bpanel[id^='b-']").forEach(x=>x.style.display="none");
     document.querySelectorAll(".bpanel[id^='cb-']").forEach(x=>x.style.display="none");
-    const firstCryptoTab=document.querySelector('#crypto-tabs .ctab[data-cb="orderflow"]');
     document.querySelectorAll("#crypto-tabs .ctab").forEach(x=>x.classList.remove("active"));
     if(firstCryptoTab)firstCryptoTab.classList.add("active");
     buildCryptoWatchlist();
     switchCryptoTab("order-flow",{currentTarget:firstCryptoTab});
-    Promise.all([loadCryptoChart("BTCUSDT"),loadCryptoSignal("BTCUSDT"),loadCryptoPrices(),loadFearAndGreed(),loadCryptoStats()]).catch(e=>console.warn("Crypto load error:",e));
     if(cryptoPriceInterval)clearInterval(cryptoPriceInterval);
     cryptoPriceInterval=setInterval(loadCryptoPrices,10000);
     if(fearGreedInterval)clearInterval(fearGreedInterval);
     fearGreedInterval=setInterval(loadFearAndGreed,300000);
+    const target=(APP_STATE.assetClass==="crypto"||String(APP_STATE.ticker||"").endsWith("USDT"))?APP_STATE.ticker:"BTCUSDT";
+    const targetName=CRYPTO_ASSETS.find(a=>a.symbol===target)?.name||APP_STATE.name||"Bitcoin";
+    setActiveAsset(target,"crypto",targetName);
+    Promise.all([loadCryptoPrices(),loadFearAndGreed(),loadCryptoStats()]).catch(e=>console.warn("Crypto side data error:",e));
   }
   updateMarketStatus();
-  localStorage.setItem("terminalMode",terminalMode);
+  localStorage.setItem("terminalMode",APP_STATE.mode);
 }
-async function loadCryptoChart(symbol="BTCUSDT"){const a=CRYPTO_ASSETS.find(x=>x.symbol===symbol);return selectCryptoAsset(symbol,a?.name||symbol)}
+async function loadCryptoChart(symbol="BTCUSDT"){
+  const s=String(symbol||APP_STATE.ticker||"BTCUSDT");
+  const interval=tfToBinance(APP_STATE.tf||"15m");
+  showChartSkeleton();
+  if(s==="BTCUSDT"){
+    const lim=(APP_STATE.tf==="1W"||APP_STATE.tf==="1D")?365:200;
+    const d=await json(`/api/btc/candles?interval=${encodeURIComponent(interval)}&limit=${lim}`,{timeoutMs:12000});
+    const rowsRaw=Array.isArray(d)?d:(Array.isArray(d?.data)?d.data:[]);
+    if(rowsRaw.length){
+      const rows=rowsRaw.map(x=>({time:x.time||x.ts||x.timestamp,open:x.open,high:x.high,low:x.low,close:x.close,volume:x.volume}));
+      cryptoLastCandles=parse(rows);
+      renderChartData({data:rows});
+      candle.setMarkers([]);
+      return;
+    }
+  }else{
+    const lim=(APP_STATE.tf==="1W"||APP_STATE.tf==="1D")?365:200;
+    const res=await fetch(`https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(s)}&interval=${encodeURIComponent(interval)}&limit=${lim}`);
+    const k=await res.json();
+    if(Array.isArray(k)){
+      const rows=k.map(r=>({time:Math.floor(Number(r[0])/1000),open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),close:Number(r[4]),volume:Number(r[5])}));
+      cryptoLastCandles=rows;
+      renderChartData({data:rows});
+      candle.setMarkers([]);
+      return;
+    }
+  }
+  candle.setData([]);
+  s20.setData([]);
+  s50.setData([]);
+  $("t-ltp").textContent="Data unavailable";
+}
 
 function initChart(){const c=$("chart");chart=LightweightCharts.createChart(c,{width:c.clientWidth,height:c.clientHeight,layout:{background:{type:"solid",color:"transparent"},textColor:"#94a3b8",fontFamily:"Sora"},grid:{vertLines:{color:"rgba(148,163,184,.08)"},horzLines:{color:"rgba(148,163,184,.08)"}},rightPriceScale:{borderColor:"rgba(148,163,184,.25)"},timeScale:{borderColor:"rgba(148,163,184,.25)",timeVisible:true}});candle=chart.addCandlestickSeries({upColor:BUY,downColor:SELL,borderUpColor:BUY,borderDownColor:SELL,wickUpColor:BUY,wickDownColor:SELL});s20=chart.addLineSeries({color:"#facc15",lineWidth:1,priceLineVisible:false,lastValueVisible:false});s50=chart.addLineSeries({color:"#60a5fa",lineWidth:1,priceLineVisible:false,lastValueVisible:false});window.addEventListener("resize",()=>chart.applyOptions({width:c.clientWidth,height:c.clientHeight}))}
-function showChartLoading(){const st=$("status");if(st)st.textContent=`${S.tf} | Loading chart...`;candle.setData([]);s20.setData([]);s50.setData([]);$("t-ltp").textContent="Loading...";$("t-chg").textContent="";$("t-vol").textContent="Vol: --"}
-function showChartSkeleton(){const n=$("t-name");if(n)n.textContent=`${S.name||"Loading"} (${S.ticker||"--"})`;const p=getCachedPrice(S.ticker);$("t-ltp").textContent=p?.price?inr(p.price):"Loading...";$("t-chg").textContent=p?.change_pct!=null?pct(Number(p.change_pct)):"";$("t-vol").textContent="Vol: --"}
+function showChartLoading(){const st=$("status");if(st)st.textContent=`${APP_STATE.tf} | Loading chart...`;candle.setData([]);s20.setData([]);s50.setData([]);$("t-ltp").textContent="Loading...";$("t-chg").textContent="";$("t-vol").textContent="Vol: --"}
+function showChartSkeleton(){const n=$("t-name");if(n)n.textContent=`${APP_STATE.name||"Loading"} (${APP_STATE.ticker||"--"})`;const p=getCachedPrice(APP_STATE.ticker);$("t-ltp").textContent=p?.price?money(p.price,APP_STATE.currency):"Loading...";$("t-chg").textContent=p?.change_pct!=null?pct(Number(p.change_pct)):"";$("t-vol").textContent="Vol: --"}
 function renderMarkersData(j){if(!Array.isArray(j)){candle.setMarkers([]);return}candle.setMarkers(j.map(m=>({time:Number(m.time),position:m.position,color:m.color||(m.text==="BUY"?BUY:SELL),shape:m.shape||(m.text==="BUY"?"arrowUp":"arrowDown"),text:""})).filter(x=>Number.isFinite(x.time)))}
-function renderChartData(j){if(!j||!Array.isArray(j.data)||!j.data.length){candle.setData([]);s20.setData([]);s50.setData([]);$("t-ltp").textContent="Data unavailable";$("t-chg").textContent="";$("t-vol").textContent="Vol: --";return false}const d=parse(j.data);if(!d.length){$("t-ltp").textContent="Data unavailable";$("t-chg").textContent="";$("t-vol").textContent="Vol: --";return false}S.chart=d;candle.setData(d);s20.setData(sma(d,20));s50.setData(sma(d,50));chart.timeScale().fitContent();const x=d[d.length-1],y=d.length>1?d[d.length-2]:x,lastClose=Number(x.close||0),prevClose=Number(y.close||0),ch=prevClose>0?((lastClose-prevClose)/prevClose*100):0;$("t-ltp").textContent=inr(lastClose);$("t-chg").textContent=pct(ch);$("t-chg").style.color=ch>=0?BUY:SELL;$("t-vol").textContent=`Vol: ${Number(x.volume||0).toLocaleString("en-IN")}`;return true}
-async function loadChart(ticker=S.ticker,tf=S.tf){
-  const t=String(ticker||S.ticker);
-  const frame=String(tf||S.tf||"15m");
+function renderChartData(j){if(!j||!Array.isArray(j.data)||!j.data.length){candle.setData([]);s20.setData([]);s50.setData([]);$("t-ltp").textContent="Data unavailable";$("t-chg").textContent="";$("t-vol").textContent="Vol: --";return false}const d=parse(j.data);if(!d.length){$("t-ltp").textContent="Data unavailable";$("t-chg").textContent="";$("t-vol").textContent="Vol: --";return false}S.chart=d;candle.setData(d);s20.setData(sma(d,20));s50.setData(sma(d,50));chart.timeScale().fitContent();const x=d[d.length-1],y=d.length>1?d[d.length-2]:x,lastClose=Number(x.close||0),prevClose=Number(y.close||0),ch=prevClose>0?((lastClose-prevClose)/prevClose*100):0;$("t-ltp").textContent=money(lastClose,APP_STATE.currency);$("t-chg").textContent=pct(ch);$("t-chg").style.color=ch>=0?BUY:SELL;$("t-vol").textContent=`Vol: ${Number(x.volume||0).toLocaleString(APP_STATE.currency==="$"?"en-US":"en-IN")}`;updateChartHeader();return true}
+async function loadChart(ticker=APP_STATE.ticker,tf=APP_STATE.tf){
+  const t=String(ticker||APP_STATE.ticker);
+  const frame=String(tf||APP_STATE.tf||"15m");
   activeTicker=t;activeTF=frame;S.ticker=t;S.tf=frame;
+  APP_STATE.ticker=t;APP_STATE.tf=frame;APP_STATE.currency=currencyForTicker(APP_STATE.ticker,APP_STATE.assetClass);
   const params=resolveChartParams(t,frame);
   showChartSkeleton();
   const prefetchKey=chartCacheKey(t,frame);
@@ -896,26 +1134,77 @@ async function loadChart(ticker=S.ticker,tf=S.tf){
   if(j?.data?.length)prefetchCache.set(chartCacheKey(t,frame),j);
   if(renderChartData(j)){await loadMarkers(params.interval,params.period)}
 }
-async function loadMarkers(i,p){const j=await json(`/api/chart-markers?ticker=${encodeURIComponent(S.ticker)}&interval=${encodeURIComponent(i)}&period=${encodeURIComponent(p)}`);renderMarkersData(j)}
-function initTf(){document.querySelectorAll(".tf").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tf").forEach(x=>x.classList.remove("active"));b.classList.add("active");activeTF=b.dataset.tf;S.tf=activeTF;if(terminalMode==="crypto"){selectCryptoAsset(currentCryptoSymbol,S.name)}else{selectStock(S.ticker,isUSAsset(S.ticker)?"us_stock":"indian_stock",S.name)}})}
+async function loadMarkers(i,p){const j=await json(`/api/chart-markers?ticker=${encodeURIComponent(APP_STATE.ticker)}&interval=${encodeURIComponent(i)}&period=${encodeURIComponent(p)}`);renderMarkersData(j)}
+function initTf(){document.querySelectorAll(".tf").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tf").forEach(x=>x.classList.remove("active"));b.classList.add("active");activeTF=b.dataset.tf;S.tf=activeTF;APP_STATE.tf=activeTF;if(APP_STATE.mode==="crypto"){setActiveAsset(APP_STATE.ticker||currentCryptoSymbol,"crypto",APP_STATE.name||"Crypto")}else{const t=APP_STATE.ticker||"RELIANCE.NS";setActiveAsset(t,APP_STATE.assetClass||inferAssetClass(t),APP_STATE.name||t)}})}
 function setAsset(t,n){
-  const tickerNorm=String(t||"").toUpperCase();
-  if(tickerNorm==="BTC"||tickerNorm==="BTCUSDT"){
-    location.href="/";
-    return;
-  }
-  if(terminalMode==="stocks"&&(t==="BTC"||t==="ETH")){
-    switchTerminalMode("crypto");
-    selectCryptoAsset(t==="BTC"?"BTCUSDT":"ETHUSDT",t==="BTC"?"Bitcoin":"Ethereum");
-    return;
-  }
-  selectStock(t,isUSAsset(t)?"us_stock":"indian_stock",n||t);
+  const ticker=String(t||"");
+  if(!ticker)return;
+  if(ticker==="BTC")return setActiveAsset("BTCUSDT","crypto","Bitcoin");
+  if(ticker==="ETH")return setActiveAsset("ETHUSDT","crypto","Ethereum");
+  return setActiveAsset(ticker,inferAssetClass(ticker),n||ticker);
 }
 function setAction(g,reason,e,sl,tp){const box=$("action"),big=$("a-big"),sub=$("a-sub");if(g==="BUY"){big.textContent="BUY";big.style.color=BUY;box.style.borderColor=BUY;box.style.background="rgba(52,211,153,.12)";sub.textContent=`Entry ${inr(e)} | SL ${inr(sl)} | TP ${inr(tp)}`}else if(g==="SELL"){big.textContent="SELL";big.style.color=SELL;box.style.borderColor=SELL;box.style.background="rgba(248,113,113,.12)";sub.textContent=`Entry ${inr(e)} | SL ${inr(sl)} | TP ${inr(tp)}`}else{big.textContent="WAIT";big.style.color=HOLD;box.style.borderColor=HOLD;box.style.background="rgba(96,165,250,.12)";sub.textContent=reason||"No high-quality setup"}}
-function showSignalLoading(){setAction("HOLD","Loading signal...");$("sig").textContent="HOLD";$("sig").style.color=HOLD;const rs=$("reason");if(rs)rs.textContent="Loading signal...";$("conf").textContent="--";$("cfill").style.width="0%"}
-function showSignalSkeleton(){const n=$("t-name");if(n&&String(n.textContent||"").includes("Loading")===false)n.textContent=`${S.name||S.ticker} (${S.ticker})`;showSignalLoading();$("sig-time").textContent="updated: fetching..."}
+function showSignalLoading(){setAction("HOLD","Analyzing...");const big=$("a-big"),sub=$("a-sub");if(big){big.innerHTML='<div style="display:inline-block;width:20px;height:20px;border:2px solid #334155;border-top-color:#f97316;border-radius:50%;animation:spin .8s linear infinite"></div>'}if(sub)sub.textContent="Analyzing...";$("sig").textContent="HOLD";$("sig").style.color=HOLD;const rs=$("reason");if(rs)rs.textContent="Loading signal...";$("conf").textContent="--";$("cfill").style.width="0%"}
+function showSignalSkeleton(){const n=$("t-name");if(n&&String(n.textContent||"").includes("Loading")===false)n.textContent=`${APP_STATE.name||APP_STATE.ticker} (${APP_STATE.ticker})`;showSignalLoading();$("sig-time").textContent="updated: fetching..."}
 function signalIntervalFor(tf){if(tf==="1W"||tf==="1D")return"1d";if(tf==="1h")return"1h";return"15m"}
-async function fetchSignalWithTimeout(ticker=S.ticker,tf=S.tf){const signalInterval=signalIntervalFor(tf);try{return await Promise.race([json(`/api/stock-signal?ticker=${encodeURIComponent(ticker)}&interval=${encodeURIComponent(signalInterval)}`),new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),10000))])}catch(e){if(String(e?.message||"").toLowerCase().includes("timeout"))return "__timeout__";return null}}
+async function fetchSignalWithTimeout(ticker=APP_STATE.ticker,tf=APP_STATE.tf){const signalInterval=signalIntervalFor(tf);try{return await Promise.race([json(`/api/stock-signal?ticker=${encodeURIComponent(ticker)}&interval=${encodeURIComponent(signalInterval)}`),new Promise((_,rej)=>setTimeout(()=>rej(new Error("timeout")),10000))])}catch(e){if(String(e?.message||"").toLowerCase().includes("timeout"))return "__timeout__";return null}}
+function getFactorScores(data){
+  const normalize=(obj)=>{
+    const src=(obj&&typeof obj==="object")?obj:{};
+    const num=(...keys)=>{
+      for(const k of keys){
+        const v=src[k];
+        const n=Number(v);
+        if(Number.isFinite(n))return n;
+      }
+      return undefined;
+    };
+    const out={...src};
+    const f1=num("F1","f1","F1_momentum","f1_momentum","momentum","F1 Momentum");
+    const f2=num("F2","f2","F2_mean_rev","f2_mean_rev","mean_reversion","meanrev","F2 Mean Rev");
+    const f3=num("F3","f3","F3_volume","f3_volume","volume","F3 Volume");
+    const f5=num("F5","f5","F5_volatility","f5_volatility","volatility","F5 Volatility");
+    if(Number.isFinite(f1))out.F1=f1;
+    if(Number.isFinite(f2))out.F2=f2;
+    if(Number.isFinite(f3))out.F3=f3;
+    if(Number.isFinite(f5))out.F5=f5;
+    return out;
+  };
+
+  if(data?.factor_scores&&typeof data.factor_scores==="object"&&Object.keys(data.factor_scores).length>0){
+    return normalize(data.factor_scores);
+  }
+  if(typeof data?.factor_scores==="string"){
+    try{
+      const parsed=JSON.parse(data.factor_scores);
+      if(parsed&&typeof parsed==="object")return normalize(parsed);
+    }catch(e){}
+  }
+  if(data?.alpha?.factor_scores){
+    if(typeof data.alpha.factor_scores==="string"){
+      try{
+        const parsed=JSON.parse(data.alpha.factor_scores);
+        if(parsed&&typeof parsed==="object")return normalize(parsed);
+      }catch(e){}
+    }else if(typeof data.alpha.factor_scores==="object"){
+      return normalize(data.alpha.factor_scores);
+    }
+  }
+  const manual={};
+  if(data?.F1_momentum!==undefined)manual.F1=Number(data.F1_momentum);
+  if(data?.F2_mean_rev!==undefined)manual.F2=Number(data.F2_mean_rev);
+  if(data?.F3_volume!==undefined)manual.F3=Number(data.F3_volume);
+  if(data?.F5_volatility!==undefined)manual.F5=Number(data.F5_volatility);
+  if(data?.momentum!==undefined)manual.F1=Number(data.momentum);
+  if(data?.mean_reversion!==undefined)manual.F2=Number(data.mean_reversion);
+  if(data?.volume!==undefined)manual.F3=Number(data.volume);
+  if(data?.volatility!==undefined)manual.F5=Number(data.volatility);
+  if(Object.keys(manual).length>0)return normalize(manual);
+  if(data?.alpha_score!==undefined){
+    return normalize({F1:Number(data.alpha_score||0),F2:Number(data.confidence||0)/100,F3:0,F5:0});
+  }
+  return {};
+}
 function renderSignalData(s){
   const g=sig(s?.signal);
   const rawConf=Number(s?.confidence||0);
@@ -934,9 +1223,9 @@ function renderSignalData(s){
   $("cfill").style.width=Math.max(0,Math.min(100,conf))+"%";
   $("alpha").textContent=Math.max(0,Math.min(100,alpha))+" / 100";
   $("edge").textContent=Math.max(0,Math.min(100,edge))+" / 100";
-  $("entry").textContent=inr(e);
-  $("sl").textContent=inr(sl);
-  $("tp").textContent=inr(tp);
+  $("entry").textContent=money(e,APP_STATE.currency);
+  $("sl").textContent=money(sl,APP_STATE.currency);
+  $("tp").textContent=money(tp,APP_STATE.currency);
   $("rr").textContent=Number.isFinite(Number(rr))?rr+":1":"--";
   const r=String(s?.regime||"SIDEWAYS").toUpperCase();
   $("regime").textContent=r;
@@ -944,28 +1233,27 @@ function renderSignalData(s){
 
   let factorScores={};
   try{
-    if(typeof s?.factor_scores==="string"){
-      factorScores=JSON.parse(s.factor_scores);
-    }else if(s?.factor_scores&&typeof s.factor_scores==="object"){
-      factorScores=s.factor_scores;
-    }else if(s?.alpha?.factor_scores&&typeof s.alpha.factor_scores==="object"){
+    factorScores=getFactorScores(s);
+    if((!factorScores||Object.keys(factorScores).length===0)&&s?.alpha?.factor_scores&&typeof s.alpha.factor_scores==="object"){
       factorScores=s.alpha.factor_scores;
     }
-  }catch(e){
-    console.warn("Factor scores parse error:",e);
-    factorScores={};
-  }
+  }catch(e){console.warn("Factor scores parse error:",e);factorScores={};}
   ["1","2","3","5"].forEach(k=>{
-    const v=Number(factorScores["F"+k]??factorScores[k]??0);
+    const raw=Number(factorScores["F"+k]??factorScores[k]??factorScores[`F${k} `]??factorScores[`F${k}_score`]??0);
+    const v=Number.isFinite(raw)?raw:0;
     $("f"+k).style.width=Math.max(0,Math.min(100,f2p(v)))+"%";
     $("f"+k+"v").textContent=v.toFixed(2);
     $("f"+k).style.background=v>=0?BUY:SELL;
   });
   $("sig-time").textContent="updated: "+new Date().toLocaleTimeString("en-IN");
+  updatePaperActiveStock(g,conf);
 }
-async function loadSignal(ticker=S.ticker,tf=S.tf,opts={}){
-  const t=String(ticker||S.ticker);
-  const frame=String(tf||S.tf||"15m");
+async function loadSignal(ticker=APP_STATE.ticker,tf=APP_STATE.tf,opts={}){
+  const t=String(ticker||APP_STATE.ticker);
+  const frame=String(tf||APP_STATE.tf||"15m");
+  APP_STATE.ticker=t;
+  APP_STATE.tf=frame;
+  APP_STATE.currency=currencyForTicker(APP_STATE.ticker,APP_STATE.assetClass);
   const cacheKey=`${t}_${frame}`;
   const cached=signalCache.get(cacheKey);
   if(cached&&Date.now()-cached.ts<SIGNAL_TTL){
@@ -994,67 +1282,25 @@ async function loadSignal(ticker=S.ticker,tf=S.tf,opts={}){
 async function selectStock(ticker,assetClass="indian_stock",name=ticker){
   const t=String(ticker||"");
   if(!t)return;
-  activeTicker=t;activeAssetClass=assetClass||"indian_stock";
-  S.ticker=t;S.name=name||t;S.tf=activeTF||S.tf||"15m";
-  localStorage.setItem("lastTicker",t);
-  $("t-name").textContent=`${S.name} (${S.ticker})`;
-  if($("bt-ticker"))$("bt-ticker").value=S.ticker;
-  showChartSkeleton();
-  showSignalSkeleton();
-  const key=chartCacheKey(t,S.tf);
-  const cachedChart=prefetchCache.get(key);
-  if(cachedChart?.data?.length)renderChartData(cachedChart);
-  Promise.all([
-    cachedChart?.data?.length?Promise.resolve(cachedChart):loadChart(t,S.tf),
-    loadSignal(t,S.tf)
-  ]).then(()=>{
-    prefetchCache.delete(key);
-    loadOrderFlow(t);
-    refreshNews();
-  }).catch(e=>console.warn("selectStock load error:",e));
+  setActiveAsset(t,assetClass||inferAssetClass(t),name||t);
 }
-async function signal(){if(terminalMode==="crypto"){await loadCryptoSignal();return}await loadSignal(S.ticker,S.tf)}
-async function loadAsset(t,n){if(terminalMode==="crypto"){await selectCryptoAsset(currentCryptoSymbol,S.name);return}await selectStock(t,isUSAsset(t)?"us_stock":"indian_stock",n||t)}
-async function loadCryptoSignal(symbol){try{if(symbol)currentCryptoSymbol=symbol;if(currentCryptoSymbol==="BTCUSDT"){const s=await json("/api/btc/signal",{timeoutMs:9000,cacheTtlMs:10000});if(s){renderSignalData({signal:s.signal||"HOLD",confidence:s.confidence||0,alpha_score:s.alpha_score||0,net_alpha_score:s.net_alpha_score||0,entry_price:s.entry_price,stop_loss:s.stop_loss,take_profit:s.take_profit,regime:s.regime||"SIDEWAYS",factor_scores:s.factor_scores||{}});return}}const s=await json(`/api/focus-trade?symbol=${encodeURIComponent(currentCryptoSymbol)}`,{timeoutMs:9000,cacheTtlMs:10000});if(s){renderSignalData({signal:s.signal||"HOLD",confidence:s.confidence||0,alpha_score:s.alpha_score||0,net_alpha_score:s.net_alpha_score||0,entry_price:s.entry_price,stop_loss:s.stop_loss,take_profit:s.take_profit,regime:s.regime||"SIDEWAYS",factor_scores:s.factor_scores||{}})}else{setAction("HOLD","No crypto signal available")}}catch(e){setAction("HOLD","Crypto signal unavailable")}}
+async function signal(){if(APP_STATE.mode==="crypto"){await loadCryptoSignal(APP_STATE.ticker);return}await loadSignal(APP_STATE.ticker,APP_STATE.tf)}
+async function loadAsset(t,n){if(APP_STATE.mode==="crypto"){await selectCryptoAsset(APP_STATE.ticker||currentCryptoSymbol,APP_STATE.name||S.name);return}await selectStock(t,isUSAsset(t)?"us_stock":"indian_stock",n||t)}
+async function loadCryptoSignal(symbol){try{const target=String(symbol||APP_STATE.ticker||currentCryptoSymbol||"BTCUSDT");currentCryptoSymbol=target;if(target==="BTCUSDT"){const s=await json(`/api/btc/signal?interval=${encodeURIComponent(APP_STATE.tf||"15m")}`,{timeoutMs:9000,cacheTtlMs:10000});if(s){renderSignalData({signal:s.signal||"HOLD",confidence:s.confidence||0,alpha_score:s.alpha_score||0,net_alpha_score:s.net_alpha_score||0,entry_price:s.entry_price,stop_loss:s.stop_loss,take_profit:s.take_profit,regime:s.regime||"SIDEWAYS",factor_scores:s.factor_scores||{}});return}}const s=await json(`/api/focus-trade?symbol=${encodeURIComponent(target)}`,{timeoutMs:9000,cacheTtlMs:10000});if(s){renderSignalData({signal:s.signal||"HOLD",confidence:s.confidence||0,alpha_score:s.alpha_score||0,net_alpha_score:s.net_alpha_score||0,entry_price:s.entry_price,stop_loss:s.stop_loss,take_profit:s.take_profit,regime:s.regime||"SIDEWAYS",factor_scores:s.factor_scores||{}})}else{setAction("HOLD","No crypto signal available")}}catch(e){setAction("HOLD","Crypto signal unavailable")}}
 function tfToBinance(tf){if(tf==="5m")return"5m";if(tf==="15m")return"15m";if(tf==="1h")return"1h";if(tf==="1D")return"1d";if(tf==="1W")return"1w";return"15m"}
 async function selectCryptoAsset(symbol,name){
-  currentCryptoSymbol=symbol;
-  activeTicker=symbol;
-  activeAssetClass="crypto";
-  S.ticker=symbol;
-  S.name=name||symbol;
-  S.tf=activeTF||S.tf||"15m";
-  $("t-name").textContent=`${name||symbol} (${symbol})`;
-  showChartSkeleton();
-  const interval=tfToBinance(S.tf);
-  if(symbol==="BTCUSDT"){
-    const lim=S.tf==="1W"?365:S.tf==="1D"?365:200;
-    const d=await json(`/api/btc/candles?interval=${encodeURIComponent(interval)}&limit=${lim}`,{timeoutMs:9000});
-    const rowsRaw=Array.isArray(d)?d:(Array.isArray(d?.data)?d.data:[]);
-    if(rowsRaw.length){
-      const rows=rowsRaw.map(x=>({time:x.time||x.ts||x.timestamp,open:x.open,high:x.high,low:x.low,close:x.close,volume:x.volume}));
-      cryptoLastCandles=parse(rows);
-      renderChartData({data:rows});
-    }
-  }else{
-    const lim=S.tf==="1W"?365:S.tf==="1D"?365:200;
-    const res=await fetch(`https://api.binance.com/api/v3/klines?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=${lim}`);
-    const k=await res.json();
-    if(Array.isArray(k)){
-      const rows=k.map(r=>({time:Math.floor(Number(r[0])/1000),open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),close:Number(r[4]),volume:Number(r[5])}));
-      cryptoLastCandles=rows;
-      renderChartData({data:rows});
-      candle.setMarkers([]);
-    }
-  }
-  await loadCryptoSignal();
-  renderCryptoOrderFlow();
-  refreshCryptoNews();
+  const s=String(symbol||"");
+  if(!s)return;
+  setActiveAsset(s,"crypto",name||s);
 }
 function showOrderFlowUnavailable(){["of-volume","of-smart-money","of-money-flow","of-obs"].forEach(id=>{const el=$(id);if(el){el.textContent="--";el.style.color="#475569"}})}
 function calculateRSI(closes,period=14){if(!Array.isArray(closes)||closes.length<=period)return 50;let gains=0,losses=0;for(let i=1;i<=period;i++){const diff=Number(closes[i]||0)-Number(closes[i-1]||0);if(diff>0)gains+=diff;else losses-=diff}const avgGain=gains/period,avgLoss=losses/period;return avgLoss===0?100:100-(100/(1+avgGain/Math.max(avgLoss,1e-9)))}
 async function loadOrderFlow(ticker){
-  const t=String(ticker||S.ticker||"RELIANCE.NS");
+  const t=String(ticker||APP_STATE.ticker||"RELIANCE.NS");
+  if(APP_STATE.mode==="crypto"||String(APP_STATE.assetClass||"").toLowerCase()==="crypto"){
+    renderCryptoOrderFlow();
+    return;
+  }
   const volEl=$("of-volume");
   if(volEl)volEl.textContent="Loading...";
   try{
@@ -1104,7 +1350,7 @@ async function refreshCryptoFunding(){const body=$("funding-body");if(!body)retu
 async function refreshCryptoNews(){const wrap=$("crypto-news-list");if(!wrap)return;wrap.innerHTML='<div class="empty"><span class="spinner"></span> Loading crypto news...</div>';const r=await json('/api/news?symbol=BTC&asset_class=crypto&limit=12',{timeoutMs:9000});const n=r?.news||[];if(!n.length){wrap.innerHTML='<div class="empty">No crypto news</div>';return}wrap.innerHTML=n.map(x=>`<div class="news"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:4px"><span class="sent ${newsClass(x.sentiment)}">${newsClass(x.sentiment)}</span><span class="k">${(x.published||"").toString().slice(0,19).replace("T"," ")}</span></div><div><a href="${x.url||"#"}" target="_blank" rel="noopener">${x.title||"Untitled"}</a></div><div class="k">${x.source||"Unknown source"}</div></div>`).join("")}
 async function market(){return loadMarketOverview()}
 function screener(){const b=$("sbody");const render=()=>{const sf=$("f-signal").value.toUpperCase(),st=$("f-strength").value.toUpperCase(),se=$("f-sector").value.toUpperCase(),k=S.sort.k,dir=S.sort.d==="asc"?1:-1;const arr=S.sdata.filter(x=>sf==="ALL"||x.signal===sf).filter(x=>st==="ALL"||x.strength===st).filter(x=>se==="ALL"||String(x.sector).toUpperCase()===se).sort((a,c)=>["stock","signal","regime"].includes(k)?String(a[k]).localeCompare(String(c[k]))*dir:(Number(a[k]||0)-Number(c[k]||0))*dir);if(!arr.length){b.innerHTML='<tr><td colspan="7" class="empty">No matches</td></tr>';return}b.innerHTML=arr.map(x=>`<tr data-t="${x.stock}"><td>${x.rank}</td><td>${x.stock}</td><td><span class="badge ${cls(x.signal)}">${x.signal}</span></td><td class="r">${Math.round(x.confidence)}%</td><td class="r">${Math.abs(x.alpha)<=1?(Math.abs(x.alpha)*100).toFixed(1):Number(x.alpha).toFixed(1)}</td><td>${x.regime}</td><td class="r">${inr(x.price)}</td></tr>`).join("");b.querySelectorAll("tr[data-t]").forEach(r=>r.onclick=()=>{const a=ALL.find(z=>z.ticker===r.dataset.t);if(a)openAssetDashboard(a.ticker,a.name)})};$("scan").onclick=async()=>{b.innerHTML='<tr><td colspan="7"><span class="spinner"></span> Scanning...</td></tr>';const out=[];let rk=1;for(const a of SCREEN){const [sg,ch]=await Promise.all([json(`/api/stock-signal?ticker=${encodeURIComponent(a.ticker)}`),json(`/api/chart-data?ticker=${encodeURIComponent(a.ticker)}&interval=1d&period=5d`)]),rows=ch&&Array.isArray(ch.data)?parse(ch.data):[],last=rows.length?rows[rows.length-1].close:null;out.push({rank:rk++,stock:a.ticker,sector:a.sector,signal:sig(sg?.signal||"HOLD"),strength:String(sg?.strength||"WEAK").toUpperCase(),confidence:Number(sg?.confidence||0),alpha:Number(sg?.alpha_score||0),regime:String(sg?.regime||"SIDEWAYS").toUpperCase(),price:last})}S.sdata=out;render()};["f-signal","f-strength","f-sector"].forEach(id=>$(id).onchange=render);document.querySelectorAll("#l-screener th[data-s]").forEach(th=>th.onclick=()=>{const k=th.dataset.s;if(S.sort.k===k)S.sort.d=S.sort.d==="asc"?"desc":"asc";else{S.sort.k=k;S.sort.d=k==="stock"?"asc":"desc"}render()})}
-function initBT(){const t=$("bt-ticker");t.innerHTML=SCREEN.map(a=>`<option value="${a.ticker}">${a.ticker}</option>`).join("");t.value=S.ticker;const n=new Date(),p=new Date(Date.now()-365*24*3600*1000);$("bt-from").value=p.toISOString().slice(0,10);$("bt-to").value=n.toISOString().slice(0,10);$("bt-status").textContent="Idle";$("bt-status-icon").className="";$("run-bt").onclick=runBT}
+function initBT(){const t=$("bt-ticker");t.innerHTML=SCREEN.map(a=>`<option value="${a.ticker}">${a.ticker}</option>`).join("");t.value=APP_STATE.ticker;const n=new Date(),p=new Date(Date.now()-365*24*3600*1000);$("bt-from").value=p.toISOString().slice(0,10);$("bt-to").value=n.toISOString().slice(0,10);$("bt-status").textContent="Idle";$("bt-status-icon").className="";$("run-bt").onclick=runBT}
 function renderCpcvHistogram(vals){const el=$("bt-cpcv-hist");if(!el)return;const arr=Array.isArray(vals)?vals.map(Number).filter(v=>Number.isFinite(v)):[];if(!arr.length){el.className="empty";el.textContent="Run CPCV mode to view OOS Sharpe distribution";return}const min=Math.min(...arr),max=Math.max(...arr),bins=12,step=(max-min||1)/bins;const h=new Array(bins).fill(0);arr.forEach(v=>{const i=Math.min(bins-1,Math.max(0,Math.floor((v-min)/step)));h[i]++});const mh=Math.max(1,...h);el.className="";el.innerHTML=`<div style="display:flex;align-items:flex-end;gap:4px;height:120px">${h.map((v,i)=>{const ht=Math.max(6,Math.round(v/mh*110));const x=min+i*step;const col=x>=0?BUY:SELL;return `<div title="${x.toFixed(2)}: ${v}" style="flex:1;height:${ht}px;background:${col};opacity:.75;border-radius:3px"></div>`}).join("")}</div><div class="k" style="margin-top:6px">OOS Sharpe bins (${arr.length} trials)</div>`}
 function renderEquityCurve(equityCurve){const container=$("bt-equity-chart");if(!container)return;if(!btEqChart){btEqChart=LightweightCharts.createChart(container,{width:container.clientWidth,height:220,layout:{background:{type:"solid",color:"transparent"},textColor:"#94a3b8",fontFamily:"Sora"},grid:{vertLines:{color:"rgba(148,163,184,.08)"},horzLines:{color:"rgba(148,163,184,.08)"}},rightPriceScale:{borderColor:"rgba(148,163,184,.25)"},timeScale:{borderColor:"rgba(148,163,184,.25)",timeVisible:true}});btEqSeries=btEqChart.addLineSeries({color:"#f97316",lineWidth:2});window.addEventListener("resize",()=>btEqChart&&btEqChart.applyOptions({width:container.clientWidth,height:220}))}const chartData=(equityCurve||[]).map(p=>({time:Number.isFinite(Number(p.time))?Number(p.time):Math.floor(new Date(p.time).getTime()/1000),value:Number(p.value||0)})).filter(x=>Number.isFinite(x.time)&&Number.isFinite(x.value));btEqSeries.setData(chartData);btEqChart.timeScale().fitContent()}
 function renderTradeLog(trades){const tbody=$("bt-trade-tbody");if(!tbody)return;tbody.innerHTML='';const rows=(trades||[]).slice(-20);if(!rows.length){tbody.innerHTML='<tr><td colspan="6" class="empty">No trades</td></tr>';return}rows.forEach(t=>{const row=document.createElement('tr');const pnl=Number(t.pnl_pct||0),pnlColor=pnl>0?BUY:SELL;row.innerHTML=`<td>${t.entry_date||'--'}</td><td style="color:${(t.signal||'').toUpperCase()==='LONG'?BUY:SELL}">${t.signal||'--'}</td><td class="r">₹${Number(t.entry||0).toLocaleString('en-IN')}</td><td class="r">₹${Number(t.exit||0).toLocaleString('en-IN')}</td><td class="r" style="color:${pnlColor}">${pnl>0?'+':''}${pnl.toFixed(2)}%</td><td style="color:${pnlColor}">${t.result||'--'}</td>`;tbody.appendChild(row)})}
@@ -1132,44 +1378,149 @@ function renderBacktestResults(data){
   if(Array.isArray(data.trades)){renderTradeLog(data.trades)}
 }
 async function runBT(){const ticker=$("bt-ticker").value,strategy=$("bt-strategy").value,mode=$("bt-mode").value,fromDate=$("bt-from").value,toDate=$("bt-to").value,capital=$("bt-capital").value;$("bt-status").textContent='Running...';$("bt-status-icon").className='spinner';$("bt-error").style.display='none';$("bt-error").textContent='';$("bt-results").style.display='none';$("bt-trade-tbody").innerHTML='<tr><td colspan=\"6\"><span class=\"spinner\"></span> Computing...</td></tr>';renderCpcvHistogram([]);try{const res=await fetch('/api/backtest',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker,strategy,mode,from_date:fromDate,to_date:toDate,capital:parseFloat(capital||'100000')})});if(!res.ok)throw new Error(`HTTP ${res.status}`);const data=await res.json();$("bt-status").textContent=data.error?'Failed':'Complete';$("bt-status-icon").className=data.error?'error-icon':'success-icon';if(data.error){$("bt-error").textContent=data.error;$("bt-error").style.display='block';return}renderBacktestResults(data);$("bt-results").style.display='block'}catch(e){$("bt-status").textContent='Error: '+(e?.message||'request failed');$("bt-status-icon").className='error-icon';$("bt-error").textContent='Backtest request failed';$("bt-error").style.display='block';console.error('Backtest error:',e)}}
-function initPF(){const c=$("pf-chart");pfC=LightweightCharts.createChart(c,{width:c.clientWidth,height:c.clientHeight,layout:{background:{type:"solid",color:"transparent"},textColor:"#94a3b8",fontFamily:"Sora"},grid:{vertLines:{color:"rgba(148,163,184,.08)"},horzLines:{color:"rgba(148,163,184,.08)"}},rightPriceScale:{borderColor:"rgba(148,163,184,.25)"},timeScale:{borderColor:"rgba(148,163,184,.25)",timeVisible:true}});pfS=pfC.addLineSeries({color:HOLD,lineWidth:2});window.addEventListener("resize",()=>pfC.applyOptions({width:c.clientWidth,height:c.clientHeight}))}
-async function refreshPortfolio(){
-  const [pf,h,tax]=await Promise.all([json("/api/portfolio"),json("/api/history?limit=20"),json("/api/compliance/tax-summary")]);
-  if(!pf){$("pf-m").innerHTML='<div class="empty">Data unavailable</div>';$("pf-open").innerHTML='<tr><td colspan="7" class="empty">Data unavailable</td></tr>';$("pf-closed").innerHTML='<tr><td colspan="5" class="empty">Data unavailable</td></tr>';if($("pf-true-cost"))$("pf-true-cost").innerHTML='<tr><td colspan="5" class="empty">Data unavailable</td></tr>';if($("pf-tax"))$("pf-tax").innerHTML='<div class="empty">Data unavailable</div>';pfS.setData([]);return}
-  const m=pf.metrics||{},cap=Number(m.initial_capital||m.total_capital||100000),cur=Number(m.current_value||m.equity||cap),pnl=cap>0?((cur-cap)/cap*100):0;
-  $("pf-m").innerHTML=[["Total Capital",inr(cap)],["Current Value",inr(cur)],["Total P&L",pct(pnl)]].map(x=>`<div class="metric"><div class="k">${x[0]}</div><div class="mval">${x[1]}</div></div>`).join("");
-  const open=Array.isArray(pf.positions)?pf.positions:[];
-  $("pf-open").innerHTML=open.length?open.map(p=>{const e=Number(p.entry_price||p.entry||0),c=Number(p.current_price||p.price||e),pn=e>0?((c-e)/e*100):0;return`<tr><td>${p.asset||p.symbol||"--"}</td><td class="r">${inr(e)}</td><td class="r">${inr(c)}</td><td class="r" style="color:${pn>=0?BUY:SELL}">${pct(pn)}</td><td>${p.signal||"--"}</td><td class="r">${inr(p.stop_loss||p.sl||0)}</td><td class="r">${inr(p.take_profit||p.tp||0)}</td></tr>`}).join(""):'<tr><td colspan="7" class="empty">No open positions</td></tr>';
-  const logs=Array.isArray(h)?h:[];
-  $("pf-closed").innerHTML=logs.length?logs.slice(0,20).map(x=>`<tr><td>${String(x.timestamp||x.date||"").slice(0,10)}</td><td>${x.asset||"--"}</td><td>${sig(x.signal||"HOLD")}</td><td class="r">${Number(x.confidence||0).toFixed(1)}%</td><td class="r">${Number(x.alpha_score||0).toFixed(2)}</td></tr>`).join(""):'<tr><td colspan="5" class="empty">No history</td></tr>';
-  const eq=Array.isArray(m.equity_curve)?m.equity_curve:[];if(eq.length)pfS.setData(eq.map((v,i)=>({time:i+1,value:Number(v||0)})));else pfS.setData([{time:1,value:cap},{time:2,value:cur}]);pfC.timeScale().fitContent();
-
-  const tcBody=$("pf-true-cost");
-  if(tcBody){
-    if(!logs.length){tcBody.innerHTML='<tr><td colspan="5" class="empty">No trades for cost analysis</td></tr>'}
-    else{
-      const rows=await Promise.all(logs.slice(0,8).map(async x=>{const entry=Number(x.entry_price||x.entry||0),exit=Number(x.exit_price||x.take_profit||entry),qty=Number(x.quantity||1),gross=entry>0&&exit>0?((exit-entry)*qty):0;const tr={quantity:qty,entry_price:entry,exit_price:exit,signal:x.signal||"LONG",gross_pnl:gross,product:"intraday"};const c=await json(`/api/compliance/true-cost?trade=${encodeURIComponent(JSON.stringify(tr))}`);return {asset:x.asset||"--",gross:Number(c?.gross_pnl||gross),stt:Number(c?.stt||0),gst:Number(c?.gst||0),net:Number(c?.net_pnl||0)}}));
-      tcBody.innerHTML=rows.map(r=>`<tr><td>${r.asset}</td><td class="r">${inr(r.gross)}</td><td class="r" style="color:${SELL}">-${inr(r.stt)}</td><td class="r" style="color:${SELL}">-${inr(r.gst)}</td><td class="r" style="color:${r.net>=0?BUY:SELL}">${inr(r.net)}</td></tr>`).join("");
-    }
+function initPF(){return}
+function renderPortfolioEquityCurve(trades,startCapital){
+  const container=$("port-equity-chart");
+  if(!container)return;
+  container.innerHTML="";
+  let equity=Number(startCapital||100000);
+  const now=Math.floor(Date.now()/1000);
+  const points=[{time:now-(86400*30),value:equity}];
+  const arr=Array.isArray(trades)?[...trades]:[];
+  if(arr.length){
+    arr.sort((a,b)=>Number(a?.closed_time||0)-Number(b?.closed_time||0)).forEach(t=>{
+      const pnl=Number(t?.pnl||0);
+      const ct=Number(t?.closed_time||0);
+      if(Number.isFinite(pnl)&&ct>0){
+        equity+=pnl;
+        points.push({time:Math.floor(ct),value:Math.round(equity*100)/100});
+      }
+    });
   }
+  points.push({time:now,value:Math.round(equity*100)/100});
+  const chart=LightweightCharts.createChart(container,{width:container.clientWidth||400,height:180,layout:{background:{type:"solid",color:"transparent"},textColor:"#64748b",fontFamily:"Sora"},grid:{vertLines:{color:"#1e3048"},horzLines:{color:"#1e3048"}},rightPriceScale:{borderColor:"#1e3048"},timeScale:{borderColor:"#1e3048",timeVisible:true},handleScroll:false,handleScale:false});
+  const lineSeries=chart.addLineSeries({color:equity>=Number(startCapital||100000)?BUY:SELL,lineWidth:2,priceLineVisible:false});
+  lineSeries.setData(points);
+  chart.timeScale().fitContent();
+}
+async function loadPortfolio(){
+  try{
+    const [paperRes,tradesRes,signalsRes]=await Promise.all([
+      fetch('/api/paper/portfolio'),
+      fetch('/api/paper/trades?limit=20'),
+      fetch('/api/signals?limit=10')
+    ]);
+    const paper=paperRes.ok?await paperRes.json():{};
+    const tradesRaw=tradesRes.ok?await tradesRes.json():[];
+    const signalsRaw=signalsRes.ok?await signalsRes.json():[];
+    const trades=Array.isArray(tradesRaw)?tradesRaw:[];
+    const signals=Array.isArray(signalsRaw)?signalsRaw:[];
+    const m=paper?.metrics||{};
+    const positions=Array.isArray(paper?.open_positions)?paper.open_positions:[];
 
-  const taxEl=$("pf-tax");
-  if(taxEl){
-    const t=tax||{};
-    taxEl.innerHTML=[
-      ["STCG (<1y)",`${inr(Number(t.stcg_amount||0))} @ 20%`],
-      ["LTCG (>1y)",`${inr(Number(t.ltcg_amount||0))} @ 12.5%`],
-      ["F&O Income",inr(Number(t.fno_business_income||0))],
-      ["Advance Tax Q1",inr(Number(t.advance_tax_q1||0))],
-      ["Advance Tax Q2",inr(Number(t.advance_tax_q2||0))],
-      ["Advance Tax Q3",inr(Number(t.advance_tax_q3||0))],
-      ["Advance Tax Q4",inr(Number(t.advance_tax_q4||0))]
-    ].map(x=>`<div class="metric"><div class="k">${x[0]}</div><div class="mval">${x[1]}</div></div>`).join("");
+    const setCard=(id,value,color)=>{const el=$(id);if(!el)return;el.textContent=value;if(color)el.style.color=color;};
+    const cap=Number(m.capital||100000);
+    const value=Number(m.portfolio_value||cap);
+    const pnl=Number(m.total_pnl||0);
+    const pnlPct=Number(m.total_pnl_pct||0);
+    const wr=Number(m.win_rate||0);
+    const sh=Number(m.sharpe_ratio||0);
+    const dd=Number(m.max_drawdown||0);
+    setCard("port-capital","₹"+cap.toLocaleString("en-IN",{maximumFractionDigits:0}));
+    setCard("port-value","₹"+value.toLocaleString("en-IN",{maximumFractionDigits:0}));
+    setCard("port-pnl",`${pnl>=0?"+":""}₹${Math.abs(pnl).toLocaleString("en-IN",{maximumFractionDigits:0})} (${pnlPct>=0?"+":""}${pnlPct.toFixed(2)}%)`,pnl>=0?BUY:SELL);
+    setCard("port-winrate",`${wr.toFixed(1)}%`,wr>=50?BUY:SELL);
+    setCard("port-sharpe",sh.toFixed(2),sh>=1?BUY:sh>=0?"#f59e0b":SELL);
+    setCard("port-maxdd",`${dd.toFixed(2)}%`,SELL);
+
+    const posTable=$("port-positions");
+    if(posTable){
+      if(!positions.length){
+        posTable.innerHTML='<tr><td colspan="7" style="text-align:center;color:#475569;padding:20px">No open positions — execute a paper trade to get started</td></tr>';
+      }else{
+        posTable.innerHTML=positions.map(p=>{const sym=String(p?.ticker||"--");const cur=getCurrencyForTicker(sym);const upnl=Number(p?.unrealized_pnl||0);const upnlPct=Number(p?.unrealized_pnl_pct||0);const curr=Number(p?.current_price||p?.entry_price||0);const dir=String(p?.direction||"LONG").toUpperCase();return `<tr><td style="font-weight:600;color:#f1f5f9">${sym}</td><td style="color:${dir==="LONG"?BUY:SELL};font-weight:600">${dir}</td><td>${cur}${Number(p?.entry_price||0).toLocaleString(cur==="$"?"en-US":"en-IN",{maximumFractionDigits:2})}</td><td>${cur}${curr.toLocaleString(cur==="$"?"en-US":"en-IN",{maximumFractionDigits:2})}</td><td style="color:${upnl>=0?BUY:SELL}">${upnl>=0?"+":""}${cur}${Math.abs(upnl).toFixed(0)} (${upnlPct>=0?"+":""}${upnlPct.toFixed(2)}%)</td><td style="color:${SELL}">${cur}${Number(p?.stop_loss||0).toFixed(2)}</td><td style="color:${BUY}">${cur}${Number(p?.take_profit||0).toFixed(2)}</td></tr>`;}).join("");
+      }
+    }
+
+    renderPortfolioEquityCurve(trades,Number(m.initial_capital||100000));
+
+    const tradeTable=$("port-trades");
+    if(tradeTable){
+      if(!trades.length){
+        tradeTable.innerHTML='<tr><td colspan="8" style="text-align:center;color:#475569;padding:20px">No closed trades yet</td></tr>';
+      }else{
+        tradeTable.innerHTML=[...trades].reverse().slice(0,20).map((t,i)=>{const pctVal=Number(t?.pnl_pct||0);const pnlColor=pctVal>0?BUY:SELL;const sym=String(t?.ticker||"--");const cur=getCurrencyForTicker(sym);const time=t?.closed_time?new Date(Number(t.closed_time)*1000).toLocaleString("en-IN",{day:"2-digit",month:"short",hour:"2-digit",minute:"2-digit"}):"--";const dir=String(t?.direction||"").toUpperCase();return `<tr><td style="color:#475569">${i+1}</td><td style="color:#64748b;font-size:11px">${time}</td><td style="font-weight:600">${sym}</td><td style="color:${dir==="LONG"?BUY:SELL}">${dir||"--"}</td><td>${cur}${Number(t?.entry_price||0).toFixed(2)}</td><td>${cur}${Number(t?.exit_price||0).toFixed(2)}</td><td style="color:${pnlColor}">${pctVal>=0?"+":""}${pctVal.toFixed(2)}%</td><td style="color:${pnlColor}">${t?.result||"--"}</td></tr>`;}).join("");
+      }
+    }
+
+    const sigTable=$("port-signals");
+    const sigRows=signals;
+    if(sigTable){
+      if(!sigRows.length){
+        sigTable.innerHTML='<tr><td colspan="6" style="text-align:center;color:#475569;padding:20px">No recent signals — start live mode to generate signals</td></tr>';
+      }else{
+        sigTable.innerHTML=sigRows.slice(0,10).map(s=>{const signalTxt=String(s?.signal||"HOLD").toUpperCase();const sigColor=signalTxt==="BUY"?BUY:signalTxt==="SELL"?SELL:HOLD;const conf=Number(s?.confidence||0);const alpha=Number(s?.alpha_score||0);const timeRaw=s?.timestamp;let tStr="--";try{const d=new Date(timeRaw);if(!Number.isNaN(d.getTime()))tStr=d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"});}catch(e){}return `<tr><td style="color:#64748b;font-size:11px">${tStr}</td><td style="font-weight:600">${s?.asset||"--"}</td><td style="color:${sigColor};font-weight:600">${signalTxt}</td><td style="color:#94a3b8">${conf.toFixed(1)}%</td><td style="color:${alpha>0?BUY:SELL}">${alpha.toFixed(3)}</td><td style="color:#94a3b8">${s?.regime||"--"}</td></tr>`;}).join("");
+      }
+    }
+  }catch(e){
+    console.error("Portfolio load error:",e);
+    showToast("⚠️ Portfolio data error: "+(e?.message||"unknown"),"warning");
   }
 }
 function newsClass(s){s=String(s||"NEUTRAL").toUpperCase();return s==="POSITIVE"?"POSITIVE":s==="NEGATIVE"?"NEGATIVE":"NEUTRAL"}
-function nAsset(){if(S.ticker.endsWith(".NS")||S.ticker.endsWith(".BO"))return"indian_stock";if(S.ticker==="BTC"||S.ticker==="ETH"||S.ticker.endsWith("USDT"))return"crypto";if(S.ticker.includes("="))return"forex";return"stock"}
-async function refreshNews(){const l=$("news-list"),s=$("sent");l.innerHTML='<div class="empty"><span class="spinner"></span> Loading news...</div>';s.innerHTML="";const r=await json(`/api/news?symbol=${encodeURIComponent(S.ticker)}&asset_class=${encodeURIComponent(nAsset())}&limit=12`),n=r?.news||[];if(!n.length){l.innerHTML='<div class="empty">Data unavailable</div>';s.innerHTML='<div class="k">No sentiment data</div>';return}let p=0,ng=0,u=0;for(const x of n){const c=newsClass(x.sentiment);if(c==="POSITIVE")p++;else if(c==="NEGATIVE")ng++;else u++}const t=Math.max(n.length,1),pp=Math.round(p/t*100),np=Math.round(ng/t*100),up=100-pp-np;s.innerHTML=`<div class="k">POSITIVE ${pp}%</div><div class="sbar"><div class="fill" style="width:${pp}%;background:${BUY}"></div></div><div class="k" style="margin-top:6px">NEGATIVE ${np}%</div><div class="sbar"><div class="fill" style="width:${np}%;background:${SELL}"></div></div><div class="k" style="margin-top:6px">NEUTRAL ${up}%</div><div class="sbar"><div class="fill" style="width:${up}%;background:${HOLD}"></div></div>`;l.innerHTML=n.map(x=>`<div class="news"><div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:4px"><span class="sent ${newsClass(x.sentiment)}">${newsClass(x.sentiment)}</span><span class="k">${(x.published||"").toString().slice(0,19).replace("T"," ")}</span></div><div><a href="${x.url||"#"}" target="_blank" rel="noopener">${x.title||"Untitled"}</a></div><div class="k">${x.source||"Unknown source"}</div></div>`).join("")}
+function nAsset(){const t=String(APP_STATE.ticker||"");if(t.endsWith(".NS")||t.endsWith(".BO")||t.startsWith("^"))return"indian_stock";if(t==="BTC"||t==="ETH"||t.endsWith("USDT"))return"crypto";if(t.includes("="))return"forex";return"us_stock"}
+function _safeText(v){return String(v==null?"":v).replace(/[<>&]/g,m=>m==="<"?"&lt;":m===">"?"&gt;":"&amp;")}
+async function loadNews(ticker,assetClass){
+  const newsContainer=$("news-container")||$("news-list");
+  const sent=$("sent");
+  if(!newsContainer)return;
+  const t=String(ticker||APP_STATE.ticker||"RELIANCE.NS");
+  const classMap={indian_stock:"indian_stock",us_stock:"us_stock",crypto:"crypto",index:"indian_stock",forex:"forex"};
+  const mappedClass=classMap[String(assetClass||nAsset()).toLowerCase()]||"indian_stock";
+  const symbol=t.replace(".NS","").replace(".BO","").replace("^","").replace("USDT","");
+  if(sent)sent.innerHTML="";
+  newsContainer.innerHTML=`<div style="color:#475569;padding:20px;text-align:center">📰 Loading news for ${_safeText(t)}...</div>`;
+  try{
+    const ctrl=new AbortController();
+    const timer=setTimeout(()=>ctrl.abort(),10000);
+    const res=await fetch(`/api/news?symbol=${encodeURIComponent(symbol)}&asset_class=${encodeURIComponent(mappedClass)}&limit=8`,{signal:ctrl.signal});
+    clearTimeout(timer);
+    if(!res.ok)throw new Error("HTTP "+res.status);
+    const data=await res.json();
+    const items=Array.isArray(data?.news)?data.news:(Array.isArray(data)?data:[]);
+    if(!items.length){
+      if(sent)sent.innerHTML='<div class="k">No sentiment data</div>';
+      newsContainer.innerHTML=`<div style="color:#475569;padding:30px;text-align:center"><div style="font-size:24px;margin-bottom:8px">📭</div><div>📭 No recent news — try refreshing or select another asset</div><div style="font-size:11px;margin-top:4px;color:#334155">Try again in a few minutes</div></div>`;
+      return;
+    }
+    const pos=items.filter(n=>String(n.sentiment||"").toUpperCase()==="POSITIVE").length;
+    const neg=items.filter(n=>String(n.sentiment||"").toUpperCase()==="NEGATIVE").length;
+    const neu=Math.max(0,items.length-pos-neg);
+    const total=Math.max(1,items.length);
+    const pp=Math.round(pos/total*100),np=Math.round(neg/total*100),up=100-pp-np;
+    if(sent){
+      sent.innerHTML=`<div class="k">POSITIVE ${pp}%</div><div class="sbar"><div class="fill" style="width:${pp}%;background:${BUY}"></div></div><div class="k" style="margin-top:6px">NEGATIVE ${np}%</div><div class="sbar"><div class="fill" style="width:${np}%;background:${SELL}"></div></div><div class="k" style="margin-top:6px">NEUTRAL ${up}%</div><div class="sbar"><div class="fill" style="width:${up}%;background:${HOLD}"></div></div>`;
+    }
+    newsContainer.innerHTML=items.map(item=>{
+      const sCls=newsClass(item.sentiment);
+      const sentColor=sCls==="POSITIVE"?BUY:sCls==="NEGATIVE"?SELL:"#94a3b8";
+      const sentBg=sCls==="POSITIVE"?"rgba(52,211,153,0.1)":sCls==="NEGATIVE"?"rgba(248,113,113,0.1)":"rgba(148,163,184,0.08)";
+      let timeStr=String(item.published||"");
+      const d=new Date(timeStr);
+      if(!Number.isNaN(d.getTime())){
+        const diff=Math.floor((Date.now()-d.getTime())/60000);
+        timeStr=diff<60?`${diff}m ago`:diff<1440?`${Math.floor(diff/60)}h ago`:`${Math.floor(diff/1440)}d ago`;
+      }
+      const summary=item.summary?`<div style="color:#64748b;font-size:11px;margin-top:4px;line-height:1.4">${_safeText(String(item.summary).slice(0,120))}${String(item.summary).length>120?"...":""}</div>`:"";
+      return `<div style="background:#1e293b;border-radius:8px;padding:12px;margin-bottom:8px;border-left:3px solid ${sentColor};transition:transform .1s" onmouseover="this.style.transform='translateX(3px)'" onmouseout="this.style.transform='translateX(0)'"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px"><span style="background:${sentBg};color:${sentColor};padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600">${sCls}</span><span style="color:#475569;font-size:10px">${_safeText(item.source||"")} • ${_safeText(timeStr)}</span></div><a href="${item.url||"#"}" target="_blank" rel="noopener" style="color:#f1f5f9;font-size:13px;font-weight:500;text-decoration:none;line-height:1.4;display:block">${_safeText(item.title||"No title")}</a>${summary}</div>`;
+    }).join("");
+  }catch(e){
+    const msg=e?.name==="AbortError"?"Request timeout":(e?.message||"Unknown error");
+    if(sent)sent.innerHTML='<div class="k">No sentiment data</div>';
+    newsContainer.innerHTML=`<div style="color:#475569;padding:30px;text-align:center"><div style="font-size:24px;margin-bottom:8px">⚠️</div><div>News unavailable</div><div style="font-size:11px;margin-top:4px">${_safeText(msg)}</div><button onclick="loadNews('${_safeText(t)}','${_safeText(mappedClass)}')" style="margin-top:12px;background:#1e293b;border:1px solid #334155;color:#94a3b8;padding:6px 16px;border-radius:6px;cursor:pointer">🔄 Retry</button></div>`;
+  }
+}
+async function refreshNews(){return loadNews(APP_STATE.ticker,APP_STATE.assetClass||nAsset())}
 
 function initFO(){const fs=$("fo-symbol"),fe=$("fo-expiry"),rf=$("fo-refresh"),pc=$("fo-pcr-chart");if(!fs||!fe||!rf||!pc)return;fs.onchange=()=>{FO.symbol=fs.value||"NIFTY";refreshFO()};fe.onchange=()=>{FO.expiry=fe.value||"nearest";refreshFO()};rf.onclick=refreshFO;foChart=LightweightCharts.createChart(pc,{width:pc.clientWidth,height:pc.clientHeight,layout:{background:{type:"solid",color:"transparent"},textColor:"#94a3b8",fontFamily:"Sora"},grid:{vertLines:{color:"rgba(148,163,184,.08)"},horzLines:{color:"rgba(148,163,184,.08)"}},rightPriceScale:{borderColor:"rgba(148,163,184,.25)"},timeScale:{borderColor:"rgba(148,163,184,.25)",timeVisible:true}});foSeries=foChart.addLineSeries({color:"#facc15",lineWidth:2});window.addEventListener("resize",()=>foChart&&foChart.applyOptions({width:pc.clientWidth,height:pc.clientHeight}))}
 function _foNum(v,d=2){const n=Number(v||0);return Number.isFinite(n)?n.toFixed(d):"--"}
@@ -1180,9 +1531,75 @@ function renderFOIv(iv){const p=Math.max(0,Math.min(100,Number(iv?.iv_percentile
 function updateFOPcrChart(pcr){if(!foSeries)return;FO.pcrHist.push(Number(pcr||0));if(FO.pcrHist.length>40)FO.pcrHist.shift();const now=Math.floor(Date.now()/1000);const data=FO.pcrHist.map((v,i)=>({time:now-(FO.pcrHist.length-1-i)*60,value:Number(v)}));foSeries.setData(data);foChart&&foChart.timeScale().fitContent()}
 async function refreshFO(){const sym=$("fo-symbol")?.value||FO.symbol||"NIFTY",exp=$("fo-expiry")?.value||FO.expiry||"nearest";FO.symbol=sym;FO.expiry=exp;const [chain,sig,iv,expiry]=await Promise.all([json(`/api/options/chain?symbol=${encodeURIComponent(sym)}&expiry=${encodeURIComponent(exp)}`),json(`/api/options/signal?symbol=${encodeURIComponent(sym)}`),json(`/api/options/iv-surface?symbol=${encodeURIComponent(sym)}&expiry=${encodeURIComponent(exp)}`),json(`/api/options/expiry?symbol=${encodeURIComponent(sym)}`)]);if(chain&&Array.isArray(chain.expiry_dates)&&chain.expiry_dates.length){const fe=$("fo-expiry"),cur=fe.value;fe.innerHTML=['<option value="nearest">nearest</option>',...chain.expiry_dates.map(d=>`<option value="${d}">${d}</option>`)].join("");if([...fe.options].some(o=>o.value===cur))fe.value=cur;else if(exp!=="nearest"&&[...fe.options].some(o=>o.value===exp))fe.value=exp;else fe.value="nearest"}renderFOChain(chain||{});renderFOSignal(sig||{},expiry||{});renderFOIv(iv||{});updateFOPcrChart(chain?.pcr||sig?.pcr||0)}
 
-function showToast(msg){const toast=document.createElement('div');toast.className='toast-notification';toast.textContent=msg;document.body.appendChild(toast);setTimeout(()=>toast.remove(),3000)}
+function showToast(msg,type='info'){
+  document.querySelectorAll('.toast-notification').forEach(t=>t.remove());
+  const colors={success:'#34d399',error:'#f87171',warning:'#f59e0b',info:'#60a5fa'};
+  if(String(msg).startsWith('✅'))type='success';
+  if(String(msg).startsWith('❌'))type='error';
+  if(String(msg).startsWith('⚠️'))type='warning';
+  const toast=document.createElement('div');
+  toast.className='toast-notification';
+  toast.style.cssText=`position:fixed;bottom:24px;right:24px;background:#1e293b;border:1px solid ${colors[type]||colors.info};border-left:4px solid ${colors[type]||colors.info};color:#f1f5f9;padding:14px 20px;border-radius:8px;z-index:9999;max-width:400px;font-size:13px;line-height:1.4;box-shadow:0 4px 20px rgba(0,0,0,0.4);animation:slideInRight .3s ease;cursor:pointer`;
+  toast.textContent=msg;
+  toast.onclick=()=>toast.remove();
+  document.body.appendChild(toast);
+  setTimeout(()=>{toast.style.animation='fadeOut .3s ease';setTimeout(()=>toast.remove(),300)},4000);
+}
+function updatePaperActiveStock(signal,conf){
+  const tickerEl=$("paper-active-ticker");
+  const signalEl=$("paper-active-signal");
+  if(tickerEl)tickerEl.textContent=APP_STATE.ticker||"--";
+  if(!signalEl)return;
+  const tk=APP_STATE.ticker||"";
+  let sigVal=sig(signal||"");
+  if(!sigVal||sigVal===""){
+    const key15=`${tk}_15m`;
+    const key1d=`${tk}_1d`;
+    const cached=signalCache.get(key15)||signalCache.get(key1d);
+    sigVal=sig(cached?.data?.signal||"HOLD");
+  }
+  signalEl.textContent=sigVal;
+  signalEl.className=`badge ${sigVal==="BUY"?"buy":sigVal==="SELL"?"sell":"hold"}`;
+  if(Number.isFinite(Number(conf))){
+    signalEl.title=`Confidence: ${Math.round(Number(conf))}%`;
+  }else{
+    signalEl.removeAttribute("title");
+  }
+}
 function renderPaperMetrics(metrics,modeValue){const m=metrics||{};$("paper-capital").textContent='₹ '+Number(m.capital||0).toLocaleString('en-IN',{maximumFractionDigits:0});const pnl=Number(m.total_pnl||0),pnlPct=Number(m.total_pnl_pct||0);const pnlEl=$("paper-pnl");pnlEl.textContent=`${pnl>=0?'+₹':'-₹'}${Math.abs(pnl).toLocaleString('en-IN',{maximumFractionDigits:0})} (${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}%)`;pnlEl.style.color=pnl>=0?BUY:SELL;$("paper-portfolio-value").textContent='₹ '+Number(m.portfolio_value||0).toLocaleString('en-IN',{maximumFractionDigits:0});$("paper-winrate").textContent=`${Number(m.win_rate||0).toFixed(1)}%`;$("paper-sharpe").textContent=Number(m.sharpe_ratio||0).toFixed(2);$("paper-maxdd").textContent=`${Number(m.max_drawdown||0).toFixed(2)}%`;const mode=String(modeValue||m.mode||"manual").toLowerCase();const badge=$("paper-mode-badge");badge.dataset.mode=mode;badge.textContent='● '+mode.toUpperCase()+' MODE';badge.className=`badge ${mode==="auto"?"buy":"hold"}`;$("paper-toggle-mode").textContent=mode==="auto"?"Switch to MANUAL":"Switch to AUTO"}
-function renderOpenPositions(positions){const tbody=$("paper-open-body");if(!tbody)return;const rows=Array.isArray(positions)?positions:[];if(!rows.length){tbody.innerHTML='<tr><td colspan="8" class="empty">No open positions</td></tr>';return}tbody.innerHTML=rows.map(p=>{const up=Number(p.unrealized_pnl||0);const upPct=Number(p.unrealized_pnl_pct||0);return `<tr><td>${p.ticker||'--'}</td><td style="color:${String(p.direction).toUpperCase()==='LONG'?BUY:SELL}">${p.direction||'--'}</td><td class="r">${inr(p.entry_price||0)}</td><td class="r">${inr(p.current_price||0)}</td><td class="r" style="color:${up>=0?BUY:SELL}">${up>=0?'+':''}${inr(up)} (${upPct>=0?'+':''}${upPct.toFixed(2)}%)</td><td class="r">${inr(p.stop_loss||0)}</td><td class="r">${inr(p.take_profit||0)}</td><td><button class="btn" onclick="closePaperPosition('${p.ticker}')">X</button></td></tr>`}).join("")}
+function renderOpenPositions(positions){
+  const tbody=$("open-positions-tbody")||$("paper-open-body");
+  if(!tbody)return;
+  const rows=Array.isArray(positions)?positions:[];
+  const countEl=$("open-pos-count");
+  if(countEl)countEl.textContent=`(${rows.length})`;
+  if(!rows.length){
+    tbody.innerHTML='<tr><td colspan="9" style="text-align:center;color:#475569;padding:20px">No open positions<br><small style="color:#334155">Click "Execute Paper Trade" to place a trade</small></td></tr>';
+    return;
+  }
+  tbody.innerHTML=rows.map(p=>{
+    const ticker=String(p?.ticker||"--");
+    const cur=getCurrencyForTicker(ticker);
+    const upnl=Number(p?.unrealized_pnl||0);
+    const upnlPct=Number(p?.unrealized_pnl_pct||0);
+    const pnlColor=upnl>=0?BUY:SELL;
+    const dirColor=String(p?.direction||"").toUpperCase()==="LONG"?BUY:SELL;
+    const heldHours=Number(p?.held_hours||0);
+    const held=heldHours?heldHours<1?`${Math.round(heldHours*60)}m`:`${heldHours.toFixed(1)}h`:"--";
+    const fmt=(v)=>`${cur}${Number(v||0).toLocaleString(cur==="$"?"en-US":"en-IN",{maximumFractionDigits:2})}`;
+    return `<tr data-pos-ticker="${ticker}">
+      <td style="font-weight:600;color:#f1f5f9">${ticker}</td>
+      <td style="color:${dirColor};font-weight:600">${p?.direction||"--"}</td>
+      <td>${fmt(p?.entry_price)}</td>
+      <td>${fmt(p?.current_price||p?.entry_price)}</td>
+      <td style="color:${pnlColor}">${upnl>=0?"+":""}${cur}${Math.abs(upnl).toFixed(0)}<br><small>(${upnlPct>=0?"+":""}${upnlPct.toFixed(2)}%)</small></td>
+      <td style="color:${SELL}">${fmt(p?.stop_loss)}</td>
+      <td style="color:${BUY}">${fmt(p?.take_profit)}</td>
+      <td style="color:#64748b;font-size:11px">${held}</td>
+      <td><button onclick="closePaperPosition('${ticker}', event)" style="background:transparent;border:1px solid #ef4444;color:#ef4444;padding:3px 8px;border-radius:4px;cursor:pointer;font-size:11px;transition:all .15s" onmouseover="this.style.background='#ef4444';this.style.color='white'" onmouseout="this.style.background='transparent';this.style.color='#ef4444'">Close</button></td>
+    </tr>`;
+  }).join("");
+}
 function renderClosedPaperTrades(trades){const tbody=$("paper-closed-body");if(!tbody)return;const rows=Array.isArray(trades)?trades:[];if(!rows.length){tbody.innerHTML='<tr><td colspan="9" class="empty">No closed trades</td></tr>';return}tbody.innerHTML=rows.slice(0,20).map((t,i)=>{const pnl=Number(t.pnl_pct||0);const result=pnl>0?'WIN':'LOSS';return `<tr><td>${i+1}</td><td>${String(t.closed_at||'').replace('T',' ').slice(0,19)}</td><td>${t.ticker||'--'}</td><td style="color:${String(t.direction).toUpperCase()==='LONG'?BUY:SELL}">${t.direction||'--'}</td><td class="r">${inr(t.entry_price||0)}</td><td class="r">${inr(t.exit_price||0)}</td><td class="r" style="color:${pnl>=0?BUY:SELL}">${pnl>=0?'+':''}${pnl.toFixed(2)}%</td><td style="color:${pnl>=0?BUY:SELL}">${result}</td><td>${t.reason||'--'}</td></tr>`}).join("")}
 async function renderPendingSignals(){const tbody=$("paper-pending-body");if(!tbody)return;const pending=await json('/api/paper/pending',{cacheTtlMs:4000,timeoutMs:7000});const rows=Array.isArray(pending)?pending:[];if(!rows.length){tbody.innerHTML='<tr><td colspan="7" class="empty">No pending signals</td></tr>';return}tbody.innerHTML=rows.map(s=>`<tr><td>${s.ticker||'--'}</td><td style="color:${String(s.signal).toUpperCase()==='LONG'?BUY:SELL}">${s.signal||'--'}</td><td class="r">${Number(s.confidence||0).toFixed(1)}%</td><td class="r">${inr(s.entry_price||0)}</td><td class="r">${inr(s.stop_loss||0)}</td><td class="r">${inr(s.take_profit||0)}</td><td><button class="btn" onclick="approvePaperSignal('${s.ticker}','${s.trade_id}')">✓ Execute</button> <button class="btn" onclick="rejectPaperSignal('${s.ticker}','${s.trade_id}')">✗</button></td></tr>`).join("")}
 async function loadPaperPortfolio(){
@@ -1194,6 +1611,7 @@ async function loadPaperPortfolio(){
     if(!m)throw new Error('No metrics');
     renderPaperMetrics(m,data.mode||'manual');
     renderOpenPositions(data.open_positions||[]);
+    updatePaperActiveStock();
     const trades=await json('/api/paper/trades?limit=50',{cacheTtlMs:8000,timeoutMs:8000});
     renderClosedPaperTrades(Array.isArray(trades)?trades:[]);
     await renderPendingSignals();
@@ -1207,11 +1625,140 @@ async function loadPaperPortfolio(){
     const ddEl=$("paper-maxdd");if(ddEl)ddEl.textContent='0.00%';
     renderOpenPositions([]);
     renderClosedPaperTrades([]);
+    updatePaperActiveStock();
   }
 }
-async function executePaperTrade(){const activeTicker=S.ticker;const signal=await json(`/api/stock-signal?ticker=${encodeURIComponent(activeTicker)}`,{cacheTtlMs:0,timeoutMs:9000});if(!signal){showToast('Signal fetch failed');return}const sg=String(signal.signal||'HOLD').toUpperCase();if(!['BUY','SELL','LONG','SHORT'].includes(sg)){showToast('No active signal for '+activeTicker);return}signal.ticker=activeTicker;const result=await json('/api/paper/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(signal),cacheTtlMs:0,timeoutMs:10000});if(result&&result.success){showToast('✅ Trade executed: '+result.direction+' '+result.ticker);await loadPaperPortfolio()}else{showToast('❌ '+(result?.message||result?.error||'Execution failed'))}}
-async function closePaperPosition(ticker){if(!confirm('Close position in '+ticker+'?'))return;const result=await json('/api/paper/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker,reason:'manual'}),cacheTtlMs:0,timeoutMs:10000});if(result&&result.success){const pnl=Number(result.pnl_pct||0);showToast(pnl>=0?`✅ Closed +${pnl.toFixed(2)}%`:`❌ Closed ${pnl.toFixed(2)}%`)}else{showToast('❌ '+(result?.error||'Close failed'))}await loadPaperPortfolio()}
-async function toggleMode(){const currentMode=String($("paper-mode-badge")?.dataset?.mode||'manual').toLowerCase();const newMode=currentMode==='auto'?'manual':'auto';const r=await json('/api/paper/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:newMode}),cacheTtlMs:0,timeoutMs:8000});if(r&&r.success){showToast(`Mode changed to ${newMode.toUpperCase()}`);await loadPaperPortfolio()}else{showToast('Mode change failed')}}
+async function updateOpenPositionPrices(){
+  const tbody=$("open-positions-tbody")||$("paper-open-body");
+  if(!tbody)return;
+  const rows=tbody.querySelectorAll("tr[data-pos-ticker]");
+  if(!rows.length)return;
+  const tickers=[...rows].map(r=>String(r.getAttribute("data-pos-ticker")||"").trim()).filter(Boolean);
+  if(!tickers.length)return;
+  try{
+    await fetch(`/api/prices/batch?tickers=${encodeURIComponent(tickers.join(","))}`);
+    await fetch('/api/paper/portfolio',{cache:'no-store'});
+    loadPaperPortfolio();
+  }catch(e){
+    console.warn("Price update failed:",e);
+  }
+}
+async function executePaperTrade(){
+  const ticker=APP_STATE.ticker;
+  if(!ticker){showToast('❌ Select a stock first');return}
+  const btn=$("paper-exec-active")||document.querySelector('.btn-execute-big');
+  if(btn){btn.textContent='⏳ Fetching signal...';btn.disabled=true}
+  try{
+    let signal=null;
+    if(String(APP_STATE.assetClass||"").toLowerCase()==="crypto"||ticker.endsWith("USDT")){
+      if(ticker==="BTCUSDT"){
+        const sigRes=await fetch(`/api/btc/signal?interval=${encodeURIComponent(APP_STATE.tf||"15m")}`);
+        signal=await sigRes.json();
+        if(signal){signal.signal=sig(signal.signal);signal.ticker='BTCUSDT';signal.asset='BTCUSDT'}
+      }else{
+        const sigRes=await fetch(`/api/focus-trade?symbol=${encodeURIComponent(ticker)}`);
+        signal=await sigRes.json();
+        if(signal){signal.signal=sig(signal.signal);signal.ticker=ticker;signal.asset=ticker}
+      }
+    }else{
+      const sigRes=await fetch(`/api/stock-signal?ticker=${encodeURIComponent(ticker)}`);
+      signal=await sigRes.json();
+    }
+    if(!signal||String(signal.signal||"HOLD").toUpperCase()==='HOLD'){
+      showToast(`⚠️ No active signal for ${ticker} (HOLD — waiting for setup)`);
+      return;
+    }
+    const payload={
+      ticker:signal.ticker||signal.asset||ticker,
+      signal:sig(signal.signal),
+      entry_price:Number(signal.entry_price||signal.close||0),
+      stop_loss:Number(signal.stop_loss||0),
+      take_profit:Number(signal.take_profit||signal.tp1||0),
+      confidence:Number(signal.confidence||50),
+      asset_class:signal.asset_class||APP_STATE.assetClass||(ticker.endsWith("USDT")?'crypto':'indian_stock'),
+      strength:signal.strength||'MODERATE'
+    };
+    if(!payload.entry_price||payload.entry_price<=0){showToast('❌ No valid entry price');return}
+    const res=await fetch('/api/paper/execute',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const result=await res.json();
+    if(result?.success){
+      const sym=currencyForTicker(result.ticker||payload.ticker,payload.asset_class);
+      showToast(`✅ ${result.direction} ${result.ticker} @ ${money(Number(result.entry_price||payload.entry_price),sym)} | SL: ${money(Number(result.stop_loss||payload.stop_loss),sym)} | TP: ${money(Number(result.take_profit||payload.take_profit),sym)}`);
+      await loadPaperPortfolio();
+    }else{
+      showToast('❌ '+(result?.message||result?.error||'Trade failed'));
+    }
+  }catch(e){
+    showToast('❌ Error: '+(e?.message||'Unknown error'));
+    console.error('Paper execute error:',e);
+  }finally{
+    if(btn){btn.textContent='⚡ Execute Paper Trade';btn.disabled=false}
+  }
+}
+async function closePaperPosition(ticker,ev){
+  if(!confirm(`Close ${ticker} position?`))return;
+  const btn=(ev&&ev.target)?ev.target:null;
+  if(btn){btn.textContent='...';btn.disabled=true}
+  try{
+    let exitPrice=0;
+    try{
+      if(String(ticker).endsWith("USDT")){
+        const pxRes=await fetch(`https://api.binance.com/api/v3/ticker/price?symbol=${encodeURIComponent(ticker)}`);
+        const px=await pxRes.json();
+        exitPrice=Number(px?.price||0);
+      }else{
+        const priceRes=await fetch(`/api/chart-data?ticker=${encodeURIComponent(ticker)}&interval=1d&period=5d`);
+        const priceData=await priceRes.json();
+        if(Array.isArray(priceData?.data)&&priceData.data.length>0){
+          exitPrice=Number(priceData.data[priceData.data.length-1].close||0);
+        }
+      }
+    }catch(e){}
+    const res=await fetch('/api/paper/close',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker,exit_price:exitPrice,reason:'manual'})});
+    const result=await res.json();
+    if(result&&result.pnl_pct!==undefined){
+      const pnlPct=Number(result.pnl_pct||0);
+      const emoji=pnlPct>0?'✅':'❌';
+      const sym=currencyForTicker(ticker,inferAssetClass(ticker,APP_STATE.assetClass));
+      showToast(`${emoji} ${ticker} closed | P&L: ${pnlPct>0?'+':''}${pnlPct.toFixed(2)}% (${money(Number(result.pnl||0),sym)})`);
+      await loadPaperPortfolio();
+    }else{
+      showToast('❌ '+(result?.error||'Close failed'));
+    }
+  }catch(e){
+    showToast('❌ Error: '+(e?.message||'Unknown error'));
+  }finally{
+    if(btn){btn.textContent='Close';btn.disabled=false}
+  }
+}
+async function toggleMode(){
+  const badge=$("paper-mode-badge");
+  const currentMode=String(badge?.dataset?.mode||'manual').toLowerCase();
+  const newMode=currentMode==='auto'?'manual':'auto';
+  if(newMode==='auto'){
+    const ok=window.confirm('Switch to AUTO mode?\n\nAUTO mode will automatically execute signals with confidence ≥ 65%.\n\nMake sure you understand the risks.');
+    if(!ok)return;
+  }
+  try{
+    const res=await fetch('/api/paper/mode',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:newMode})});
+    const result=await res.json();
+    if(result?.success){
+      if(badge){
+        badge.textContent='● '+newMode.toUpperCase()+' MODE';
+        badge.dataset.mode=newMode;
+        badge.className=`badge ${newMode==='auto'?'buy':'hold'}`;
+      }
+      const toggleBtn=$("paper-toggle-mode");
+      if(toggleBtn)toggleBtn.textContent=newMode==='auto'?'Switch to MANUAL':'Switch to AUTO';
+      showToast(newMode==='auto'?'🤖 AUTO mode ON — signals will execute automatically':'👤 MANUAL mode ON — approve signals manually');
+      await loadPaperPortfolio();
+    }else{
+      showToast('❌ Mode switch failed');
+    }
+  }catch(e){
+    showToast('❌ Mode switch failed');
+  }
+}
 async function resetPaperAccount(){if(!confirm('Reset paper account? This clears open positions.'))return;const r=await json('/api/paper/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({capital:100000}),cacheTtlMs:0,timeoutMs:8000});if(r&&r.success){showToast('Paper account reset');await loadPaperPortfolio()}else{showToast('Reset failed')}}
 async function approvePaperSignal(ticker,tradeId){const r=await json('/api/paper/approve',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker,trade_id:tradeId}),cacheTtlMs:0,timeoutMs:10000});if(r&&r.success){showToast(`✅ Executed ${ticker}`)}else{showToast(`❌ ${r?.message||'Approve failed'}`)}await loadPaperPortfolio()}
 async function rejectPaperSignal(ticker,tradeId){await json('/api/paper/reject',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticker,trade_id:tradeId}),cacheTtlMs:0,timeoutMs:8000});showToast(`Rejected ${ticker}`);await loadPaperPortfolio()}
@@ -1237,43 +1784,62 @@ function boot(){
   const pExec=$("paper-exec-active");if(pExec)pExec.onclick=executePaperTrade;
   const pToggle=$("paper-toggle-mode");if(pToggle)pToggle.onclick=toggleMode;
   const pReset=$("paper-reset");if(pReset)pReset.onclick=resetPaperAccount;
-  const paperTab=$("tab-paper");if(paperTab)paperTab.addEventListener('click',loadPaperPortfolio);
-  const orderFlowTab=$("tab-order-flow");if(orderFlowTab)orderFlowTab.addEventListener('click',()=>loadOrderFlow(S.ticker));
+  const paperTab=$("tab-paper");if(paperTab)paperTab.addEventListener('click',()=>{updatePaperActiveStock();loadPaperPortfolio()});
+  const newsTab=$("tab-news");if(newsTab)newsTab.addEventListener('click',()=>loadNews(APP_STATE.ticker,APP_STATE.assetClass||nAsset()));
+  const orderFlowTab=$("tab-order-flow");if(orderFlowTab)orderFlowTab.addEventListener('click',()=>loadOrderFlow(APP_STATE.ticker));
   const query=new URLSearchParams(location.search);
   const modeParam=String(query.get("mode")||"").toLowerCase();
   const symbolParam=String(query.get("symbol")||"").toUpperCase();
   const nameParam=String(query.get("name")||"");
-  const savedMode=localStorage.getItem("terminalMode")||"stocks";
-  const lastTicker=localStorage.getItem("lastTicker")||"RELIANCE.NS";
-  terminalMode=modeParam==="crypto"?"crypto":modeParam==="stocks"?"stocks":savedMode==="crypto"?"crypto":"stocks";
-  activeTicker=terminalMode==="stocks"?lastTicker:"BTCUSDT";
-  activeAssetClass=terminalMode==="stocks"?(isUSAsset(activeTicker)?"us_stock":"indian_stock"):"crypto";
-  activeTF="15m";S.tf=activeTF;S.ticker=activeTicker;S.name=activeTicker;
-  switchTerminalMode(terminalMode);
-  if(terminalMode==="crypto"&&symbolParam){
+  const savedMode=String(localStorage.getItem("terminalMode")||"stocks").toLowerCase();
+  const savedTicker=localStorage.getItem("lastTicker")||"RELIANCE.NS";
+  const savedClass=localStorage.getItem("lastAssetClass")||inferAssetClass(savedTicker);
+  const startMode=modeParam==="crypto"?"crypto":modeParam==="stocks"?"stocks":(savedMode==="crypto"?"crypto":"stocks");
+  APP_STATE.tf="15m";
+  if(startMode==="crypto"){
+    const cFromQuery=CRYPTO_ASSETS.find(a=>a.symbol===symbolParam||a.short===symbolParam);
+    const targetSymbol=cFromQuery?.symbol||(symbolParam&&symbolParam.endsWith("USDT")?symbolParam:"BTCUSDT");
+    APP_STATE.ticker=targetSymbol;
+    APP_STATE.assetClass="crypto";
+    APP_STATE.name=nameParam||CRYPTO_ASSETS.find(a=>a.symbol===targetSymbol)?.name||targetSymbol;
+  }else{
+    APP_STATE.ticker=savedTicker;
+    APP_STATE.assetClass=savedClass;
+    APP_STATE.name=nameParam||ALL.find(a=>a.ticker===savedTicker)?.name||savedTicker;
+  }
+  APP_STATE.mode=startMode;
+  APP_STATE.currency=currencyForTicker(APP_STATE.ticker,APP_STATE.assetClass);
+  APP_STATE.isCrypto=APP_STATE.assetClass==="crypto";
+  APP_STATE.isUS=APP_STATE.assetClass==="us_stock";
+  APP_STATE.isIndia=APP_STATE.assetClass==="indian_stock"||APP_STATE.assetClass==="index";
+  syncLegacyFromState();
+  switchTerminalMode(APP_STATE.mode);
+  updatePaperActiveStock();
+  if(APP_STATE.mode==="crypto"&&symbolParam){
     const c=CRYPTO_ASSETS.find(a=>a.symbol===symbolParam||a.short===symbolParam);
     if(c){
       selectCryptoAsset(c.symbol,nameParam||c.name);
     }
   }
   updateMarketStatus();
-  setTimeout(()=>{refreshPortfolio()},1500);
-  if(terminalMode==="stocks"){
+  setTimeout(()=>{loadPortfolio()},1500);
+  if(APP_STATE.mode==="stocks"){
     setTimeout(()=>refreshWatch({fast:true}),500);
     setTimeout(()=>loadPaperPortfolio(),1500);
   }else{
     setTimeout(()=>loadFearAndGreed(),1000);
   }
-  setTimeout(()=>{if(terminalMode==="crypto"){loadCryptoSignal()}},2000);
+  setTimeout(()=>{if(APP_STATE.mode==="crypto"){loadCryptoSignal(APP_STATE.ticker)}},2000);
 
-  setInterval(()=>{if(terminalMode==="stocks"){signal()}else{loadCryptoSignal()}},15000);
-  setInterval(()=>{if(terminalMode==="stocks")refreshWatch({fast:true})},60000);
-  setInterval(()=>{if(terminalMode==="stocks"){loadOrderFlow(S.ticker)}else{renderCryptoOrderFlow()}},60000);
-  setInterval(()=>{if(terminalMode==="stocks"){refreshTopBar()}else{loadCryptoPrices();loadCryptoStats()}},30000);
-  setInterval(()=>{if(terminalMode==="stocks"){refreshNews()}else{refreshCryptoNews()}},300000);
+  setInterval(()=>{if(!document.hidden){if(APP_STATE.mode==="stocks"){signal()}else{loadCryptoSignal(APP_STATE.ticker)}}},15000);
+  setInterval(()=>{if(APP_STATE.mode==="stocks")refreshWatch({fast:true})},60000);
+  setInterval(()=>{if(APP_STATE.mode==="stocks"){loadOrderFlow(APP_STATE.ticker)}else{renderCryptoOrderFlow()}},60000);
+  setInterval(()=>{if(APP_STATE.mode==="stocks"){refreshTopBar()}else{loadCryptoPrices();loadCryptoStats()}},30000);
+  setInterval(()=>{if(APP_STATE.mode==="stocks"){loadNews(APP_STATE.ticker,APP_STATE.assetClass||nAsset())}else{refreshCryptoNews()}},300000);
   setInterval(()=>{const activeStockTab=document.querySelector('#stocks-tabs .btab.active')?.dataset?.b;const activeCryptoTab=document.querySelector('#crypto-tabs .ctab.active')?.dataset?.cb;if(activeStockTab==="paper"||activeCryptoTab==="paper"){loadPaperPortfolio()}},30000);
+  setInterval(updateOpenPositionPrices,30000);
   setInterval(updateMarketStatus,30000);
-  setInterval(()=>{const p=document.querySelector('#stocks-tabs .btab.active')?.dataset?.b;if(terminalMode==="stocks"&&p==="fo")refreshFO()},60000);
+  setInterval(()=>{const p=document.querySelector('#stocks-tabs .btab.active')?.dataset?.b;if(APP_STATE.mode==="stocks"&&p==="fo")refreshFO()},60000);
 }
 boot();
 </script>

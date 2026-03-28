@@ -10,6 +10,7 @@ from datetime import datetime
 import asyncio
 import json
 import logging
+import math
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Union
@@ -260,6 +261,36 @@ def _round4(val: object) -> float:
     return round(float(val), 4)  # type: ignore[call-overload]
 
 
+def _clean_factor_scores(raw: Any) -> Dict[str, float]:
+    """Return factor scores as a plain float dict."""
+    parsed: Any = raw if raw is not None else {}
+    if isinstance(parsed, str):
+        try:
+            parsed = json.loads(parsed)
+        except Exception:
+            parsed = {}
+    if not isinstance(parsed, dict):
+        return {}
+    out: Dict[str, float] = {}
+    for k, v in parsed.items():
+        try:
+            out[str(k)] = float(v)
+        except Exception:
+            continue
+    return out
+
+
+def _attach_factor_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach normalized factor_scores + explicit F1/F2/F3/F5 fields."""
+    clean = _clean_factor_scores(payload.get("factor_scores", {}))
+    payload["factor_scores"] = clean
+    payload["F1_momentum"] = float(clean.get("F1", 0.0))
+    payload["F2_mean_rev"] = float(clean.get("F2", 0.0))
+    payload["F3_volume"] = float(clean.get("F3", 0.0))
+    payload["F5_volatility"] = float(clean.get("F5", 0.0))
+    return payload
+
+
 def _is_us_stock_ticker(ticker: str) -> bool:
     """
     Heuristic for US equities in this dashboard context:
@@ -287,6 +318,117 @@ def _get_options_engine() -> OptionsEngine:
     if _options_engine is None:
         _options_engine = OptionsEngine()
     return _options_engine
+
+
+def _calc_max_pain(calls: List[Dict[str, Any]], puts: List[Dict[str, Any]]) -> float:
+    """Calculate max-pain strike from CE/PE OI buckets."""
+    try:
+        strikes = sorted(
+            {
+                float(c.get("strike", 0.0))
+                for c in calls
+                if isinstance(c.get("strike"), (int, float))
+            }
+            | {
+                float(p.get("strike", 0.0))
+                for p in puts
+                if isinstance(p.get("strike"), (int, float))
+            }
+        )
+        if not strikes:
+            return 0.0
+
+        min_pain = float("inf")
+        max_pain_strike = strikes[len(strikes) // 2]
+        for s in strikes:
+            call_pain = sum(max(0.0, s - float(c.get("strike", 0.0))) * float(c.get("oi", 0.0)) for c in calls)
+            put_pain = sum(max(0.0, float(p.get("strike", 0.0)) - s) * float(p.get("oi", 0.0)) for p in puts)
+            total = call_pain + put_pain
+            if total < min_pain:
+                min_pain = total
+                max_pain_strike = s
+        return float(max_pain_strike)
+    except Exception:
+        return 0.0
+
+
+def _synthetic_option_chain(symbol: str) -> Dict[str, Any]:
+    """
+    Fallback synthetic option chain when NSE blocks API access.
+    Uses yfinance spot and approximates CE/PE surface around ATM.
+    """
+    import yfinance as yf  # type: ignore[import]
+
+    ticker_map = {
+        "NIFTY": "^NSEI",
+        "BANKNIFTY": "^NSEBANK",
+        "FINNIFTY": "NIFTY_FIN_SERVICE.NS",
+    }
+    sym = (symbol or "NIFTY").upper().strip()
+    yf_ticker = ticker_map.get(sym, f"{sym}.NS")
+
+    try:
+        hist = yf.Ticker(yf_ticker).history(period="1d")
+        spot = float(hist["Close"].iloc[-1]) if not hist.empty else 22000.0
+    except Exception:
+        spot = 22000.0
+
+    round_to = 100 if spot > 20000 else 50
+    atm = round(spot / round_to) * round_to
+    strikes = [atm + (i * round_to) for i in range(-10, 11)]
+    calls: List[Dict[str, Any]] = []
+    puts: List[Dict[str, Any]] = []
+
+    for strike in strikes:
+        diff = float(strike - spot)
+        iv = 15.0 + abs(diff / max(spot, 1.0)) * 50.0
+
+        if diff <= 0:
+            call_ltp = max(0.0, spot - strike) + iv / 100.0 * 50.0
+        else:
+            call_ltp = max(5.0, (iv / 100.0) * spot * 0.3 * math.exp(-abs(diff) / max(spot, 1.0) * 5.0))
+
+        if diff >= 0:
+            put_ltp = max(0.0, strike - spot) + iv / 100.0 * 50.0
+        else:
+            put_ltp = max(5.0, (iv / 100.0) * spot * 0.3 * math.exp(-abs(diff) / max(spot, 1.0) * 5.0))
+
+        oi = max(100, int(10000 * math.exp(-abs(diff) / max(spot, 1.0) * 20.0)))
+        calls.append(
+            {
+                "strike": float(strike),
+                "oi": oi,
+                "oi_change": int(oi * 0.05),
+                "iv": round(iv, 1),
+                "ltp": round(call_ltp, 2),
+                "volume": oi * 2,
+            }
+        )
+        puts.append(
+            {
+                "strike": float(strike),
+                "oi": oi,
+                "oi_change": int(oi * 0.03),
+                "iv": round(iv, 1),
+                "ltp": round(put_ltp, 2),
+                "volume": oi * 2,
+            }
+        )
+
+    total_put_oi = float(sum(p["oi"] for p in puts))
+    total_call_oi = float(sum(c["oi"] for c in calls))
+    pcr = total_put_oi / max(total_call_oi, 1.0)
+    return {
+        "symbol": symbol,
+        "spot_price": round(spot, 2),
+        "expiry_dates": ["Synthetic"],
+        "selected_expiry": "Synthetic",
+        "calls": calls,
+        "puts": puts,
+        "pcr": round(pcr, 4),
+        "max_pain": _calc_max_pain(calls, puts),
+        "source": "synthetic",
+    }
 
 
 # ------------------------------------------------------------------
@@ -454,22 +596,117 @@ def get_news(symbol: str = "BTC", asset_class: str = "crypto", limit: int = 8):
 
 
 @app.get("/api/options/chain")
-def get_options_chain(symbol: str = "NIFTY", expiry: str = "nearest"):
+async def get_options_chain(symbol: str = "NIFTY", expiry: str = "nearest"):
+    """
+    Fetch NSE option chain with proper browser headers + session cookie.
+    Falls back to synthetic chain when NSE blocks requests.
+    """
+    import requests  # type: ignore[import]
+
+    sym_upper = (symbol or "NIFTY").upper().strip()
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "*/*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://www.nseindia.com/option-chain",
+        "Connection": "keep-alive",
+    }
+    session = requests.Session()
     try:
-        eng = _get_options_engine()
-        return eng.get_option_chain(symbol=symbol, expiry=expiry)
-    except Exception as e:
-        logger.warning("Options chain endpoint failed for %s: %s", symbol, e)
+        # Prime cookies before API hit.
+        session.get("https://www.nseindia.com", headers=headers, timeout=10)
+        session.get("https://www.nseindia.com/option-chain", headers=headers, timeout=10)
+
+        url_map = {
+            "NIFTY": "https://www.nseindia.com/api/option-chain-indices?symbol=NIFTY",
+            "BANKNIFTY": "https://www.nseindia.com/api/option-chain-indices?symbol=BANKNIFTY",
+            "FINNIFTY": "https://www.nseindia.com/api/option-chain-indices?symbol=FINNIFTY",
+        }
+        if sym_upper in url_map:
+            url = url_map[sym_upper]
+        else:
+            url = f"https://www.nseindia.com/api/option-chain-equities?symbol={sym_upper}"
+
+        response = session.get(url, headers=headers, timeout=15)
+        if response.status_code != 200:
+            return _synthetic_option_chain(symbol)
+
+        data = response.json()
+        records = data.get("records", {}) if isinstance(data, dict) else {}
+        if not records:
+            return _synthetic_option_chain(symbol)
+
+        spot = float(records.get("underlyingValue", 0.0) or 0.0)
+        expiry_dates = list(records.get("expiryDates", []) or [])
+        selected_expiry = None
+        if expiry_dates:
+            req_exp = str(expiry or "nearest").strip()
+            if req_exp and req_exp.lower() != "nearest" and req_exp in expiry_dates:
+                selected_expiry = req_exp
+            else:
+                selected_expiry = expiry_dates[0]
+
+        calls: List[Dict[str, Any]] = []
+        puts: List[Dict[str, Any]] = []
+        for item in list(records.get("data", []) or []):
+            if selected_expiry and item.get("expiryDate") != selected_expiry:
+                continue
+            strike = float(item.get("strikePrice", 0.0) or 0.0)
+            ce = item.get("CE")
+            pe = item.get("PE")
+            if isinstance(ce, dict):
+                calls.append(
+                    {
+                        "strike": strike,
+                        "oi": int(ce.get("openInterest", 0) or 0),
+                        "oi_change": int(ce.get("changeinOpenInterest", 0) or 0),
+                        "iv": float(ce.get("impliedVolatility", 0.0) or 0.0),
+                        "ltp": float(ce.get("lastPrice", 0.0) or 0.0),
+                        "volume": int(ce.get("totalTradedVolume", 0) or 0),
+                    }
+                )
+            if isinstance(pe, dict):
+                puts.append(
+                    {
+                        "strike": strike,
+                        "oi": int(pe.get("openInterest", 0) or 0),
+                        "oi_change": int(pe.get("changeinOpenInterest", 0) or 0),
+                        "iv": float(pe.get("impliedVolatility", 0.0) or 0.0),
+                        "ltp": float(pe.get("lastPrice", 0.0) or 0.0),
+                        "volume": int(pe.get("totalTradedVolume", 0) or 0),
+                    }
+                )
+
+        if not calls and not puts:
+            return _synthetic_option_chain(symbol)
+
+        total_put_oi = float(sum(p.get("oi", 0.0) for p in puts))
+        total_call_oi = float(sum(c.get("oi", 0.0) for c in calls))
+        pcr = total_put_oi / max(total_call_oi, 1.0)
         return {
             "symbol": symbol,
-            "calls": [],
-            "puts": [],
-            "spot_price": 0.0,
-            "expiry_dates": [],
-            "pcr": 0.0,
-            "max_pain": 0.0,
-            "error": str(e),
+            "spot_price": round(spot, 2),
+            "expiry_dates": expiry_dates,
+            "selected_expiry": selected_expiry,
+            "calls": calls,
+            "puts": puts,
+            "pcr": round(pcr, 4),
+            "max_pain": _calc_max_pain(calls, puts),
+            "source": "NSE",
         }
+    except Exception as e:
+        logger.warning("NSE option chain failed for %s: %s", symbol, e)
+        return _synthetic_option_chain(symbol)
+    finally:
+        try:
+            session.close()
+        except Exception:
+            pass
 
 
 @app.get("/api/options/signal")
@@ -874,7 +1111,7 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
         signals = _store.get_recent_signals(limit=200)
         for s in signals:
             if s.get("asset") == ticker or s.get("asset", "").replace(".NS", "") == ticker.replace(".NS", ""):
-                return s
+                return _attach_factor_fields(dict(s))
 
     # US stocks: Alpha Vantage signal first, yfinance fallback next.
     if _is_us_stock_ticker(ticker):
@@ -883,7 +1120,7 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
 
             av_signal = get_us_stock_signal(ticker)
             if av_signal:
-                return av_signal
+                return _attach_factor_fields(dict(av_signal))
         except Exception as e:
             logger.warning("Alpha Vantage signal fallback for %s: %s", ticker, e)
 
@@ -900,7 +1137,7 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
             # Try daily data
             df = yf.download(ticker, period="6mo", progress=False)
         if df.empty or len(df) < 30:
-            return {"ticker": ticker, "signal": "HOLD", "confidence": 50, "alpha_score": 0.0, "message": "Insufficient data"}
+            return _attach_factor_fields({"ticker": ticker, "signal": "HOLD", "confidence": 50, "alpha_score": 0.0, "message": "Insufficient data"})
 
         # Handle MultiIndex
         if hasattr(df.columns, 'levels'):
@@ -910,7 +1147,7 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
         tf = "daily" if len(df) > 100 else "intraday"
         feat_df = eng.compute_all_features(df, timeframe=tf, ticker=ticker)
         if feat_df.empty:
-            return {"ticker": ticker, "signal": "HOLD", "confidence": 50, "alpha_score": 0.0, "message": "Feature computation failed"}
+            return _attach_factor_fields({"ticker": ticker, "signal": "HOLD", "confidence": 50, "alpha_score": 0.0, "message": "Feature computation failed"})
 
         # Very low threshold for dashboard activity demonstration
         asset_class = "indian_stock" if ticker.upper().endswith((".NS", ".BO")) else "us_stock"
@@ -940,7 +1177,7 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
         sl: float = entry_price - 2 * atr if result["signal"] == "BUY" else entry_price + 2 * atr
         tp: float = entry_price + 3 * atr if result["signal"] == "BUY" else entry_price - 3 * atr
 
-        return {
+        return _attach_factor_fields({
             "ticker": ticker,
             "asset": ticker,
             "signal": signal_out,
@@ -957,9 +1194,9 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
             "sqs_components": sqs_obj.components,
             "message": sqs_message,
             "live": True,
-        }
+        })
     except Exception as e:
-        return {"ticker": ticker, "signal": "HOLD", "confidence": 50, "alpha_score": 0.0, "message": str(e)}
+        return _attach_factor_fields({"ticker": ticker, "signal": "HOLD", "confidence": 50, "alpha_score": 0.0, "message": str(e)})
 
 
 @app.get("/api/signal-quality")
@@ -1115,6 +1352,43 @@ def get_market_overview():
         except Exception:
             results[name] = {"price": 0, "change_pct": 0}
     return results
+
+
+@app.get("/api/prices/batch")
+async def get_batch_prices(tickers: str):
+    """
+    Get current prices for multiple tickers.
+    Query: tickers=AAPL,RELIANCE.NS,BTCUSDT
+    """
+    import requests  # type: ignore[import]
+    import yfinance as yf  # type: ignore[import]
+
+    ticker_list = [t.strip().upper() for t in str(tickers or "").split(",") if t.strip()]
+    result: Dict[str, Union[float, None]] = {}
+    for ticker in ticker_list[:20]:
+        try:
+            if "USDT" in ticker:
+                r = requests.get(
+                    "https://api.binance.com/api/v3/ticker/price",
+                    params={"symbol": ticker},
+                    timeout=5,
+                )
+                if r.ok:
+                    payload = r.json()
+                    result[ticker] = float(payload.get("price", 0.0) or 0.0)
+                else:
+                    result[ticker] = None
+            else:
+                hist = yf.Ticker(ticker).history(period="1d", interval="1m")
+                if not hist.empty:
+                    result[ticker] = float(hist["Close"].iloc[-1])
+                else:
+                    # fallback to latest daily close
+                    hist_d = yf.Ticker(ticker).history(period="5d", interval="1d")
+                    result[ticker] = float(hist_d["Close"].iloc[-1]) if not hist_d.empty else None
+        except Exception:
+            result[ticker] = None
+    return result
 
 @app.get("/api/signals")
 def get_signals(limit: int = 50):
