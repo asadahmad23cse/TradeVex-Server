@@ -266,12 +266,28 @@ def get_btc_history(interval: str = "1d"):
     return _btc_service.get_all_time_history(interval=interval)
 
 
+@app.get("/api/btc/candles")
+def get_btc_candles(interval: str = "15m", limit: int = 200):
+    """Recent BTCUSDT candles for trading chart windows."""
+    if _btc_service is None:
+        raise HTTPException(503, "BTC service not initialised")
+    return _btc_service.get_recent_candles(interval=interval, limit=limit)
+
+
 @app.get("/api/btc/signal")
 def get_btc_signal(interval: str = "5m"):
     """Real-time BTC signal using the project's quant factor algorithm."""
     if _btc_service is None:
         raise HTTPException(503, "BTC service not initialised")
     return _btc_service.get_realtime_signal(interval=interval)
+
+
+@app.get("/api/btc/markers")
+def get_btc_markers(interval: str = "1d", limit: int = 1000):
+    """Historical LONG/SHORT markers for BTC chart overlay."""
+    if _btc_service is None:
+        raise HTTPException(503, "BTC service not initialised")
+    return _btc_service.get_signal_markers(interval=interval, limit=limit)
 
 
 @app.get("/api/stock-signal")

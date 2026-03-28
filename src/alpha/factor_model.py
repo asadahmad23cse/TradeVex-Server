@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 _orderflow = OrderFlowAnalyser()
 
-ALPHA_THRESHOLD = 0.30
+ALPHA_THRESHOLD = 0.45
 IC_WINDOW = 60
 TURNOVER_AUTOCORR_THRESHOLD = 0.30
 
@@ -90,6 +90,22 @@ def _turnover_penalty(factor: pd.Series, lookback: int = 60) -> tuple[float, flo
         return 1.0, autocorr
     penalty = float(np.clip(max(autocorr, 0.0) / TURNOVER_AUTOCORR_THRESHOLD, 0.25, 1.0))
     return penalty, autocorr
+
+
+def _latest_usable_ic(ic_series: pd.Series) -> float:
+    """
+    Return the latest usable IC value.
+
+    We intentionally ignore the trailing bar because fwd returns use shift(-1),
+    making the final timestamp non-actionable.
+    """
+    if ic_series.empty:
+        return 0.0
+    usable = ic_series.iloc[:-1] if len(ic_series) > 1 else ic_series
+    if usable.empty:
+        return 0.0
+    val = float(usable.iloc[-1])
+    return val if np.isfinite(val) else 0.0
 
 
 class AlphaFactorModel:
@@ -233,7 +249,7 @@ class AlphaFactorModel:
         ics = {}
         for name, factor in [("F1", f1), ("F2", f2), ("F3", f3), ("F4", f4), ("F5", f5), ("F8", f8)]:
             ic_series = _rolling_ic(factor, fwd_ret, self.ic_window)
-            ics[name] = float(ic_series.iloc[-1]) if len(ic_series) > 0 else 0.0
+            ics[name] = _latest_usable_ic(ic_series)
 
         return ics
 
@@ -279,11 +295,12 @@ class AlphaFactorModel:
         factor_meta: dict[str, dict] = {}
         for name, factor in factors.items():
             ic_series = _rolling_ic(factor, fwd_ret, self.ic_window)
-            latest_ic = float(ic_series.iloc[-1]) if not ic_series.empty else 0.0
+            latest_ic = _latest_usable_ic(ic_series)
             ci_center, ci_low, ci_high = _bootstrap_ic_ci(factor, fwd_ret)
             penalty, autocorr = _turnover_penalty(factor)
             effective_ic = latest_ic * penalty
-            if ci_low < -0.03:
+            # Zero-weight only when the confidence interval is strictly negative.
+            if ci_high < 0.0:
                 effective_ic = 0.0
             ics[name] = effective_ic
             factor_meta[name] = {
@@ -293,7 +310,7 @@ class AlphaFactorModel:
                 "ic_ci_high": round(ci_high, 4),
                 "lag1_autocorr": round(autocorr, 4),
                 "turnover_penalty": round(penalty, 4),
-                "zero_weighted": ci_low < -0.03,
+                "zero_weighted": ci_high < 0.0,
             }
 
         # Latest factor scores (last bar)
