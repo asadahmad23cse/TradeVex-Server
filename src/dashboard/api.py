@@ -1072,3 +1072,8 @@ def regime_page():
 def focus_page():
     return _read_html("focus.html")
 
+
+@app.get("/stock-terminal", response_class=HTMLResponse)
+def stock_terminal_page():
+    return _read_html("stock_terminal.html")
+
