@@ -168,6 +168,28 @@ def _round4(val: object) -> float:
     return round(float(val), 4)  # type: ignore[call-overload]
 
 
+def _is_us_stock_ticker(ticker: str) -> bool:
+    """
+    Heuristic for US equities in this dashboard context:
+    - not Indian suffix (.NS/.BO)
+    - not index symbols (^...)
+    - not FX pairs (...=X)
+    - not crypto symbols used elsewhere
+    """
+    t = (ticker or "").upper().strip()
+    if not t:
+        return False
+    if t.endswith(".NS") or t.endswith(".BO"):
+        return False
+    if t.startswith("^"):
+        return False
+    if "=" in t:
+        return False
+    if t in {"BTC", "ETH", "XAUUSD", "XAGUSD"}:
+        return False
+    return True
+
+
 # ------------------------------------------------------------------
 # REST endpoints (data for dashboard pages)
 # ------------------------------------------------------------------
@@ -198,9 +220,24 @@ def get_chart_data(ticker: str = "RELIANCE.NS", interval: str = "5m", period: st
     interval: 1m, 5m, 15m, 1h, 1d
     period: 1d, 5d, 1mo, 3mo, 6mo, 1y
     """
-    import yfinance as yf  # type: ignore[import]
-
     try:
+        # US stocks: Alpha Vantage first, then yfinance fallback.
+        if _is_us_stock_ticker(ticker):
+            try:
+                from src.data.alpha_vantage import get_daily_candles, get_intraday_candles  # type: ignore[import]
+
+                iv = (interval or "").lower().strip()
+                av_data = (
+                    get_intraday_candles(ticker, interval=iv)
+                    if iv in {"5m", "15m", "1h", "5min", "15min", "60min"}
+                    else get_daily_candles(ticker)
+                )
+                if av_data:
+                    return {"ticker": ticker, "data": av_data}
+            except Exception as e:
+                logger.warning("Alpha Vantage chart fallback for %s: %s", ticker, e)
+
+        import yfinance as yf  # type: ignore[import]
         df = yf.download(ticker, interval=interval, period=period, progress=False)
         if df.empty:
             return {"ticker": ticker, "data": [], "error": "No data"}
@@ -315,6 +352,17 @@ def get_news(symbol: str = "BTC", asset_class: str = "crypto", limit: int = 8):
     if cls in {"indian_stock", "us_stock", "stocks"}:
         cls = "stock"
     return {"news": get_news_for_asset(symbol, cls, limit)}
+
+
+@app.get("/api/av/status")
+def get_alpha_vantage_status():
+    try:
+        from src.data.alpha_vantage import get_status  # type: ignore[import]
+
+        return get_status()
+    except Exception as e:
+        logger.warning("Alpha Vantage status unavailable: %s", e)
+        return {"remaining_requests": 0, "daily_limit": 23}
 
 
 @app.post("/api/backtest")
@@ -525,6 +573,17 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
         for s in signals:
             if s.get("asset") == ticker or s.get("asset", "").replace(".NS", "") == ticker.replace(".NS", ""):
                 return s
+
+    # US stocks: Alpha Vantage signal first, yfinance fallback next.
+    if _is_us_stock_ticker(ticker):
+        try:
+            from src.data.alpha_vantage import get_us_stock_signal  # type: ignore[import]
+
+            av_signal = get_us_stock_signal(ticker)
+            if av_signal:
+                return av_signal
+        except Exception as e:
+            logger.warning("Alpha Vantage signal fallback for %s: %s", ticker, e)
 
     # Live computation fallback
     try:
