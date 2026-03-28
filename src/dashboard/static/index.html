@@ -92,6 +92,53 @@ body{
 .conf-wrap{display:flex;align-items:center;gap:8px;width:100%}
 .conf-track{flex:1;height:10px;border-radius:999px;background:rgba(148,163,184,.2);overflow:hidden;border:1px solid rgba(148,163,184,.25)}
 .conf-fill{height:100%;width:0;background:var(--hold);transition:width .2s ease}
+.action-box{
+  padding:16px;
+  border-radius:12px;
+  text-align:center;
+  margin-bottom:12px;
+  border:2px solid rgba(41,121,255,.55);
+  background:
+    linear-gradient(135deg, rgba(41,121,255,.14), rgba(41,121,255,.06));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 8px 24px rgba(2,6,23,.35);
+}
+.wait-insights{
+  display:none;
+  padding:10px;
+  border-radius:10px;
+  border:1px solid rgba(41,121,255,.28);
+  background: rgba(14, 27, 49, .62);
+}
+.wait-title{
+  font-size:12px;
+  color:#c7dcff;
+  font-weight:700;
+  letter-spacing:.02em;
+  margin-bottom:8px;
+}
+.wait-tags{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  margin-bottom:8px;
+}
+.wait-tag{
+  padding:4px 8px;
+  border-radius:999px;
+  border:1px solid rgba(148,163,184,.35);
+  background:rgba(15,23,42,.65);
+  color:#d5e5ff;
+  font-size:11px;
+  line-height:1;
+}
+.wait-meta{
+  display:flex;
+  justify-content:space-between;
+  gap:8px;
+  font-size:11px;
+  color:#8fb7ff;
+  font-family:"JetBrains Mono",monospace;
+}
 
 @keyframes pulseGreen {
   0%, 100% { box-shadow: 0 0 0 0 rgba(0,200,83,0.4); }
@@ -223,9 +270,19 @@ body{
           <div class="sub" id="sig-source">source: --</div>
         </div>
         <div class="side-body">
-          <div id="action-box" style="padding:16px; border-radius:8px; text-align:center; margin-bottom:12px;">
+          <div id="action-box" class="action-box">
             <div id="action-text" style="font-size:22px; font-weight:700; letter-spacing:1px;">WAITING</div>
             <div id="action-detail" style="font-size:12px; margin-top:4px; opacity:0.8;"></div>
+          </div>
+          <div id="wait-insights" class="wait-insights">
+            <div class="wait-title">NO-TRADE FILTERS ACTIVE</div>
+            <div id="wait-tags" class="wait-tags">
+              <span class="wait-tag">Scanning live market conditions</span>
+            </div>
+            <div class="wait-meta">
+              <span id="wait-confidence">AI confidence: --</span>
+              <span id="wait-next">next scan: 15s</span>
+            </div>
           </div>
           <div class="signal"><div class="sig-row"><span>Signal</span><span id="sig" class="sig-val hold">HOLD</span></div></div>
           <div class="signal"><div class="sig-row"><span>Validated</span><span id="sigv" class="sig-val hold">HOLD</span></div></div>
@@ -349,7 +406,13 @@ const BINANCE_REST_TICKER = "https://api.binance.com/api/v3/ticker/price?symbol=
 const SIGNAL_REFRESH_MS = 15000;
 const REST_REFRESH_MS = 15000;
 const RECONNECT_MS = 3000;
-const CANDLE_LIMIT = 200;
+const LIMIT_MAP = {
+  "5m": 500,
+  "15m": 400,
+  "1h": 300,
+  "4h": 200,
+  "1d": 365,
+};
 const INTERVAL_SECONDS = {"5m":300,"15m":900,"1h":3600,"4h":14400,"1d":86400};
 
 let chart, candleSeries, volumeSeries, ema21Series, ema50Series;
@@ -411,6 +474,25 @@ function setOf(id, val, color){
 function fmt(v){return Number(v).toLocaleString("en-US",{maximumFractionDigits:2});}
 function fmtPx(v){if(v===null||v===undefined||Number.isNaN(Number(v))) return "—"; return fmt(v);}
 function fmtPct(v){if(v===null||v===undefined||Number.isNaN(Number(v))) return "—"; return `${v>0?"+":""}${Number(v).toFixed(2)}%`;}
+function escapeHtml(value){
+  return String(value ?? "")
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#39;");
+}
+function parseWaitReasons(reason){
+  const raw = String(reason || "").trim();
+  if(!raw) return [];
+  let normalized = raw.replace(/^HOLD:\s*/i, "").replace(/^Signal\s+\w+\s+blocked:\s*/i, "");
+  normalized = normalized.replaceAll("|", ",");
+  return normalized
+    .split(",")
+    .map(x => x.trim())
+    .filter(Boolean)
+    .slice(0, 4);
+}
 function updateSparkline(price){
   if(!sparkCtx || !Number.isFinite(Number(price))) return;
   sparkPrices.push(Number(price));
@@ -716,7 +798,8 @@ function updateLiveSignalMarker(signalPayload){
 }
 
 async function loadCandles(){
-  const res = await fetch(`/api/btc/candles?interval=${encodeURIComponent(currentInterval)}&limit=${CANDLE_LIMIT}`, {cache:"no-store"});
+  const limit = LIMIT_MAP[currentInterval] || 200;
+  const res = await fetch(`/api/btc/candles?interval=${encodeURIComponent(currentInterval)}&limit=${limit}`, {cache:"no-store"});
   if(!res.ok) throw new Error(`candles HTTP ${res.status}`);
   const json = await res.json();
   const data=(json.data||[]).map(d=>({
@@ -811,6 +894,10 @@ function applySignalPayload(s, source){
   const box = document.getElementById("action-box");
   const txt = document.getElementById("action-text");
   const det = document.getElementById("action-detail");
+  const waitInsights = document.getElementById("wait-insights");
+  const waitTags = document.getElementById("wait-tags");
+  const waitConf = document.getElementById("wait-confidence");
+  const waitNext = document.getElementById("wait-next");
   box.classList.remove("pulse-long", "pulse-short", "pulse-hold");
   if(sig === "LONG" && Boolean(s.validated)){
     box.style.background = "rgba(0,200,83,0.15)";
@@ -820,6 +907,7 @@ function applySignalPayload(s, source){
     det.textContent = `Entry: $${fmtPx(s.entry_price)} | SL: $${fmtPx(s.stop_loss)} | Target: $${fmtPx(s.tp1)}`;
     det.style.color = "#00c853";
     box.classList.add("pulse-long");
+    waitInsights.style.display = "none";
   }else if(sig === "SHORT" && Boolean(s.validated)){
     box.style.background = "rgba(255,23,68,0.15)";
     box.style.border = "2px solid #ff1744";
@@ -828,14 +916,23 @@ function applySignalPayload(s, source){
     det.textContent = `Entry: $${fmtPx(s.entry_price)} | SL: $${fmtPx(s.stop_loss)} | Target: $${fmtPx(s.tp1)}`;
     det.style.color = "#ff1744";
     box.classList.add("pulse-short");
+    waitInsights.style.display = "none";
   }else{
     box.style.background = "rgba(41,121,255,0.1)";
     box.style.border = "2px solid #2979ff";
     txt.style.color = "#2979ff";
-    txt.textContent = "⏸ WAIT";
-    det.textContent = s.reason || "No high-probability setup found";
+    txt.textContent = "WAIT / NO TRADE";
+    const blockers = parseWaitReasons(s.reason);
+    const headline = blockers.length ? blockers[0] : "No high-probability setup found";
+    det.textContent = headline;
     det.style.color = "#8b949e";
     box.classList.add("pulse-hold");
+    waitInsights.style.display = "block";
+    waitConf.textContent = `AI confidence: ${Math.round(conf)}%`;
+    waitNext.textContent = `next scan: ${Math.round(SIGNAL_REFRESH_MS/1000)}s`;
+    waitTags.innerHTML = (blockers.length ? blockers : ["Scanning live market conditions"]).map(tag =>
+      `<span class="wait-tag">${escapeHtml(tag)}</span>`
+    ).join("");
   }
 
   if(active==="HOLD"){

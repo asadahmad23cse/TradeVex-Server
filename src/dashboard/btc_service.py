@@ -282,14 +282,16 @@ class BitcoinMarketService:
         elif signal == "SHORT":
             stop = entry + sl_mult * atr
 
+        # Force minimum 0.3% SL distance
         if signal == "LONG" and stop is not None:
-            min_sl = entry * 0.997
-            if stop > min_sl:
-                stop = min_sl
-        elif signal == "SHORT" and stop is not None:
-            max_sl = entry * 1.003
-            if stop < max_sl:
-                stop = max_sl
+            min_distance = entry * 0.003
+            if (entry - stop) < min_distance:
+                stop = entry - min_distance
+
+        if signal == "SHORT" and stop is not None:
+            min_distance = entry * 0.003
+            if (stop - entry) < min_distance:
+                stop = entry + min_distance
 
         if signal in {"LONG", "SHORT"} and stop is not None:
             sl_dist = abs(entry - stop)
@@ -339,6 +341,10 @@ class BitcoinMarketService:
             tp3_pct = None
             risk_reward = None
             validated = False
+
+        sl_debug_stop = float(stop) if stop is not None else float("nan")
+        sl_debug_dist = (abs(entry - sl_debug_stop) / entry) * 100 if entry > 0 and np.isfinite(sl_debug_stop) else float("nan")
+        logger.info("SL DEBUG: entry=%.2f stop=%.2f dist=%.4f%% signal=%s", entry, sl_debug_stop, sl_debug_dist, signal)
 
         checks = {
             "data_quality_ok": not dq.severe,

@@ -273,6 +273,7 @@ def get_btc_candles(interval: str = "15m", limit: int = 200):
     """Recent BTCUSDT candles for trading chart windows."""
     if _btc_service is None:
         raise HTTPException(503, "BTC service not initialised")
+    limit = max(50, min(limit, 1000))
     return _btc_service.get_recent_candles(interval=interval, limit=limit)
 
 
