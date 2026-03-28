@@ -32,6 +32,15 @@ def record_signal(signal_data: dict):
         return
 
     history = _load()
+    # Block duplicate: skip if same direction + same entry within 4 hours
+    if history:
+        last = history[-1]
+        if (
+            last["signal"] == signal_data["signal"]
+            and last.get("entry") == signal_data.get("entry_price")
+            and time.time() - last.get("open_timestamp", 0) < 4 * 3600
+        ):
+            return
 
     record = {
         "id": len(history) + 1,

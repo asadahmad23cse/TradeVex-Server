@@ -246,6 +246,10 @@ class BitcoinMarketService:
         atr = self._last_feature_or_default(feat, "ATR_14", entry * 0.02)
         daily_vol = self._last_feature_or_default(feat, "Volatility_20", 0.5)
         volume_ratio = self._last_feature_or_default(feat, "Volume_Ratio", 1.0)
+        vol_ratio = self._last_feature_or_default(feat, "Volume_Ratio", 1.0)
+        obv_slope = self._last_feature_or_default(feat, "OBV_Slope", 0.0)
+        cmf = self._last_feature_or_default(feat, "CMF", 0.0)
+        rsi = self._last_feature_or_default(feat, "RSI_14", 50.0)
         net_alpha, cost_pct, viable = self._cost.net_alpha(
             alpha_score=raw_alpha,
             asset_class="forex",
@@ -407,6 +411,13 @@ class BitcoinMarketService:
                     reason = f"Signal {signal} blocked: {', '.join(failed)}" if failed else "All gates passed but unvalidated"
 
         fear_greed = self._fear_greed_index(feat)
+        price_change_1h = 0.0
+        price_change_24h = 0.0
+        if "Close" in feat.columns and len(feat) > 4:
+            current = float(feat["Close"].iloc[-1])
+            price_4_bars_ago = float(feat["Close"].iloc[-5]) if len(feat) > 5 else current
+            price_change_1h = round(((current - price_4_bars_ago) / price_4_bars_ago) * 100, 2)
+        atr_pct = round(atr / entry * 100, 3) if entry > 0 else 0
 
         payload = {
             "asset": "BTCUSDT",
@@ -443,6 +454,36 @@ class BitcoinMarketService:
             "regime": regime,
             "session": session_name,
             "fear_greed": fear_greed,
+            "order_flow": {
+                "volume_ratio": round(vol_ratio, 2),
+                "volume_trend": "HIGH" if vol_ratio > 1.5 else "LOW" if vol_ratio < 0.7 else "NORMAL",
+                "obv_slope": round(obv_slope, 4),
+                "obv_trend": "RISING" if obv_slope > 0 else "FALLING",
+                "cmf": round(cmf, 4),
+                "cmf_signal": "ACCUMULATION" if cmf > 0.05 else "DISTRIBUTION" if cmf < -0.05 else "NEUTRAL",
+                "rsi": round(rsi, 1),
+                "rsi_zone": "OVERBOUGHT" if rsi > 70 else "OVERSOLD" if rsi < 30 else "NEUTRAL",
+            },
+            "market_overview": {
+                "price_change_1h": price_change_1h,
+                "price_change_24h": price_change_24h,
+                "regime": regime,
+                "session": session_name,
+                "fear_greed": fear_greed,
+                "fear_greed_label": (
+                    "Extreme Fear"
+                    if fear_greed < 25
+                    else "Fear"
+                    if fear_greed < 45
+                    else "Neutral"
+                    if fear_greed < 55
+                    else "Greed"
+                    if fear_greed < 75
+                    else "Extreme Greed"
+                ),
+                "atr_pct": atr_pct,
+                "volatility": "HIGH" if atr_pct > 0.8 else "LOW" if atr_pct < 0.3 else "NORMAL",
+            },
             "funding_rate_pct": futures.get("funding_rate_pct", 0),
             "funding_sentiment": futures.get("funding_sentiment", "UNKNOWN"),
             "open_interest_btc": futures.get("open_interest_btc", 0),

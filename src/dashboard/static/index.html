@@ -99,6 +99,9 @@ body{
   #chart{height:380px}
   .title{font-size:26px}
 }
+@media (max-width: 900px) {
+  .terminal-panels { grid-template-columns: 1fr 1fr !important; }
+}
 </style>
 </head>
 <body>
@@ -181,6 +184,47 @@ body{
 
           <div class="signal"><div class="sig-row"><span>Algo</span><span id="algo" class="sig-val">--</span></div></div>
           <div class="signal"><div class="sig-row"><span>As Of UTC</span><span id="asof" class="sig-val">--</span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="terminal-panels" style="display:grid; grid-template-columns:1fr 1fr 1fr 1fr; gap:10px; margin:10px 12px;">
+      <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px;">
+        <div style="font-size:14px; font-weight:600; color:#e6edf3; margin-bottom:10px;">📊 Order Flow</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:12px; font-family:'JetBrains Mono',monospace;">
+          <span style="color:#8b949e">Volume</span><span id="of-volume" style="text-align:right">—</span>
+          <span style="color:#8b949e">OBV Trend</span><span id="of-obv" style="text-align:right">—</span>
+          <span style="color:#8b949e">CMF</span><span id="of-cmf" style="text-align:right">—</span>
+          <span style="color:#8b949e">RSI (14)</span><span id="of-rsi" style="text-align:right">—</span>
+        </div>
+      </div>
+
+      <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px;">
+        <div style="font-size:14px; font-weight:600; color:#e6edf3; margin-bottom:10px;">📈 Derivatives</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:12px; font-family:'JetBrains Mono',monospace;">
+          <span style="color:#8b949e">Funding Rate</span><span id="deriv-funding" style="text-align:right">—</span>
+          <span style="color:#8b949e">Sentiment</span><span id="deriv-sentiment" style="text-align:right">—</span>
+          <span style="color:#8b949e">Open Interest</span><span id="deriv-oi" style="text-align:right">—</span>
+          <span style="color:#8b949e">Mark Price</span><span id="deriv-mark" style="text-align:right">—</span>
+        </div>
+      </div>
+
+      <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px; max-height:220px; overflow-y:auto;">
+        <div style="font-size:14px; font-weight:600; color:#e6edf3; margin-bottom:10px;">📰 Live BTC News</div>
+        <div id="news-feed" style="font-size:11px; line-height:1.6;">
+          <span style="color:#484f58">Loading news...</span>
+        </div>
+      </div>
+
+      <div style="background:#161b22; border:1px solid #30363d; border-radius:8px; padding:12px;">
+        <div style="font-size:14px; font-weight:600; color:#e6edf3; margin-bottom:10px;">🌍 Market Overview</div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:12px; font-family:'JetBrains Mono',monospace;">
+          <span style="color:#8b949e">1h Change</span><span id="mo-1h" style="text-align:right">—</span>
+          <span style="color:#8b949e">Fear & Greed</span><span id="mo-fg" style="text-align:right">—</span>
+          <span style="color:#8b949e">Volatility</span><span id="mo-vol" style="text-align:right">—</span>
+          <span style="color:#8b949e">ATR %</span><span id="mo-atr" style="text-align:right">—</span>
+          <span style="color:#8b949e">Regime</span><span id="mo-regime" style="text-align:right">—</span>
+          <span style="color:#8b949e">Session</span><span id="mo-session" style="text-align:right">—</span>
         </div>
       </div>
     </div>
@@ -277,6 +321,13 @@ function setPill(id, text, ok){
   const el = document.getElementById(id);
   el.textContent = text;
   el.className = "pill " + (ok ? "ok" : "bad");
+}
+function setOf(id, val, color){
+  const e = document.getElementById(id);
+  if(e){
+    e.textContent = val;
+    if(color) e.style.color = color;
+  }
 }
 function fmt(v){return Number(v).toLocaleString("en-US",{maximumFractionDigits:2});}
 function fmtPx(v){if(v===null||v===undefined||Number.isNaN(Number(v))) return "—"; return fmt(v);}
@@ -608,6 +659,27 @@ function applySignalPayload(s, source){
       const oi = s.open_interest_btc || 0;
       oiEl.textContent = oi > 0 ? Math.round(oi).toLocaleString() : '—';
   }
+
+  const of = s.order_flow || {};
+  setOf('of-volume', of.volume_trend || '—', of.volume_trend==='HIGH'?'#00c853':of.volume_trend==='LOW'?'#ff1744':'#8b949e');
+  setOf('of-obv', of.obv_trend || '—', of.obv_trend==='RISING'?'#00c853':'#ff1744');
+  setOf('of-cmf', (of.cmf_signal||'—')+' ('+((of.cmf||0)>0?'+':'')+(of.cmf||0)+')', of.cmf>0?'#00c853':of.cmf<0?'#ff1744':'#8b949e');
+  setOf('of-rsi', (of.rsi||50).toFixed(1)+' '+(of.rsi_zone||''), of.rsi_zone==='OVERBOUGHT'?'#ff1744':of.rsi_zone==='OVERSOLD'?'#00c853':'#e6edf3');
+
+  const frDeriv = s.funding_rate_pct || 0;
+  setOf('deriv-funding', (frDeriv>=0?'+':'')+frDeriv.toFixed(4)+'%', frDeriv>0.03?'#ff1744':frDeriv<-0.03?'#00c853':'#8b949e');
+  setOf('deriv-sentiment', s.funding_sentiment||'—', s.funding_sentiment==='OVERLEVERAGED_LONG'?'#ff1744':s.funding_sentiment==='OVERLEVERAGED_SHORT'?'#00c853':'#8b949e');
+  setOf('deriv-oi', ((s.open_interest_btc||0)/1000).toFixed(1)+'K BTC', '#e6edf3');
+  setOf('deriv-mark', '$'+(s.mark_price||0).toLocaleString(), '#e6edf3');
+
+  const mo = s.market_overview || {};
+  const ch1h = mo.price_change_1h || 0;
+  setOf('mo-1h', (ch1h>=0?'+':'')+ch1h+'%', ch1h>0?'#00c853':'#ff1744');
+  setOf('mo-fg', (s.fear_greed||50)+' '+(mo.fear_greed_label||''), s.fear_greed<40?'#ff9800':s.fear_greed>60?'#00c853':'#8b949e');
+  setOf('mo-vol', mo.volatility||'—', mo.volatility==='HIGH'?'#ff9800':mo.volatility==='LOW'?'#2979ff':'#8b949e');
+  setOf('mo-atr', (mo.atr_pct||0)+'%', '#e6edf3');
+  setOf('mo-regime', mo.regime||'—', (mo.regime||'').includes('BULL')?'#00c853':(mo.regime||'').includes('BEAR')?'#ff1744':'#ff9800');
+  setOf('mo-session', mo.session||'—', '#e6edf3');
   setSignalLines(s, active);
   updateLiveSignalMarker(s);
 }
@@ -688,6 +760,29 @@ async function loadSignalHistory(){
   }
 }
 
+async function fetchNews() {
+  try {
+    const resp = await fetch('/api/btc/news?limit=8');
+    if(!resp.ok) return;
+    const data = await resp.json();
+    const feed = document.getElementById('news-feed');
+    if (feed && data.news && data.news.length > 0) {
+      feed.innerHTML = data.news.map(n => {
+        const time = n.published ? new Date(n.published).toLocaleTimeString('en',{hour:'2-digit',minute:'2-digit'}) : '';
+        return `<div style="padding:4px 0; border-bottom:1px solid #21262d;">
+          <span>${n.sentiment}</span>
+          <a href="${n.url}" target="_blank" style="color:#58a6ff; text-decoration:none;">${n.title}</a>
+          <span style="color:#484f58; font-size:10px; margin-left:6px;">${n.source} · ${time}</span>
+        </div>`;
+      }).join('');
+    } else if (feed) {
+      feed.innerHTML = '<span style="color:#484f58">No recent BTC news</span>';
+    }
+  } catch(e) {
+    console.warn('News fetch failed:', e);
+  }
+}
+
 function processTick(price, eventTimeMs, source){
   upsertPointFromTick(price, eventTimeMs);
   updateCards(price, eventTimeMs);
@@ -750,12 +845,14 @@ async function init(){
   setTfActive();
   await switchTimeframe("15m");
   await loadSignalHistory();
+  await fetchNews();
   await restFallbackTick();
   connectWebSocket();
   setInterval(restFallbackTick, REST_REFRESH_MS);
   setInterval(loadSignal, SIGNAL_REFRESH_MS);
   setInterval(loadSignalMarkers, 120000);
   setInterval(loadSignalHistory, 30000);
+  setInterval(fetchNews, 120000);
 }
 
 init();

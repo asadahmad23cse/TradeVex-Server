@@ -16,6 +16,7 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import HTMLResponse  # type: ignore[import]
 from fastapi.staticfiles import StaticFiles  # type: ignore[import]
 from starlette.middleware.base import BaseHTTPMiddleware  # type: ignore[import]
+from src.data.news_feed import get_btc_news
 from src.data.signal_history import get_history as get_signal_history, get_stats as get_signal_stats
 from src.dashboard.btc_service import BitcoinMarketService
 from src.dashboard.focus_engine import FocusQuantEngine
@@ -299,6 +300,11 @@ def get_btc_markers(interval: str = "1d", limit: int = 1000):
     if _btc_service is None:
         raise HTTPException(503, "BTC service not initialised")
     return _btc_service.get_signal_markers(interval=interval, limit=limit)
+
+
+@app.get("/api/btc/news")
+def btc_news(limit: int = 8):
+    return {"news": get_btc_news(limit)}
 
 
 @app.get("/api/stock-signal")
