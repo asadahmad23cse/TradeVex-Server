@@ -5,11 +5,12 @@ watchlist:
     - { symbol: INFY,       yf_ticker: INFY.NS,       name: Infosys,              asset_class: indian_stock }
     - { symbol: HCLTECH,    yf_ticker: HCLTECH.NS,    name: HCL Technologies,     asset_class: indian_stock }
     - { symbol: LT,         yf_ticker: LT.NS,         name: Larsen and Toubro,    asset_class: indian_stock }
-    - { symbol: TATAMOTORS, yf_ticker: TATAMOTORS.NS, name: Tata Motors, alt_ticker: TATAMOTORS.NS, asset_class: indian_stock }
+    - { symbol: TATAMOTORS, yf_ticker: TATAMOTORS.NS, name: Tata Motors, asset_class: indian_stock, alt_ticker: TATAMOTORS.BO }
     - { symbol: MARUTI,     yf_ticker: MARUTI.NS,     name: Maruti Suzuki,        asset_class: indian_stock }
     - { symbol: ADANIENT,   yf_ticker: ADANIENT.NS,   name: Adani Enterprises,    asset_class: indian_stock }
     - { symbol: SUNPHARMA,  yf_ticker: SUNPHARMA.NS,  name: Sun Pharma,           asset_class: indian_stock }
     - { symbol: DRREDDY,    yf_ticker: DRREDDY.NS,    name: Dr Reddys Labs,       asset_class: indian_stock }
+    - { symbol: BAJAJ_AUTO, yf_ticker: BAJAJ-AUTO.NS, name: Bajaj Auto,           asset_class: indian_stock }
 
   us_stocks:
     - { symbol: NVDA,  yf_ticker: NVDA,  name: NVIDIA,     asset_class: us_stock }
