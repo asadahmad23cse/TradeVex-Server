@@ -1,4 +1,4 @@
-"""
+﻿"""
 Bitcoin market data + signal service backed by Binance public APIs.
 
 Provides:
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import time as _time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
 import numpy as np
@@ -20,13 +20,35 @@ import requests
 from src.alpha.factor_model import AlphaFactorModel, _rolling_ic
 from src.api.data_quality import DataAnomalyDetector
 from src.api.rate_limiter import TTLCache
+from src.data import futures_data as futures_data_module
+from src.data.etf_flow import get_etf_flow_provider
+from src.data.fear_greed import get_fear_greed_provider
+from src.data.futures_data import get_futures_sentiment
+from src.dashboard.mtf_bias import MTFBiasFilter
 from src.data.signal_history import check_open_signals, record_signal
 from src.features.engineer import FeatureEngineer
 from src.risk.cost_model import CostModel
 
 logger = logging.getLogger(__name__)
-_last_signal_time: dict[str, float] = {}  # {"LONG": timestamp, "SHORT": timestamp}
-COOLDOWN_SECONDS = 4 * 3600  # 4 hours between same-direction signals
+_last_signal_time: dict[str, float] = {}  # {"LONG": ts, "SHORT": ts, "__ANY__": ts}
+COOLDOWN_MINUTES = {
+    "same_direction": 45,
+    "any_signal": 10,
+}
+BEARISH_REGIMES = {"BEARISH TREND", "HIGH_VOL_BEAR", "BEAR"}
+BULLISH_REGIMES = {"BULLISH TREND", "HIGH_VOL_BULL", "BULL"}
+BASE_CONFIDENCE_THRESHOLD = 0.65
+REGIME_CONFIDENCE_MULTIPLIER = {
+    "BEARISH TREND": 1.25,
+    "HIGH_VOL_BEAR": 1.20,
+    "HIGH_VOL_BULL": 1.20,
+    "BULLISH TREND": 1.00,
+    "SIDEWAYS": 1.15,
+}
+SHORT_SETUP_SL_PCT = 0.0035
+SHORT_SETUP_TP1_PCT = 0.0070
+SHORT_SETUP_TP2_PCT = 0.0105
+SHORT_SETUP_TP3_PCT = 0.0140
 
 BINANCE_REST = "https://api.binance.com"
 BTC_SYMBOL = "BTCUSDT"
@@ -69,6 +91,10 @@ class BitcoinMarketService:
         )
         self._anomaly = DataAnomalyDetector()
         self._cost = CostModel(config.get("cost_model", {}) or {})
+        self._etf_flow = get_etf_flow_provider()
+        self._fear_greed = get_fear_greed_provider()
+        self._mtf_bias = MTFBiasFilter(self)
+        self._config = config
 
     def get_all_time_history(self, interval: str = "1d") -> dict[str, Any]:
         interval = interval if interval in INTERVAL_TO_MS else "1d"
@@ -161,102 +187,246 @@ class BitcoinMarketService:
         confidence = float(alpha.get("confidence", 50.0))
         model_signal = str(alpha.get("signal", "HOLD")).upper()
         signal = "LONG" if model_signal == "BUY" else "SHORT" if model_signal == "SELL" else "HOLD"
+        requested_signal = signal if signal in {"LONG", "SHORT"} else None
         reason = ""
-
-        # --- SESSION FILTER: block signals during low-edge hours ---
-        now_utc = datetime.now(timezone.utc)
-        hour = now_utc.hour
-        is_dead_session = 21 <= hour or hour < 1   # 21:00-01:00 UTC
-        is_asia_low_vol = 1 <= hour < 7            # deep Asia, low vol
-
-        if signal in {"LONG", "SHORT"} and is_dead_session:
-            signal = "HOLD"
-            reason = f"HOLD: Dead session ({hour:02d}:00 UTC) — no signals generated"
-
-        if signal in {"LONG", "SHORT"} and is_asia_low_vol and confidence < 75:
-            signal = "HOLD"
-            reason = f"HOLD: Asia session low confidence ({confidence:.0f}% < 75% required)"
-
-        # --- TREND ALIGNMENT FILTER: don't trade against the trend ---
-        if signal in {"LONG", "SHORT"} and "Close" in feat.columns and len(feat) > 50:
-            close = float(feat["Close"].iloc[-1])
-            ema_21 = float(feat["Close"].ewm(span=21).mean().iloc[-1])
-            ema_50 = float(feat["Close"].ewm(span=50).mean().iloc[-1])
-
-            trend_bullish = close > ema_21 > ema_50
-            trend_bearish = close < ema_21 < ema_50
-
-            if signal == "LONG" and trend_bearish:
-                signal = "HOLD"
-                reason = "HOLD: LONG signal rejected — price below EMA21 < EMA50 (bearish structure)"
-            elif signal == "SHORT" and trend_bullish:
-                signal = "HOLD"
-                reason = "HOLD: SHORT signal rejected — price above EMA21 > EMA50 (bullish structure)"
-
-        # --- FUNDING RATE FILTER (proven edge) ---
-        futures = {
-            "funding_rate_pct": 0,
-            "funding_sentiment": "NEUTRAL",
-            "open_interest_btc": 0,
-            "mark_price": 0,
-        }
-        funding_confirms = False
-        try:
-            from src.data.futures_data import get_futures_sentiment
-            futures = get_futures_sentiment()
-            logger.info(
-                "Futures data: funding=%.4f%%, OI=%.1f",
-                futures.get("funding_rate_pct", 0),
-                futures.get("open_interest_btc", 0),
-            )
-        except Exception as e:
-            logger.warning("Futures data unavailable (may be geo-blocked): %s", e)
-
-        funding_rate = futures.get("funding_rate_pct", 0)
-        funding_sentiment = futures.get("funding_sentiment", "NEUTRAL")
-
-        # Block LONG when market is overleveraged long (funding > +0.05%)
-        if signal == "LONG" and funding_sentiment == "OVERLEVERAGED_LONG":
-            signal = "HOLD"
-            reason = f"HOLD: LONG blocked â€” funding rate {funding_rate:+.4f}% (overleveraged longs, squeeze risk)"
-
-        # Block SHORT when market is overleveraged short (funding < -0.05%)
-        if signal == "SHORT" and funding_sentiment == "OVERLEVERAGED_SHORT":
-            signal = "HOLD"
-            reason = f"HOLD: SHORT blocked â€” funding rate {funding_rate:+.4f}% (overleveraged shorts, squeeze risk)"
-
-        # BONUS: When funding is extreme AGAINST your signal = extra confidence
-        # (shorts paying = bullish for longs, longs paying = bearish for shorts)
-        if signal == "LONG" and funding_rate < -0.03:
-            funding_confirms = True  # shorts are paying â€” bullish
-        if signal == "SHORT" and funding_rate > 0.03:
-            funding_confirms = True  # longs are paying â€” bearish
-
-        # --- COOLDOWN FILTER ---
-        if signal in {"LONG", "SHORT"}:
-            cooldown_signal = signal
-            last_ts = _last_signal_time.get(cooldown_signal, 0.0)
-            elapsed = _time.time() - last_ts
-            if elapsed < COOLDOWN_SECONDS:
-                remaining_h = (COOLDOWN_SECONDS - elapsed) / 3600.0
-                signal = "HOLD"
-                reason = f"HOLD: {cooldown_signal} cooldown active — {remaining_h:.1f}h remaining"
+        blocked_by: str | None = None
+        regime = self._infer_regime(feat)
+        adjusted_threshold = BASE_CONFIDENCE_THRESHOLD * REGIME_CONFIDENCE_MULTIPLIER.get(regime, 1.0) * 100.0
+        computed_score = round(float(np.clip((abs(raw_alpha) * 100.0 * 0.55) + (confidence * 0.45), 0, 100)), 2)
 
         entry = float(feat["Close"].iloc[-1])
-        atr = self._last_feature_or_default(feat, "ATR_14", entry * 0.02)
-        daily_vol = self._last_feature_or_default(feat, "Volatility_20", 0.5)
-        volume_ratio = self._last_feature_or_default(feat, "Volume_Ratio", 1.0)
+        close = float(feat["Close"].iloc[-1])
+        ema_21 = float(feat["Close"].ewm(span=21).mean().iloc[-1]) if len(feat) > 21 else close
+        ema_50 = float(feat["Close"].ewm(span=50).mean().iloc[-1]) if len(feat) > 50 else ema_21
+        trend_bullish = close > ema_21 > ema_50
+        trend_bearish = close < ema_21 < ema_50
         vol_ratio = self._last_feature_or_default(feat, "Volume_Ratio", 1.0)
         obv_slope = self._last_feature_or_default(feat, "OBV_Slope", 0.0)
         cmf = self._last_feature_or_default(feat, "CMF", 0.0)
         rsi = self._last_feature_or_default(feat, "RSI_14", 50.0)
+
+        smart_money_state = "FALLING" if obv_slope < 0 else "RISING"
+        short_setup_candidate = (
+            regime in {"BEARISH TREND", "HIGH_VOL_BEAR"}
+            and trend_bearish
+            and confidence >= adjusted_threshold
+            and smart_money_state == "FALLING"
+            and rsi < 50
+        )
+        short_setup_active = False
+        if short_setup_candidate:
+            signal = "SHORT"
+            requested_signal = "SHORT"
+            short_setup_active = True
+            reason = f"Bearish structure confirmed: price < EMA21 < EMA50, Smart Money falling, regime {regime}"
+            blocked_by = None
+
+        # 1) Regime gate
+        if signal in {"LONG", "SHORT"}:
+            if regime in BEARISH_REGIMES and signal == "LONG":
+                signal = "WAIT"
+                reason = "regime_conflict: LONG blocked in BEARISH regime"
+                blocked_by = "regime_gate"
+            elif regime in BULLISH_REGIMES and signal == "SHORT":
+                signal = "WAIT"
+                reason = "regime_conflict: SHORT blocked in BULLISH regime"
+                blocked_by = "regime_gate"
+
+        # 2) Regime confidence gate
+        if signal in {"LONG", "SHORT"} and confidence < adjusted_threshold:
+            signal = "WAIT"
+            reason = f"low_confidence_for_regime: {confidence:.1f}% < {adjusted_threshold:.1f}% ({regime})"
+            blocked_by = blocked_by or "regime_confidence_gate"
+
+        mtf_result = {
+            "alignment_ok": True,
+            "bias_4h": "NEUTRAL",
+            "bias_1d": "NEUTRAL",
+            "block_reason": None,
+            "alignment_score": 1.0,
+        }
+        if signal in {"LONG", "SHORT"}:
+            mtf_result = self._mtf_bias.check_alignment(signal, entry_timeframe=interval, confidence=confidence)
+            if not bool(mtf_result.get("alignment_ok", True)):
+                signal = "WAIT"
+                reason = str(mtf_result.get("block_reason") or "MTF alignment blocked")
+                blocked_by = blocked_by or "mtf_bias"
+            else:
+                confidence = float(np.clip(confidence * float(mtf_result.get("alignment_score", 1.0)), 0.0, 100.0))
+
+        now_utc = datetime.now(timezone.utc)
+        session_name = self._session_name(now_utc)
+        hour = now_utc.hour
+
+        futures = {
+            "funding_rate_pct": 0.0,
+            "funding_rate_z": 0.0,
+            "funding_sentiment": "NEUTRAL",
+            "open_interest_btc": 0.0,
+            "oi_delta_pct_1h": 0.0,
+            "oi_delta_pct_4h": 0.0,
+            "liquidation_event": False,
+            "liquidation_bias": "NONE",
+            "liquidation_score": 0.0,
+            "mark_price": 0.0,
+        }
+        try:
+            futures = futures_data_module.get_futures_sentiment()
+            logger.info(
+                "Futures data: funding=%.4f%%, OI=%.1f",
+                futures.get("funding_rate_pct", 0.0),
+                futures.get("open_interest_btc", 0.0),
+            )
+        except Exception as exc:
+            logger.warning("Futures data unavailable (may be geo-blocked): %s", exc)
+
+        funding_rate = float(futures.get("funding_rate_pct", 0.0))
+        funding_rate_z = float(futures.get("funding_rate_z", 0.0))
+        funding_sentiment = str(futures.get("funding_sentiment", "NEUTRAL"))
+        oi_delta_1h = float(futures.get("oi_delta_pct_1h", 0.0))
+        oi_delta_4h = float(futures.get("oi_delta_pct_4h", 0.0))
+        liquidation_event = bool(futures.get("liquidation_event", False))
+        liquidation_bias = str(futures.get("liquidation_bias", "NONE"))
+
+        fear_greed_snapshot = self._fear_greed_snapshot(feat)
+        fear_greed = int(fear_greed_snapshot.get("value", self._fear_greed_index(feat)))
+        fear_greed_z = float(fear_greed_snapshot.get("z_score", 0.0))
+        etf_flow = self._etf_flow_snapshot()
+        etf_flow_z = float(etf_flow.get("flow_z", 0.0))
+        etf_source = str(etf_flow.get("source", "")).lower()
+        fear_source = str(fear_greed_snapshot.get("source", "")).lower()
+        halving = self._halving_phase_context(now_utc.date())
+        halving_multiplier = float(halving.get("confidence_multiplier", 1.0))
+        mtf = {
+            "alignment_ok": bool(mtf_result.get("alignment_ok", True)),
+            "biases": {
+                "4h": str(mtf_result.get("bias_4h", "NEUTRAL")),
+                "1d": str(mtf_result.get("bias_1d", "NEUTRAL")),
+            },
+            "alignment_score": float(mtf_result.get("alignment_score", 1.0)),
+            "block_reason": mtf_result.get("block_reason"),
+            "entry_timeframe": interval,
+        }
+
+        etf_multiplier = 1.0
+        if signal in {"LONG", "SHORT"}:
+            try:
+                etf_multiplier = float(self._etf_flow.get_conviction_boost(signal, funding_rate_z))
+            except Exception:
+                etf_multiplier = 1.0
+            confidence = float(np.clip(confidence * etf_multiplier * halving_multiplier, 0.0, 100.0))
+
+        funding_confirms = False
+        if signal == "LONG" and (funding_rate < -0.03 or funding_rate_z < -0.5):
+            funding_confirms = True
+        if signal == "SHORT" and (funding_rate > 0.03 or funding_rate_z > 0.5):
+            funding_confirms = True
+
+        etf_ok = True
+        fear_greed_ok = True
+        liquidation_ok = True
+        mtf_ok = bool(mtf.get("alignment_ok", True))
+        oi_ok = True
+
+        # 3) ETF flow filter
+        etf_filter_enabled = etf_source not in {"fallback", "stale_cache", "", "unknown"}
+        if signal == "LONG" and etf_filter_enabled and etf_flow_z < -1.0:
+            signal = "WAIT"
+            reason = f"HOLD: ETF outflow regime ({etf_flow_z:+.2f}z) is hostile to longs"
+            blocked_by = blocked_by or "etf_flow_filter"
+            etf_ok = False
+        elif signal == "SHORT" and etf_filter_enabled and etf_flow_z > 1.0:
+            signal = "WAIT"
+            reason = f"HOLD: ETF inflow regime ({etf_flow_z:+.2f}z) is hostile to shorts"
+            blocked_by = blocked_by or "etf_flow_filter"
+            etf_ok = False
+
+        # 4) Fear & Greed filter
+        fear_filter_enabled = fear_source in {"alternative_me", "live"}
+        fear_threshold = 2.5
+        if signal == "LONG" and fear_filter_enabled and fear_greed_z > fear_threshold:
+            signal = "WAIT"
+            reason = f"HOLD: LONG blocked by stretched greed ({fear_greed_z:+.2f}z)"
+            blocked_by = blocked_by or "fear_greed_filter"
+            fear_greed_ok = False
+        elif signal == "SHORT" and fear_filter_enabled and fear_greed_z < -fear_threshold:
+            signal = "WAIT"
+            reason = f"HOLD: SHORT blocked by washed-out fear ({fear_greed_z:+.2f}z)"
+            blocked_by = blocked_by or "fear_greed_filter"
+            fear_greed_ok = False
+
+        # 5) Liquidation filter
+        if signal == "LONG" and liquidation_bias == "SHORT_SQUEEZE":
+            signal = "WAIT"
+            reason = "HOLD: LONG blocked because a short squeeze likely already fired"
+            blocked_by = blocked_by or "liquidation_filter"
+            liquidation_ok = False
+        elif signal == "SHORT" and liquidation_bias == "LONG_FLUSH":
+            signal = "WAIT"
+            reason = "HOLD: SHORT blocked because a long flush likely already fired"
+            blocked_by = blocked_by or "liquidation_filter"
+            liquidation_ok = False
+
+        # 6) Multi-timeframe hierarchy filter
+        if signal in {"LONG", "SHORT"} and not mtf_ok:
+            signal = "WAIT"
+            reason = "HOLD: Multi-timeframe bias misaligned (1D/4H hierarchy)"
+            blocked_by = blocked_by or "mtf_filter"
+
+        # 7) Session/timing filters
+        is_dead_session = 21 <= hour or hour < 1
+        is_asia_low_vol = 1 <= hour < 7
+        if signal in {"LONG", "SHORT"} and is_dead_session:
+            signal = "HOLD"
+            reason = f"HOLD: Dead session ({hour:02d}:00 UTC) - no signals generated"
+        if signal in {"LONG", "SHORT"} and is_asia_low_vol and confidence < 75:
+            signal = "HOLD"
+            reason = f"HOLD: Asia session low confidence ({confidence:.0f}% < 75% required)"
+
+        if signal in {"LONG", "SHORT"} and len(feat) > 50:
+            if signal == "LONG" and trend_bearish:
+                signal = "HOLD"
+                reason = "HOLD: LONG signal rejected - price below EMA21 < EMA50 (bearish structure)"
+            elif signal == "SHORT" and trend_bullish:
+                signal = "HOLD"
+                reason = "HOLD: SHORT signal rejected - price above EMA21 > EMA50 (bullish structure)"
+
+        if signal == "LONG" and funding_sentiment == "OVERLEVERAGED_LONG":
+            signal = "HOLD"
+            reason = f"HOLD: LONG blocked - funding rate {funding_rate:+.4f}% (overleveraged longs, squeeze risk)"
+        if signal == "SHORT" and funding_sentiment == "OVERLEVERAGED_SHORT":
+            signal = "HOLD"
+            reason = f"HOLD: SHORT blocked - funding rate {funding_rate:+.4f}% (overleveraged shorts, squeeze risk)"
+
+        if signal in {"LONG", "SHORT"}:
+            oi_ok = oi_delta_1h > -0.4
+
+        # 8) Cooldown (must run last)
+        if signal in {"LONG", "SHORT"}:
+            now_ts = _time.time()
+            signal_for_cooldown = signal
+            elapsed_same = now_ts - _last_signal_time.get(signal, 0.0)
+            elapsed_any = now_ts - _last_signal_time.get("__ANY__", 0.0)
+
+            if _last_signal_time.get(signal) and elapsed_same < COOLDOWN_MINUTES["same_direction"] * 60:
+                signal = "WAIT"
+                reason = f"cooldown: same direction {signal_for_cooldown} fired {elapsed_same / 60.0:.1f} min ago"
+                blocked_by = blocked_by or "cooldown_same_direction"
+            elif _last_signal_time.get("__ANY__") and elapsed_any < COOLDOWN_MINUTES["any_signal"] * 60:
+                signal = "WAIT"
+                reason = f"cooldown: signal fired {elapsed_any / 60.0:.1f} min ago"
+                blocked_by = blocked_by or "cooldown_any_signal"
+
+        atr = self._last_feature_or_default(feat, "ATR_14", entry * 0.02)
+        daily_vol = self._last_feature_or_default(feat, "Volatility_20", 0.5)
+        volume_ratio = vol_ratio
         net_alpha, cost_pct, viable = self._cost.net_alpha(
             alpha_score=raw_alpha,
-            asset_class="forex",
+            asset_class="crypto",
             position_size_pct=1.0,
             daily_vol=daily_vol,
             volume_ratio=max(volume_ratio, 0.1),
-            regime="SIDEWAYS",
+            regime=regime,
             low_liquidity=volume_ratio < 0.8,
         )
 
@@ -280,20 +450,34 @@ class BitcoinMarketService:
         if signal == "LONG":
             stop = entry - sl_mult * atr
         elif signal == "SHORT":
-            stop = entry + sl_mult * atr
+            if short_setup_active:
+                stop = entry * (1.0 + SHORT_SETUP_SL_PCT)
+                tp1 = entry * (1.0 - SHORT_SETUP_TP1_PCT)
+                tp2 = entry * (1.0 - SHORT_SETUP_TP2_PCT)
+                tp3 = entry * (1.0 - SHORT_SETUP_TP3_PCT)
+                entry_zone_low = entry * 0.999
+                entry_zone_high = entry * 1.001
+                take = tp1
+                sl_dist = abs(entry - stop)
+                sl_pct = (sl_dist / entry) * 100 if entry > 0 else None
+                tp1_pct = ((tp1 - entry) / entry) * 100 if entry > 0 else None
+                tp2_pct = ((tp2 - entry) / entry) * 100 if entry > 0 else None
+                tp3_pct = ((tp3 - entry) / entry) * 100 if entry > 0 else None
+                risk_reward = 2.0
+            else:
+                stop = entry + sl_mult * atr
 
-        # Force minimum 0.3% SL distance
         if signal == "LONG" and stop is not None:
             min_distance = entry * 0.003
             if (entry - stop) < min_distance:
                 stop = entry - min_distance
 
-        if signal == "SHORT" and stop is not None:
+        if signal == "SHORT" and stop is not None and not short_setup_active:
             min_distance = entry * 0.003
             if (stop - entry) < min_distance:
                 stop = entry + min_distance
 
-        if signal in {"LONG", "SHORT"} and stop is not None:
+        if signal in {"LONG", "SHORT"} and stop is not None and not short_setup_active:
             sl_dist = abs(entry - stop)
             atr_ratio = atr / (entry * 0.01) if entry > 0 else 1.0
             if atr_ratio < 0.3:
@@ -321,13 +505,11 @@ class BitcoinMarketService:
             tp3_pct = ((tp3 - entry) / entry) * 100 if entry > 0 and tp3 is not None else None
             risk_reward = abs((tp2 - entry) / (entry - stop)) if (tp2 is not None and entry != stop) else None
 
-        regime = self._infer_regime(feat)
         validated = False
 
-        # --- VOLATILITY SPIKE FILTER ---
         if signal in {"LONG", "SHORT"} and regime == "VOLATILITY SPIKE":
             signal = "HOLD"
-            reason = "HOLD: Volatility spike detected (ATR > 2.5x normal) — no signals"
+            reason = "HOLD: Volatility spike detected (ATR > 2.5x normal) - no signals"
             stop = None
             take = None
             tp1 = None
@@ -348,8 +530,13 @@ class BitcoinMarketService:
 
         checks = {
             "data_quality_ok": not dq.severe,
-            "confidence_ok": confidence >= 62.0,
+            "confidence_ok": confidence >= adjusted_threshold,
             "cost_ok": bool(viable),
+            "mtf_ok": mtf_ok,
+            "etf_ok": etf_ok,
+            "liquidation_ok": liquidation_ok,
+            "fear_greed_ok": fear_greed_ok,
+            "oi_ok": oi_ok,
         }
 
         if signal in {"LONG", "SHORT"} and sl_pct is not None:
@@ -373,16 +560,14 @@ class BitcoinMarketService:
         validated = signal in {"LONG", "SHORT"} and all(checks.values())
         if validated:
             position_size_pct = round(float(np.clip((confidence - 50.0) / 10.0, 0.5, 5.0)), 2)
-            if signal in {"LONG", "SHORT"}:
-                _last_signal_time[signal] = _time.time()
+            _last_signal_time[signal] = _time.time()
+            _last_signal_time["__ANY__"] = _last_signal_time[signal]
 
-        session_name = self._session_name(datetime.now(timezone.utc))
-
-        if signal == "HOLD":
+        if signal not in {"LONG", "SHORT"}:
             if not reason:
                 failed = []
                 if not checks.get("confidence_ok", True):
-                    failed.append(f"confidence {confidence:.0f}% < threshold")
+                    failed.append(f"confidence {confidence:.1f}% < regime threshold {adjusted_threshold:.1f}%")
                 if not checks.get("cost_ok", True):
                     failed.append(f"net alpha ({net_alpha:.2f}) below cost")
                 if not checks.get("data_quality_ok", True):
@@ -416,23 +601,48 @@ class BitcoinMarketService:
                 else:
                     failed = []
                     if not checks.get("confidence_ok", True):
-                        failed.append(f"confidence {confidence:.0f}% < threshold")
+                        failed.append(f"confidence {confidence:.1f}% < regime threshold {adjusted_threshold:.1f}%")
                     if not checks.get("cost_ok", True):
                         failed.append(f"net alpha {net_alpha:.4f} below cost gate")
                     if not checks.get("data_quality_ok", True):
                         failed.append("data quality severe")
+                    if not checks.get("mtf_ok", True):
+                        failed.append("multi-timeframe misalignment")
+                    if not checks.get("etf_ok", True):
+                        failed.append("ETF flow conflict")
+                    if not checks.get("fear_greed_ok", True):
+                        failed.append("fear/greed conflict")
+                    if not checks.get("liquidation_ok", True):
+                        failed.append("liquidation conflict")
+                    if not checks.get("oi_ok", True):
+                        failed.append("open interest not supportive")
                     if not checks.get("sl_distance_ok", True):
                         failed.append("SL distance outside 0.3-2.5% range")
                     reason = f"Signal {signal} blocked: {', '.join(failed)}" if failed else "All gates passed but unvalidated"
 
-        fear_greed = self._fear_greed_index(feat)
         price_change_1h = 0.0
         price_change_24h = 0.0
-        if "Close" in feat.columns and len(feat) > 4:
+        bars_1h = self._bars_for_hours(interval, 1)
+        bars_24h = self._bars_for_hours(interval, 24)
+        if "Close" in feat.columns and len(feat) > max(bars_1h, 2):
             current = float(feat["Close"].iloc[-1])
-            price_4_bars_ago = float(feat["Close"].iloc[-5]) if len(feat) > 5 else current
-            price_change_1h = round(((current - price_4_bars_ago) / price_4_bars_ago) * 100, 2)
+            price_1h_ago = float(feat["Close"].iloc[-(bars_1h + 1)]) if len(feat) > bars_1h else current
+            price_change_1h = round(((current - price_1h_ago) / price_1h_ago) * 100, 2)
+            if len(feat) > bars_24h:
+                price_24h_ago = float(feat["Close"].iloc[-(bars_24h + 1)])
+                price_change_24h = round(((current - price_24h_ago) / price_24h_ago) * 100, 2)
         atr_pct = round(atr / entry * 100, 3) if entry > 0 else 0
+
+        market_context = {
+            "futures": futures,
+            "etf_flow": etf_flow,
+            "fear_greed_snapshot": fear_greed_snapshot,
+            "multi_timeframe": mtf,
+            "halving": halving,
+            "price_change_1h": price_change_1h,
+            "price_change_24h": price_change_24h,
+            "atr_pct": atr_pct,
+        }
 
         payload = {
             "asset": "BTCUSDT",
@@ -440,8 +650,15 @@ class BitcoinMarketService:
             "signal": signal,
             "validated_signal": signal if validated else "HOLD",
             "validated": validated,
+            "validated_label": signal if validated else "NO TRADE",
+            "direction": "long" if signal == "LONG" else "short" if signal == "SHORT" else "flat",
+            "requested_signal": requested_signal,
+            "blocked_by": blocked_by,
             "strength": strength,
+            "signal_strength": computed_score,
             "confidence": round(confidence, 2),
+            "ai_confidence": round(confidence, 2),
+            "adjusted_confidence_threshold": round(adjusted_threshold, 2),
             "alpha_score": int(np.clip(round(abs(raw_alpha) * 100), 0, 100)),
             "alpha_score_raw": round(raw_alpha, 4),
             "net_alpha_score": int(np.clip(round(float(net_alpha) * 100), 0, 100)),
@@ -461,6 +678,9 @@ class BitcoinMarketService:
             "tp3_pct": round(float(tp3_pct), 2) if tp3_pct is not None else None,
             "risk_reward": round(float(risk_reward), 2) if risk_reward is not None else None,
             "position_size_pct": position_size_pct,
+            "entry": entry_out,
+            "sl": stop_out,
+            "rr": round(float(risk_reward), 2) if risk_reward is not None else None,
             "factor_scores": alpha.get("factor_scores", {}),
             "ic_weights": alpha.get("ic_weights", {}),
             "validation_checks": checks,
@@ -469,6 +689,15 @@ class BitcoinMarketService:
             "regime": regime,
             "session": session_name,
             "fear_greed": fear_greed,
+            "fear_greed_z": round(fear_greed_z, 3),
+            "bias_4h": str(mtf_result.get("bias_4h", "NEUTRAL")),
+            "bias_1d": str(mtf_result.get("bias_1d", "NEUTRAL")),
+            "mtf_bias": {
+                "bias_4h": str(mtf_result.get("bias_4h", "NEUTRAL")),
+                "bias_1d": str(mtf_result.get("bias_1d", "NEUTRAL")),
+                "alignment_score": round(float(mtf_result.get("alignment_score", 1.0)), 3),
+                "alignment_ok": bool(mtf_result.get("alignment_ok", True)),
+            },
             "order_flow": {
                 "volume_ratio": round(vol_ratio, 2),
                 "volume_trend": "HIGH" if vol_ratio > 1.5 else "LOW" if vol_ratio < 0.7 else "NORMAL",
@@ -483,36 +712,48 @@ class BitcoinMarketService:
                 "price_change_1h": price_change_1h,
                 "price_change_24h": price_change_24h,
                 "regime": regime,
+                "bias": (
+                    "BEARISH"
+                    if regime in {"BEARISH TREND", "HIGH_VOL_BEAR"}
+                    else "BULLISH"
+                    if regime in {"BULLISH TREND", "HIGH_VOL_BULL"}
+                    else "NEUTRAL"
+                ),
                 "session": session_name,
                 "fear_greed": fear_greed,
-                "fear_greed_label": (
-                    "Extreme Fear"
-                    if fear_greed < 25
-                    else "Fear"
-                    if fear_greed < 45
-                    else "Neutral"
-                    if fear_greed < 55
-                    else "Greed"
-                    if fear_greed < 75
-                    else "Extreme Greed"
-                ),
+                "fear_greed_z": round(fear_greed_z, 3),
+                "fear_greed_label": str(fear_greed_snapshot.get("label", "Neutral")),
                 "atr_pct": atr_pct,
                 "volatility": "HIGH" if atr_pct > 0.8 else "LOW" if atr_pct < 0.3 else "NORMAL",
+                "halving_phase": halving.get("phase"),
+                "halving_bias": halving.get("bias"),
             },
-            "funding_rate_pct": futures.get("funding_rate_pct", 0),
+            "funding_rate_pct": futures.get("funding_rate_pct", 0.0),
+            "funding_rate_z": round(funding_rate_z, 3),
             "funding_sentiment": futures.get("funding_sentiment", "UNKNOWN"),
-            "open_interest_btc": futures.get("open_interest_btc", 0),
-            "mark_price": futures.get("mark_price", 0),
+            "open_interest_btc": futures.get("open_interest_btc", 0.0),
+            "oi_delta_pct_1h": round(oi_delta_1h, 3),
+            "oi_delta_pct_4h": round(oi_delta_4h, 3),
+            "liquidation_event": liquidation_event,
+            "liquidation_bias": liquidation_bias,
+            "liquidation_score": round(float(futures.get("liquidation_score", 0.0)), 3),
+            "mark_price": futures.get("mark_price", 0.0),
             "funding_confirms_signal": funding_confirms if signal in {"LONG", "SHORT"} else None,
+            "etf_flow": etf_flow,
+            "market_context": market_context,
             "as_of_utc": datetime.now(timezone.utc).isoformat(),
             "algo": "quant_alpha_factor_model_v1",
         }
         # Track signal outcomes
-        check_open_signals(entry)  # check existing open signals against current price
-        record_signal(payload)  # record new signal if validated LONG/SHORT
+        check_open_signals(
+            entry,
+            market_signal=signal,
+            validated_signal=(signal if validated else "HOLD"),
+            alpha_score=raw_alpha,
+        )
+        record_signal(payload)
         self._signal_cache.set(cache_key, payload, ttl_seconds=5)
         return payload
-
     def get_signal_markers(self, interval: str = "1d", limit: int = 1000) -> list[dict[str, Any]]:
         """Compute historical LONG/SHORT markers for chart overlays."""
         interval = interval if interval in INTERVAL_TO_MS else "1d"
@@ -567,6 +808,129 @@ class BitcoinMarketService:
         if 0 <= hour < 8:
             return "Asia Session"
         return "Dead Session"
+
+    @staticmethod
+    def _bars_for_hours(interval: str, hours: int) -> int:
+        step_ms = INTERVAL_TO_MS.get(interval, INTERVAL_TO_MS["5m"])
+        return max(int(round((hours * 3_600_000) / step_ms)), 1)
+
+    def _fear_greed_snapshot(self, feat: pd.DataFrame) -> dict[str, Any]:
+        try:
+            snap = self._fear_greed.get_snapshot()
+            if isinstance(snap, dict) and snap:
+                return snap
+        except Exception as exc:
+            logger.debug("Fear & Greed fetch failed: %s", exc)
+        return {
+            "value": self._fear_greed_index(feat),
+            "label": "Fallback",
+            "z_score": 0.0,
+            "source": "rsi_fallback",
+            "as_of": None,
+        }
+
+    def _etf_flow_snapshot(self) -> dict[str, Any]:
+        try:
+            latest = self._etf_flow.get_latest_row()
+            return latest if isinstance(latest, dict) else {}
+        except Exception as exc:
+            logger.debug("ETF flow fetch failed: %s", exc)
+            return {"date": None, "total_usd_m": 0.0, "flow_z": 0.0, "flow_label": "NEUTRAL", "factor_score": 0.0}
+
+    def _multi_timeframe_context(self, interval: str, signal: str) -> dict[str, Any]:
+        requirements = {
+            "5m": ["15m", "4h", "1d"],
+            "15m": ["4h", "1d"],
+            "1h": ["4h", "1d"],
+            "4h": ["1d"],
+        }
+        tfs = requirements.get(interval, [])
+        biases: dict[str, str] = {}
+        ordered_tfs = [interval, *[tf for tf in tfs if tf != interval]]
+        for tf in ordered_tfs:
+            try:
+                df = self.get_recent_frame(interval=tf, limit=400)
+                if df.empty:
+                    biases[tf] = "NEUTRAL"
+                    continue
+                timeframe = "daily" if tf in {"1d", "1w", "1M"} else "intraday"
+                clean_df, _ = self._anomaly.inspect_and_clean(df, BTC_SYMBOL, "crypto", timeframe)
+                tf_feat = self._engineer.compute_all_features(clean_df, timeframe=timeframe)
+                biases[tf] = self._bias_from_features(tf_feat)
+            except Exception:
+                biases[tf] = "NEUTRAL"
+
+        desired = signal if signal in {"LONG", "SHORT"} else None
+        alignment_ok = True
+        aligned = 0
+        blocking_timeframes: list[str] = []
+        for tf, bias in biases.items():
+            if tf == interval or desired is None:
+                continue
+            if bias == desired:
+                aligned += 1
+            elif bias not in {"NEUTRAL", desired}:
+                alignment_ok = False
+                blocking_timeframes.append(tf)
+
+        higher_biases = {tf: bias for tf, bias in biases.items() if tf != interval}
+        if desired is not None and higher_biases:
+            alignment_ok = alignment_ok and aligned >= max(1, len(higher_biases) - 1)
+        return {
+            "biases": biases,
+            "current_tf": interval,
+            "current_bias": biases.get(interval, "NEUTRAL"),
+            "alignment_ok": alignment_ok,
+            "aligned_count": aligned,
+            "required": list(tfs),
+            "blocking_timeframes": blocking_timeframes,
+        }
+
+    @classmethod
+    def _bias_from_features(cls, feat: pd.DataFrame) -> str:
+        if feat.empty or "Close" not in feat.columns:
+            return "NEUTRAL"
+        close = cls._last_feature_or_default(feat, "Close", 0.0)
+        ema_21_default = float(feat["Close"].ewm(span=21).mean().iloc[-1]) if len(feat) > 21 else close
+        ema_55_default = float(feat["Close"].ewm(span=55).mean().iloc[-1]) if len(feat) > 55 else ema_21_default
+        ema_21 = cls._last_feature_or_default(feat, "EMA_21", ema_21_default)
+        ema_55 = cls._last_feature_or_default(feat, "EMA_55", cls._last_feature_or_default(feat, "EMA_50", ema_55_default))
+        if close > ema_21 > ema_55:
+            return "LONG"
+        if close < ema_21 < ema_55:
+            return "SHORT"
+        return "NEUTRAL"
+
+    @staticmethod
+    def _halving_phase_context(today: date) -> dict[str, Any]:
+        halving_date = date(2024, 4, 19)
+        days_since = (today - halving_date).days
+        if days_since < 0:
+            phase = "pre_halving"
+            bias = "LONG"
+            mult = 1.02
+        elif days_since < 180:
+            phase = "post_halving_accumulation"
+            bias = "LONG"
+            mult = 1.05
+        elif days_since < 330:
+            phase = "post_halving_expansion"
+            bias = "LONG"
+            mult = 1.03
+        elif days_since < 540:
+            phase = "distribution"
+            bias = "SHORT"
+            mult = 0.94
+        else:
+            phase = "late_cycle"
+            bias = "NEUTRAL"
+            mult = 0.98
+        return {
+            "phase": phase,
+            "bias": bias,
+            "days_since_halving": days_since,
+            "confidence_multiplier": mult,
+        }
 
     @staticmethod
     def _infer_regime(feat: pd.DataFrame) -> str:
@@ -785,3 +1149,6 @@ class BitcoinMarketService:
             "end_utc": pd.Timestamp(df.index[-1]).isoformat(),
             "data": data,
         }
+
+
+

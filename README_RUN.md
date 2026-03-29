@@ -1,187 +1,89 @@
-# Run Guide
+# QuantTrader Runbook
 
-This is the practical runbook for the current project structure and UI.
+This is the quick operational guide for running QuantTrader locally.
 
-## 1. Environment Setup
-
-From the project root:
+## 1) Environment setup
 
 ```powershell
-cd c:\Users\Asad\Desktop\Trading
+cd c:\Users\ASAD AHMAD\OneDrive\Desktop\Trading
 python -m venv .venv
 .\.venv\Scripts\activate
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-## 2. Optional Credentials
-
-Create `.env` if you want live integrations:
-
-```env
-ALPHA_VANTAGE_API_KEY=
-ZERODHA_API_KEY=
-ZERODHA_ACCESS_TOKEN=
-```
-
-Most runtime settings are in `config.yaml`, not `.env`.
-
-Useful config sections before first run:
-
-- `dashboard.host`
-- `dashboard.port`
-- `dashboard.auth`
-- `execution.broker`
-- `database.url`
-- `notifications`
-- `secondary_validation`
-
-## 3. Main Commands
-
-### Live system
-
-Starts APScheduler, signal pipeline, persistence, and dashboard:
+## 2) Recommended startup (port 8001)
 
 ```powershell
-python main.py --mode live
+python main.py --mode live --config config.runtime.8001.yaml
 ```
 
 Open:
+- `http://127.0.0.1:8001/` (BTC terminal)
+- `http://127.0.0.1:8001/terminal` (multi-asset terminal)
 
-```text
-http://127.0.0.1:8000
-```
-
-The frontend is now Bitcoin-only and uses:
-- Binance WebSocket live stream: `wss://stream.binance.com:9443/ws/btcusdt@trade`
-- Binance REST fallback every 15 seconds: `https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT`
-- All-time BTC history endpoint (Binance paginated klines): `/api/btc/history?interval=1d`
-- Real-time BTC quant signal endpoint: `/api/btc/signal?interval=5m`
-
-If you still see `404` for `/api/btc/signal`, restart the server process; that means an older app instance is still running.
-
-### Dashboard only
-
-Reads from the configured DB and serves the UI without starting the scheduler:
+## 3) Other modes
 
 ```powershell
-python main.py --mode dashboard
+# API/dashboard only (no scheduler)
+python main.py --mode dashboard --config config.runtime.8001.yaml
+
+# Signals only in terminal
+python main.py --mode signals --config config.runtime.8001.yaml
+
+# WFO backtest
+python main.py --mode backtest --engine wfo --ticker RELIANCE.NS --train_days 252 --config config.runtime.8001.yaml
+
+# Full event-driven backtest
+python main.py --mode backtest --engine full --ticker AAPL --config config.runtime.8001.yaml
+
+# Capacity
+python main.py --mode capacity --ticker RELIANCE.NS --config config.runtime.8001.yaml
+python main.py --mode capacity --ticker ALL --config config.runtime.8001.yaml
 ```
 
-### Terminal signals only
+## 4) Core checks after startup
 
-No web UI:
+Health:
+- `GET /api/health`
+- `GET /api/system-health`
+- `GET /api/live-validation`
 
-```powershell
-python main.py --mode signals
-```
+Trading data:
+- `GET /api/market-overview`
+- `GET /api/stock-signal?ticker=RELIANCE.NS`
+- `GET /api/options/chain?symbol=NIFTY`
+- `GET /api/paper/portfolio`
 
-### Walk-forward validation
+## 5) Paper trading quick checks
 
-```powershell
-python main.py --mode backtest --engine wfo --ticker AAPL --train_days 252
-```
-
-### Full event-driven backtest
-
-```powershell
-python main.py --mode backtest --engine full --ticker AAPL
-```
-
-### Capacity analysis
-
-Single ticker:
-
-```powershell
-python main.py --mode capacity --ticker RELIANCE.NS
-```
-
-Watchlist approximation:
-
-```powershell
-python main.py --mode capacity --ticker ALL
-```
-
-## 4. Dashboard Routes
-
-Main pages:
-
-- `/`
-- `/portfolio`
-- `/history`
-- `/factors`
-- `/regime`
-
-Operational APIs:
-
-- `/api/orders`
-- `/api/data-quality`
-- `/api/reconciliation`
-- `/api/model-validation`
-- `/api/system-health`
-- `/api/health`
-- `/api/live-validation`
-- `/api/latency`
-- `/api/focus-assets`
-- `/api/focus-chart`
-- `/api/focus-trade`
-- `/api/focus-trades`
-
-## 5. If Auth Is Enabled
-
-Set this in `config.yaml`:
-
-```yaml
-dashboard:
-  auth:
-    enabled: true
-    username: admin
-    password: change-me
-    jwt_secret: change-this-secret
-```
-
-Get a token:
+Execute sample:
 
 ```powershell
 Invoke-RestMethod `
-  -Uri http://127.0.0.1:8000/auth/token `
+  -Uri http://127.0.0.1:8001/api/paper/execute `
   -Method Post `
   -ContentType "application/json" `
-  -Body '{"username":"admin","password":"change-me"}'
+  -Body '{"ticker":"RELIANCE.NS","signal":"BUY","entry_price":2500,"stop_loss":2450,"take_profit":2600,"confidence":70,"asset_class":"indian_stock","strength":"MODERATE"}'
 ```
 
-Use the returned bearer token for API calls and pass `?token=...` for WebSocket clients if you build a remote client around it.
+Then verify:
+- `GET /api/paper/portfolio`
+- `GET /api/paper/trades?limit=20`
 
-The bundled dashboard UI will also prompt for username/password and cache the token locally when auth is enabled.
+## 6) Common issues
 
-## 6. Common Local Workflow
+- Port busy: change `dashboard.port` in config or stop old process.
+- Empty UI: verify `data/signals.db` and `/api/health`.
+- Backtest feature error: use longer range / enough rows.
+- Option chain unavailable: NSE can block; backend returns synthetic fallback.
 
-1. Start in dashboard mode and confirm the UI loads.
-2. Run tests.
-3. Switch to `--mode live` with `execution.broker: paper`.
-4. Review:
-   - `/api/health`
-   - `/api/data-quality`
-   - `/api/reconciliation`
-   - `/api/model-validation`
-5. Only then move broker settings away from paper mode.
+## 7) Auth (optional)
 
-## 7. Troubleshooting
+If `dashboard.auth.enabled: true`, get token from:
+- `POST /auth/token`
 
-If the UI loads but looks empty:
+Use token in:
+- `Authorization: Bearer <token>`
+- or `?token=...` for WebSocket `/ws`
 
-- confirm `data/signals.db` exists or `database.url` points to the right DB
-- confirm you started `--mode live` if you expect fresh signals
-- check `/api/health` and `/api/system-health`
-
-If live mode starts but no orders appear:
-
-- check `execution.broker`
-- check `/api/data-quality` for suppressed assets
-- check `/api/reconciliation` and `/api/model-validation`
-- check the scheduler watchdog events in `/api/system-health`
-
-If TensorFlow or tree-model packages fail to install:
-
-- the system still runs, but ML coverage degrades
-- LSTM and some ensemble functionality will be reduced or disabled

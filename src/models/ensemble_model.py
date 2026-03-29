@@ -94,6 +94,8 @@ class EnsembleModel:
         self.n_estimators = cfg.get("n_estimators", 200)
         self.max_depth = cfg.get("max_depth", 5)
         self.min_train = cfg.get("min_train_rows", 252)
+        self.cv_splits = cfg.get("cv_splits", 5)
+        self.output_gain = float(cfg.get("output_gain", 1.25))
 
         self._xgb_model = None
         self._lgb_model = None
@@ -106,17 +108,27 @@ class EnsembleModel:
         self._model_weights = {"xgb": 1.0, "lgb": 1.0, "ridge": 1.0}
         self._validation_report: dict = {}
         self._top_features: list[dict] = []
+        self._target_scale = 0.01
+        self._meta_walkforward_report: dict = {}
 
     def needs_retrain(self) -> bool:
         if not self._trained or self._last_train_date is None:
             return True
         return (date.today() - self._last_train_date).days >= self.retrain_days
 
+    def _resolve_time_series_splits(self, n_samples: int, desired: int | None = None) -> int:
+        target = int(desired or self.cv_splits)
+        target = max(target, 2)
+        if n_samples <= 3:
+            return 2
+        max_by_sample_count = max(2, min(target, n_samples // 40))
+        return min(max_by_sample_count, n_samples - 1)
+
     def train(
         self,
         df: pd.DataFrame,
         forward_horizon: int = 5,
-        oot_days: int = 10,
+        oot_days: int = 21,
         refit_meta_walkforward: bool = True,
     ) -> bool:
         """
@@ -143,7 +155,8 @@ class EnsembleModel:
 
         # Target: sign of forward return (classification → regression)
         df = df.copy()
-        df["_fwd_ret"] = df["Close"].pct_change(forward_horizon).shift(-forward_horizon)
+        future_close = df["Close"].shift(-forward_horizon)
+        df["_fwd_ret"] = np.log(future_close / df["Close"])
         df = df.dropna(subset=available + ["_fwd_ret"])
 
         if len(df) < self.min_train:
@@ -154,12 +167,20 @@ class EnsembleModel:
         oot_df = df.iloc[-oot_days:].copy() if len(df) > oot_days else pd.DataFrame()
         X = train_df[available].values
         y = train_df["_fwd_ret"].values
+        finite_abs_y = np.abs(y[np.isfinite(y)])
+        self._target_scale = float(
+            max(
+                np.nanpercentile(finite_abs_y, 90) if finite_abs_y.size else 0.0,
+                float(np.nanstd(y)) if len(y) > 1 else 0.0,
+                1e-4,
+            )
+        )
 
         # Scale features
         X_scaled = self._scaler.fit_transform(X)
 
         # Time-series cross-validation for stacking
-        tscv = TimeSeriesSplit(n_splits=3)
+        tscv = TimeSeriesSplit(n_splits=self._resolve_time_series_splits(len(X_scaled)))
         oof_preds = np.zeros((len(X_scaled), 3))  # 3 base models
 
         for _, (train_idx, val_idx) in enumerate(tscv.split(X_scaled)):
@@ -233,6 +254,8 @@ class EnsembleModel:
         self._trained = True
         self._last_train_date = date.today()
         self._validation_report = self._compute_oot_validation(oot_df)
+        if self._meta_walkforward_report:
+            self._validation_report["meta_walkforward"] = dict(self._meta_walkforward_report)
         self._model_weights = self._derive_model_weights(self._validation_report)
         self._top_features = self._compute_feature_drift_summary(train_df[available], y)
         logger.info(
@@ -249,41 +272,29 @@ class EnsembleModel:
         -------
         float in [-1, +1]:  positive = bullish, negative = bearish
         """
-        if not self._trained:
+        series = self.predict_series(df)
+        if series.empty:
             return 0.0
+        return round(float(series.iloc[-1]), 4)
+
+    def predict_series(self, df: pd.DataFrame) -> pd.Series:
+        """Score each fully-populated row for downstream factor integration."""
+        if not self._trained:
+            return pd.Series(0.0, index=df.index)
 
         available = [c for c in self._feature_cols if c in df.columns]
         if len(available) < 10:
-            return 0.0
+            return pd.Series(0.0, index=df.index)
 
-        # Take the last row
-        row = df[available].iloc[[-1]].values
-        row_scaled = self._scaler.transform(row)
+        feature_df = df[available].replace([np.inf, -np.inf], np.nan).dropna()
+        if feature_df.empty:
+            return pd.Series(0.0, index=df.index)
 
-        # Base predictions
-        preds = np.zeros(3)
-        if _XGB and self._xgb_model is not None:
-            preds[0] = self._xgb_model.predict(row_scaled)[0]
-        if _LGB and self._lgb_model is not None:
-            preds[1] = self._lgb_model.predict(row_scaled)[0]
-        if self._ridge_model is not None:
-            preds[2] = self._ridge_model.predict(row_scaled)[0]
-
-        preds[0] *= self._model_weights.get("xgb", 1.0)
-        preds[1] *= self._model_weights.get("lgb", 1.0)
-        preds[2] *= self._model_weights.get("ridge", 1.0)
-
-        # Meta-prediction
-        if self._meta_model is not None:
-            raw_score = self._meta_model.predict(preds.reshape(1, -1))[0]
-        else:
-            # Simple average if no meta-learner
-            active = [p for p in preds if p != 0.0]
-            raw_score = np.mean(active) if active else 0.0
-
-        # Map to [-1, +1] via tanh
-        score = float(np.tanh(raw_score * 50))  # scale up small returns before tanh
-        return round(score, 4)
+        X_scaled = self._scaler.transform(feature_df.values)
+        raw_scores = self._blend_raw_scores(self._base_prediction_matrix(X_scaled))
+        score_series = pd.Series(0.0, index=df.index)
+        score_series.loc[feature_df.index] = np.round(self._squash_scores(raw_scores), 4)
+        return score_series
 
     def directional_score(self, df: pd.DataFrame) -> float:
         """Alias for predict() — compatible with LSTM model interface."""
@@ -301,17 +312,86 @@ class EnsembleModel:
     def top_features(self) -> list[dict]:
         return list(self._top_features)
 
+    def _base_prediction_matrix(self, X_scaled: np.ndarray) -> np.ndarray:
+        preds = np.zeros((len(X_scaled), 3), dtype=float)
+        if _XGB and self._xgb_model is not None:
+            preds[:, 0] = self._xgb_model.predict(X_scaled)
+        if _LGB and self._lgb_model is not None:
+            preds[:, 1] = self._lgb_model.predict(X_scaled)
+        if self._ridge_model is not None:
+            preds[:, 2] = self._ridge_model.predict(X_scaled)
+
+        preds[:, 0] *= self._model_weights.get("xgb", 1.0)
+        preds[:, 1] *= self._model_weights.get("lgb", 1.0)
+        preds[:, 2] *= self._model_weights.get("ridge", 1.0)
+        return preds
+
+    def _blend_raw_scores(self, preds: np.ndarray) -> np.ndarray:
+        if preds.size == 0:
+            return np.array([], dtype=float)
+        if self._meta_model is not None:
+            return np.asarray(self._meta_model.predict(preds), dtype=float)
+
+        raw_scores = np.zeros(len(preds), dtype=float)
+        for idx, row in enumerate(preds):
+            active = row[row != 0.0]
+            raw_scores[idx] = float(np.mean(active)) if active.size else 0.0
+        return raw_scores
+
+    def _squash_scores(self, raw_scores: np.ndarray) -> np.ndarray:
+        scale = max(float(self._target_scale), 1e-4)
+        normalized = np.asarray(raw_scores, dtype=float) / scale
+        return np.tanh(normalized * self.output_gain)
+
     def _walkforward_meta_refit(self, oof_preds: np.ndarray, y: np.ndarray) -> Ridge:
         meta = Ridge(alpha=1.0)
         if len(oof_preds) < 30:
+            self._meta_walkforward_report = {"available": False, "message": "Insufficient OOF rows"}
             meta.fit(oof_preds, y)
             return meta
-        tscv = TimeSeriesSplit(n_splits=3)
-        fitted = None
-        for train_idx, _ in tscv.split(oof_preds):
-            fitted = Ridge(alpha=1.0)
-            fitted.fit(oof_preds[train_idx], y[train_idx])
-        return fitted if fitted is not None else meta.fit(oof_preds, y)
+
+        alphas = (0.3, 1.0, 3.0, 10.0)
+        n_splits = self._resolve_time_series_splits(len(oof_preds), desired=max(3, self.cv_splits - 1))
+        candidates: list[dict] = []
+        best_alpha = 1.0
+        best_score = float("-inf")
+
+        for alpha in alphas:
+            fold_ics: list[float] = []
+            fold_accs: list[float] = []
+            for train_idx, val_idx in TimeSeriesSplit(n_splits=n_splits).split(oof_preds):
+                fitted = Ridge(alpha=alpha)
+                fitted.fit(oof_preds[train_idx], y[train_idx])
+                val_pred = fitted.predict(oof_preds[val_idx])
+                val_y = y[val_idx]
+                ic = float(pearsonr(val_pred, val_y)[0]) if len(val_y) > 1 and np.std(val_pred) > 0 and np.std(val_y) > 0 else 0.0
+                acc = float((np.sign(val_pred) == np.sign(val_y)).mean()) if len(val_y) else 0.0
+                fold_ics.append(ic)
+                fold_accs.append(acc)
+
+            mean_ic = float(np.mean(fold_ics)) if fold_ics else 0.0
+            mean_acc = float(np.mean(fold_accs)) if fold_accs else 0.0
+            candidates.append(
+                {
+                    "alpha": alpha,
+                    "mean_ic": round(mean_ic, 4),
+                    "mean_accuracy": round(mean_acc, 4),
+                }
+            )
+            score = mean_ic + max(mean_acc - 0.5, 0.0)
+            if score > best_score:
+                best_score = score
+                best_alpha = alpha
+
+        self._meta_walkforward_report = {
+            "available": True,
+            "n_splits": n_splits,
+            "best_alpha": best_alpha,
+            "candidates": candidates,
+        }
+        meta = Ridge(alpha=best_alpha)
+        meta.fit(oof_preds, y)
+        return meta
 
     def _compute_oot_validation(self, oot_df: pd.DataFrame) -> dict:
         if oot_df.empty or not self._trained:

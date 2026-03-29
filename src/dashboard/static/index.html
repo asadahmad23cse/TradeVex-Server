@@ -241,6 +241,43 @@ body{
 .history-row-win { background: rgba(0,200,83,0.05); }
 .history-row-loss { background: rgba(255,23,68,0.05); }
 .history-row-open { background: rgba(255,152,0,0.05); }
+.history-row-long { background: rgba(0,200,83,0.05); }
+.history-row-short { background: rgba(255,50,50,0.06); }
+.history-row-blocked { background: rgba(255,214,10,0.08); }
+.history-filters{display:flex;gap:8px;flex-wrap:wrap}
+.hist-filter-btn{
+  border:1px solid #30363d;
+  background:#0d1117;
+  color:#8b949e;
+  border-radius:6px;
+  padding:4px 10px;
+  font-size:11px;
+  cursor:pointer;
+}
+.hist-filter-btn.active{
+  border-color:#58a6ff;
+  color:#e6edf3;
+  background:#1f2937;
+}
+.history-tabs{
+  display:flex;
+  gap:8px;
+  padding:8px 16px;
+  border-top:1px solid #30363d;
+}
+.hist-tab-btn{
+  border:none;
+  border-bottom:2px solid transparent;
+  background:transparent;
+  color:#8b949e;
+  padding:6px 10px;
+  font-size:12px;
+  cursor:pointer;
+}
+.hist-tab-btn.active{
+  color:#e6edf3;
+  border-bottom-color:#58a6ff;
+}
 
 @media(max-width:980px){
   .grid{grid-template-columns:1fr 1fr}
@@ -411,22 +448,32 @@ body{
         <div class="panel-row"><span class="panel-label">Volatility</span><span id="mo-vol" class="panel-value">—</span></div>
         <div class="panel-row"><span class="panel-label">ATR %</span><span id="mo-atr" class="panel-value">—</span></div>
         <div class="panel-row"><span class="panel-label">Regime</span><span id="mo-regime" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Bias</span><span id="mo-bias" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">4H Bias</span><span id="mo-4h-bias" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">1D Bias</span><span id="mo-1d-bias" class="panel-value">—</span></div>
         <div class="panel-row"><span class="panel-label">Session</span><span id="mo-session" class="panel-value">—</span></div>
       </div>
     </div>
 
     <div id="stats-bar" class="stats-bar" style="display:flex; gap:20px; padding:10px 16px; margin:8px 12px; background:#161b22; border:1px solid #30363d; border-radius:8px; font-size:13px; color:#8b949e; flex-wrap:wrap;">
       <span>Signals: <b id="stat-total" style="color:#e6edf3">0</b></span>
-      <span>Win Rate: <b id="stat-winrate" style="color:#00c853">0%</b></span>
-      <span>Wins: <b id="stat-wins" style="color:#00c853">0</b></span>
-      <span>Losses: <b id="stat-losses" style="color:#ff1744">0</b></span>
+      <span>📈 LONG: <b id="stat-long-count" style="color:#00c853">0</b> (<b id="stat-long-wr" style="color:#00c853">0%</b>)</span>
+      <span>📉 SHORT: <b id="stat-short-count" style="color:#ff6b7a">0</b> (<b id="stat-short-wr" style="color:#ff6b7a">0%</b>)</span>
       <span>Total P&L: <b id="stat-pnl" style="color:#e6edf3">0%</b></span>
+      <span>Blocked: <b id="stat-blocked" style="color:#ffd60a">0</b></span>
       <span>Open: <b id="stat-open" style="color:#ff9800">0</b></span>
     </div>
 
     <div style="margin:8px 12px; background:#161b22; border:1px solid #30363d; border-radius:8px; overflow:hidden;">
-      <div style="padding:10px 16px; font-size:14px; font-weight:600; color:#e6edf3; border-bottom:1px solid #30363d;">
-        Signal History
+      <div style="padding:10px 16px; font-size:14px; font-weight:600; color:#e6edf3; border-bottom:1px solid #30363d; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+        <span>Signal History</span>
+        <div class="history-filters">
+          <button type="button" class="hist-filter-btn active" data-filter="ALL">All</button>
+          <button type="button" class="hist-filter-btn" data-filter="ACTIVE">Active</button>
+          <button type="button" class="hist-filter-btn" data-filter="BLOCKED">Blocked</button>
+          <button type="button" class="hist-filter-btn" data-filter="SL">SL</button>
+          <button type="button" class="hist-filter-btn" data-filter="TP">TP</button>
+        </div>
       </div>
       <div id="multi-open-warning" style="display:none; padding:8px 16px; font-size:12px; color:#ffb74d; background:rgba(255,152,0,.08); border-bottom:1px solid #30363d;">
         ⚠️ Multiple open positions detected — check cooldown settings
@@ -437,6 +484,7 @@ body{
             <tr style="color:#8b949e; border-bottom:1px solid #30363d;">
               <th style="padding:8px; text-align:left">#</th>
               <th style="padding:8px; text-align:left">Time</th>
+              <th style="padding:8px; text-align:left">Type</th>
               <th style="padding:8px; text-align:left">Signal</th>
               <th style="padding:8px; text-align:right">Conf</th>
               <th style="padding:8px; text-align:right">Entry</th>
@@ -448,9 +496,14 @@ body{
             </tr>
           </thead>
           <tbody id="history-tbody">
-            <tr><td colspan="10" style="padding:20px; text-align:center; color:#484f58;">No signals recorded yet</td></tr>
+            <tr><td colspan="11" style="padding:20px; text-align:center; color:#484f58;">No signals recorded yet</td></tr>
           </tbody>
         </table>
+      </div>
+      <div class="history-tabs">
+        <button type="button" class="hist-tab-btn" data-type="LONG">LONG History</button>
+        <button type="button" class="hist-tab-btn" data-type="SHORT">SHORT History</button>
+        <button type="button" class="hist-tab-btn active" data-type="ALL">All</button>
       </div>
     </div>
 
@@ -497,6 +550,9 @@ let openTradeSignal = "LONG";
 let sessionDayKey = null;
 let sessionHigh = null;
 let sessionLow = null;
+let historyFilter = "ALL";
+let historyTypeTab = "ALL";
+let latestHistorySignals = [];
 const API_CACHE = new Map();
 const API_INFLIGHT = new Map();
 const sparkPrices = [];
@@ -1013,18 +1069,18 @@ function applySignalPayload(s, source){
     box.style.background = "rgba(0,200,83,0.15)";
     box.style.border = "2px solid #00c853";
     txt.style.color = "#00c853";
-    txt.textContent = "🟢 BUY NOW";
+    txt.textContent = "▲ LONG";
     det.textContent = `Entry: $${fmtPx(s.entry_price)} | SL: $${fmtPx(s.stop_loss)} | Target: $${fmtPx(s.tp1)}`;
     det.style.color = "#00c853";
     box.classList.add("pulse-long");
     waitInsights.style.display = "none";
   }else if(sig === "SHORT" && Boolean(s.validated)){
-    box.style.background = "rgba(255,23,68,0.15)";
-    box.style.border = "2px solid #ff1744";
-    txt.style.color = "#ff1744";
-    txt.textContent = "🔴 SELL NOW";
+    box.style.background = "rgba(180,30,30,0.15)";
+    box.style.border = "2px solid #cc3333";
+    txt.style.color = "#ff4d4d";
+    txt.textContent = "▼ SHORT";
     det.textContent = `Entry: $${fmtPx(s.entry_price)} | SL: $${fmtPx(s.stop_loss)} | Target: $${fmtPx(s.tp1)}`;
-    det.style.color = "#ff1744";
+    det.style.color = "#ff6b7a";
     box.classList.add("pulse-short");
     waitInsights.style.display = "none";
   }else{
@@ -1153,7 +1209,21 @@ function applySignalPayload(s, source){
   setOf('mo-fg', (s.fear_greed||50)+' '+(mo.fear_greed_label||''), s.fear_greed<40?'#ff9800':s.fear_greed>60?'#00c853':'#8b949e');
   setOf('mo-vol', mo.volatility||'—', mo.volatility==='HIGH'?'#ff9800':mo.volatility==='LOW'?'#2979ff':'#8b949e');
   setOf('mo-atr', (mo.atr_pct||0)+'%', '#e6edf3');
-  setOf('mo-regime', mo.regime||'—', (mo.regime||'').includes('BULL')?'#00c853':(mo.regime||'').includes('BEAR')?'#ff1744':'#ff9800');
+  const moRegime = String(mo.regime || '');
+  const bias = moRegime.includes('BEARISH') || moRegime.includes('HIGH_VOL_BEAR')
+    ? 'BEARISH'
+    : moRegime.includes('BULLISH') || moRegime.includes('HIGH_VOL_BULL')
+    ? 'BULLISH'
+    : 'NEUTRAL';
+  const biasColor = bias === 'BULLISH' ? '#00c853' : bias === 'BEARISH' ? '#ff4d4d' : '#ffcc33';
+  setOf('mo-regime', mo.regime||'—', moRegime.includes('BULL')?'#00c853':moRegime.includes('BEAR')?'#ff1744':'#ff9800');
+  setOf('mo-bias', bias, biasColor);
+  const mtf = s.mtf_bias || {};
+  const bias4h = String(mtf.bias_4h || 'NEUTRAL').toUpperCase();
+  const bias1d = String(mtf.bias_1d || 'NEUTRAL').toUpperCase();
+  const mtfColor = (v) => v === 'BULLISH' ? '#00c853' : v === 'BEARISH' ? '#ff4d4d' : '#ffcc33';
+  setOf('mo-4h-bias', bias4h, mtfColor(bias4h));
+  setOf('mo-1d-bias', bias1d, mtfColor(bias1d));
   setOf('mo-session', mo.session||'—', '#e6edf3');
   setSignalLines(s);
   updateLiveSignalMarker(s);
@@ -1184,6 +1254,124 @@ async function loadSignal(){
   }
 }
 
+function historyStatus(sig){
+  return String(sig?.status || sig?.result || "OPEN").toUpperCase();
+}
+
+function historySignalType(sig){
+  const rawType = String(sig?.type || "").toUpperCase();
+  if(rawType === "BLOCKED") return "BLOCKED";
+  const signalType = String(sig?.signal || sig?.requested_signal || "").toUpperCase();
+  if(signalType === "SHORT") return "SHORT";
+  if(signalType === "LONG") return "LONG";
+  return "BLOCKED";
+}
+
+function matchesHistoryFilter(sig, filter){
+  const status = historyStatus(sig);
+  if(filter === "ACTIVE") return status === "OPEN";
+  if(filter === "BLOCKED") return status === "BLOCKED";
+  if(filter === "SL") return status === "SL_HIT" || String(sig?.result || "").toUpperCase() === "SL";
+  if(filter === "TP") return status.includes("TP");
+  return true;
+}
+
+function matchesHistoryType(sig, typeTab){
+  if(typeTab === "ALL") return true;
+  const signalType = String(sig?.signal || sig?.requested_signal || "").toUpperCase();
+  return signalType === typeTab;
+}
+
+function renderSignalHistoryTable(){
+  const tbody = document.getElementById('history-tbody');
+  if(!tbody) return;
+  const allSignals = Array.isArray(latestHistorySignals) ? [...latestHistorySignals] : [];
+  const visible = allSignals
+    .filter(sig => matchesHistoryType(sig, historyTypeTab))
+    .filter(sig => matchesHistoryFilter(sig, historyFilter))
+    .reverse();
+
+  if(!visible.length){
+    tbody.innerHTML = '<tr><td colspan="11" style="padding:20px; text-align:center; color:#484f58;">No signals match current filter</td></tr>';
+    return;
+  }
+
+  const resultMap = {
+    TP1_HIT: "TP1",
+    TP2_HIT: "TP2",
+    TP3_HIT: "TP3",
+    SL_HIT: "SL",
+    EXPIRED: "EXP",
+    OPEN: "OPEN",
+    BLOCKED: "BLOCKED",
+  };
+
+  const fmtN = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '—' : Number(v).toLocaleString());
+  const fmtPnl = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '—' : `${Number(v) >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`);
+
+  tbody.innerHTML = visible.map(sig => {
+    const signalType = String(sig.signal || sig.requested_signal || 'WAIT').toUpperCase();
+    const tradeType = historySignalType(sig);
+    const status = historyStatus(sig);
+    const result = resultMap[status] || status;
+    const isBlocked = status === "BLOCKED";
+    const rowClass = isBlocked ? 'history-row-blocked' : signalType === "SHORT" ? 'history-row-short' : 'history-row-long';
+    const sigColor = signalType === 'LONG' ? '#00c853' : signalType === 'SHORT' ? '#ff1744' : '#ffd60a';
+    const resultColor = isBlocked ? '#ffd60a' : status.includes('TP') ? '#00c853' : status === 'SL_HIT' ? '#ff1744' : '#ff9800';
+    const typeBg = tradeType === "LONG" ? 'rgba(0,200,83,.18)' : tradeType === "SHORT" ? 'rgba(255,68,88,.18)' : 'rgba(255,214,10,.2)';
+    const typeColor = tradeType === "LONG" ? '#00e676' : tradeType === "SHORT" ? '#ff6b7a' : '#ffd60a';
+    const pnl = fmtPnl(sig.pnl_pct);
+    const pnlNum = Number(sig.pnl_pct);
+    const pnlColor = Number.isNaN(pnlNum) ? '#8b949e' : pnlNum > 0 ? '#00c853' : pnlNum < 0 ? '#ff1744' : '#8b949e';
+    const time = sig.time ? String(sig.time).split('T')[1]?.substring(0,8) || sig.time : '—';
+    const reasonTip = isBlocked && sig.reason ? ` title="${escapeHtml(sig.reason)}"` : '';
+
+    return `<tr class="${rowClass}" style="border-bottom:1px solid #21262d;">
+      <td style="padding:6px 8px; color:#8b949e">${sig.id}</td>
+      <td style="padding:6px 8px; color:#8b949e">${time}</td>
+      <td style="padding:6px 8px">
+        <span style="display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid rgba(148,163,184,.3);background:${typeBg};color:${typeColor};font-weight:700;font-size:11px">${tradeType}</span>
+      </td>
+      <td style="padding:6px 8px; color:${sigColor}; font-weight:600">${signalType}</td>
+      <td style="padding:6px 8px; text-align:right">${Number(sig.confidence ?? 0).toFixed(1)}%</td>
+      <td style="padding:6px 8px; text-align:right">${fmtN(sig.entry)}</td>
+      <td style="padding:6px 8px; text-align:right; color:#ff5252">${fmtN(sig.stop_loss)}</td>
+      <td style="padding:6px 8px; text-align:right; color:#00e676">${fmtN(sig.tp1)}</td>
+      <td style="padding:6px 8px; text-align:right">${sig.risk_reward ?? '—'}</td>
+      <td style="padding:6px 8px; text-align:center; color:${resultColor}"${reasonTip}>${result}</td>
+      <td style="padding:6px 8px; text-align:right; color:${pnlColor}; font-weight:600">${pnl}</td>
+    </tr>`;
+  }).join('');
+}
+
+function setHistoryFilter(filter){
+  historyFilter = String(filter || "ALL").toUpperCase();
+  document.querySelectorAll('.hist-filter-btn').forEach(btn => {
+    btn.classList.toggle('active', String(btn.dataset.filter || '').toUpperCase() === historyFilter);
+  });
+  renderSignalHistoryTable();
+}
+
+function setHistoryTypeTab(typeTab){
+  historyTypeTab = String(typeTab || "ALL").toUpperCase();
+  document.querySelectorAll('.hist-tab-btn').forEach(btn => {
+    btn.classList.toggle('active', String(btn.dataset.type || '').toUpperCase() === historyTypeTab);
+  });
+  renderSignalHistoryTable();
+}
+
+function bindHistoryFilters(){
+  document.querySelectorAll('.hist-filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => setHistoryFilter(btn.dataset.filter || "ALL"));
+  });
+}
+
+function bindHistoryTabs(){
+  document.querySelectorAll('.hist-tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => setHistoryTypeTab(btn.dataset.type || "ALL"));
+  });
+}
+
 async function loadSignalHistory(){
   try{
     const data = await fetchJSON('/api/btc/signal/history?limit=20', { ttlMs: 7000, timeoutMs: 8000 });
@@ -1192,64 +1380,26 @@ async function loadSignalHistory(){
     const s = data.stats || {};
     const el = (id) => document.getElementById(id);
     if (el('stat-total')) el('stat-total').textContent = s.total || 0;
-    if (el('stat-winrate')) {
-      el('stat-winrate').textContent = (s.win_rate || 0) + '%';
-      el('stat-winrate').style.color = s.win_rate >= 55 ? '#00c853' : s.win_rate >= 45 ? '#ff9800' : '#ff1744';
-    }
-    if (el('stat-wins')) el('stat-wins').textContent = s.wins || 0;
-    if (el('stat-losses')) el('stat-losses').textContent = s.losses || 0;
+    if (el('stat-long-count')) el('stat-long-count').textContent = s.long_total || 0;
+    if (el('stat-short-count')) el('stat-short-count').textContent = s.short_total || 0;
+    if (el('stat-long-wr')) el('stat-long-wr').textContent = `${Number(s.long_win_rate || 0).toFixed(1)}%`;
+    if (el('stat-short-wr')) el('stat-short-wr').textContent = `${Number(s.short_win_rate || 0).toFixed(1)}%`;
+    if (el('stat-blocked')) el('stat-blocked').textContent = s.blocked_today || 0;
     if (el('stat-pnl')) {
-      const pnl = s.total_pnl || 0;
-      el('stat-pnl').textContent = (pnl >= 0 ? '+' : '') + pnl + '%';
+      const pnl = Number(s.total_pnl || 0);
+      el('stat-pnl').textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%';
       el('stat-pnl').style.color = pnl >= 0 ? '#00c853' : '#ff1744';
     }
     if (el('stat-open')) el('stat-open').textContent = s.open_signals || 0;
 
-    const openSignals = Array.isArray(data.signals)
-      ? data.signals.filter(sig => String(sig?.status || "").toUpperCase() === "OPEN")
-      : [];
+    latestHistorySignals = Array.isArray(data.signals) ? data.signals : [];
+    const openSignals = latestHistorySignals.filter(sig => historyStatus(sig) === "OPEN");
     const multiOpenWarning = document.getElementById('multi-open-warning');
     if (multiOpenWarning) {
       multiOpenWarning.style.display = openSignals.length > 2 ? 'block' : 'none';
     }
 
-    const tbody = document.getElementById('history-tbody');
-    if (tbody && data.signals && data.signals.length > 0) {
-      tbody.innerHTML = data.signals.reverse().map(sig => {
-        const signalType = sig.signal || 'LONG';
-        const status = sig.status || 'OPEN';
-        const rowClass = status.includes('TP') ? 'history-row-win' : status === 'SL_HIT' ? 'history-row-loss' : 'history-row-open';
-        const sigColor = signalType === 'LONG' ? '#00c853' : '#ff1744';
-        const resultMap = {
-          'TP1_HIT': 'TP1',
-          'TP2_HIT': 'TP2',
-          'TP3_HIT': 'TP3',
-          'SL_HIT': 'SL',
-          'EXPIRED': 'EXP',
-          'OPEN': 'OPEN',
-        };
-        const result = resultMap[status] || status;
-        const resultColor = status.includes('TP') ? '#00c853' : status === 'SL_HIT' ? '#ff1744' : '#ff9800';
-        const pnl = sig.pnl_pct != null ? (sig.pnl_pct >= 0 ? '+' : '') + sig.pnl_pct + '%' : '—';
-        const pnlColor = sig.pnl_pct > 0 ? '#00c853' : sig.pnl_pct < 0 ? '#ff1744' : '#8b949e';
-        const time = sig.time ? sig.time.split('T')[1]?.substring(0,8) || sig.time : '—';
-
-        return `<tr class="${rowClass}" style="border-bottom:1px solid #21262d;">
-          <td style="padding:6px 8px; color:#8b949e">${sig.id}</td>
-          <td style="padding:6px 8px; color:#8b949e">${time}</td>
-          <td style="padding:6px 8px; color:${sigColor}; font-weight:600">${signalType}</td>
-          <td style="padding:6px 8px; text-align:right">${sig.confidence ?? 0}%</td>
-          <td style="padding:6px 8px; text-align:right">${sig.entry?.toLocaleString() || '—'}</td>
-          <td style="padding:6px 8px; text-align:right; color:#ff5252">${sig.stop_loss?.toLocaleString() || '—'}</td>
-          <td style="padding:6px 8px; text-align:right; color:#00e676">${sig.tp1?.toLocaleString() || '—'}</td>
-          <td style="padding:6px 8px; text-align:right">${sig.risk_reward || '—'}</td>
-          <td style="padding:6px 8px; text-align:center; color:${resultColor}">${result}</td>
-          <td style="padding:6px 8px; text-align:right; color:${pnlColor}; font-weight:600">${pnl}</td>
-        </tr>`;
-      }).join('');
-    } else if (tbody) {
-      tbody.innerHTML = '<tr><td colspan="10" style="padding:20px; text-align:center; color:#484f58;">No signals recorded yet</td></tr>';
-    }
+    renderSignalHistoryTable();
   }catch(e){
     console.warn('History fetch failed:', e);
   }
@@ -1345,6 +1495,8 @@ async function switchTimeframe(tf){
 
 async function init(){
   initChart();
+  bindHistoryFilters();
+  bindHistoryTabs();
   document.querySelectorAll('.tf-btn').forEach(btn=>{
     btn.addEventListener('click',()=>switchTimeframe(btn.dataset.tf));
   });

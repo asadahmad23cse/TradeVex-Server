@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 
 from src.api.alt_data import AltDataProvider
+from src.alpha.meta_model import MetaModel
 from src.alpha.orderbook import OrderFlowAnalyser
 from src.features.hurst import hurst_factor_multiplier
 from src.utils.math_utils import bootstrap_confidence_interval
@@ -57,6 +58,7 @@ ALPHA_THRESHOLD = 0.45
 IC_WINDOW = 60
 TURNOVER_AUTOCORR_THRESHOLD = 0.30
 IC_WINDOWS = (10, 21, 63)
+CRYPTO_IC_WINDOWS = (24, 72, 168)
 IC_BLEND_WEIGHTS = (0.2, 0.5, 0.3)
 VIX_CACHE_TTL_SEC = 300
 IC_CACHE_TTL_SEC = 300
@@ -147,6 +149,12 @@ def _is_indian_asset(asset: str | None = None, asset_class: str | None = None) -
     return False
 
 
+def _ic_windows_for_asset_class(asset_class: str | None = None) -> tuple[int, int, int]:
+    if (asset_class or "").strip().lower() == "crypto":
+        return CRYPTO_IC_WINDOWS
+    return IC_WINDOWS
+
+
 def _last_thursday_of_month(d: date) -> date:
     last_day = monthrange(d.year, d.month)[1]
     end = date(d.year, d.month, last_day)
@@ -164,6 +172,7 @@ def _in_expiry_window(d: date, lookback_days: int = 5) -> bool:
 def _compute_effective_ic_bundle(
     factors: dict[str, pd.Series],
     fwd_ret: pd.Series,
+    ic_windows: tuple[int, int, int] = IC_WINDOWS,
 ) -> tuple[dict[str, float], dict[str, dict[str, float | bool]]]:
     """
     Compute effective IC weights + metadata bundle for all factors.
@@ -173,7 +182,7 @@ def _compute_effective_ic_bundle(
     factor_meta: dict[str, dict[str, float | bool]] = {}
     for name, factor in factors.items():
         ic_vals: list[float] = []
-        for w in IC_WINDOWS:
+        for w in ic_windows:
             ic_series = _rolling_ic(factor, fwd_ret, w)
             ic_vals.append(_latest_usable_ic(ic_series))
         composite_ic = float(
@@ -199,6 +208,7 @@ def _compute_effective_ic_bundle(
             "ic_10": round(float(ic_vals[0]), 4),
             "ic_21": round(float(ic_vals[1]), 4),
             "ic_63": round(float(ic_vals[2]), 4),
+            "ic_windows": [int(w) for w in ic_windows],
             "ic_composite": round(float(composite_ic), 4),
             "ic_ci_center": round(float(ci_center), 4),
             "ic_ci_low": round(float(ci_low), 4),
@@ -224,7 +234,8 @@ def _refresh_ic_cache_worker() -> None:
             if not isinstance(factors, dict) or not isinstance(fwd_ret, pd.Series):
                 continue
             try:
-                ics, factor_meta = _compute_effective_ic_bundle(factors, fwd_ret)
+                ic_windows = tuple(ctx.get("ic_windows", IC_WINDOWS))  # type: ignore[arg-type]
+                ics, factor_meta = _compute_effective_ic_bundle(factors, fwd_ret, ic_windows=ic_windows)
                 with _ic_cache_lock:
                     _ic_weight_cache[key] = {
                         "ts": time.time(),
@@ -242,9 +253,11 @@ class AlphaFactorModel:
         self,
         alpha_threshold: float = ALPHA_THRESHOLD,
         ic_window: int = IC_WINDOW,
+        meta_config: dict | None = None,
     ):
         self.alpha_threshold = alpha_threshold
         self.ic_window = ic_window
+        self._meta_model = MetaModel(meta_config)
         global _ic_refresh_started
         if not _ic_refresh_started:
             with _ic_cache_lock:
@@ -271,6 +284,7 @@ class AlphaFactorModel:
         cache_key: str,
         factors: dict[str, pd.Series],
         fwd_ret: pd.Series,
+        asset_class: str | None = None,
     ) -> tuple[dict[str, float], dict[str, dict[str, float | bool]]]:
         now = time.time()
         with _ic_cache_lock:
@@ -281,13 +295,15 @@ class AlphaFactorModel:
                 if isinstance(ics, dict) and isinstance(meta, dict):
                     return ics, meta  # type: ignore[return-value]
 
-        ics, factor_meta = _compute_effective_ic_bundle(factors, fwd_ret)
+        ic_windows = _ic_windows_for_asset_class(asset_class)
+        ics, factor_meta = _compute_effective_ic_bundle(factors, fwd_ret, ic_windows=ic_windows)
         with _ic_cache_lock:
             _ic_weight_cache[cache_key] = {"ts": now, "ics": ics, "factor_meta": factor_meta}
             # store small rolling context for async refresh
             _ic_refresh_context[cache_key] = {
                 "factors": {k: v.tail(700).copy() for k, v in factors.items()},
                 "fwd_ret": fwd_ret.tail(700).copy(),
+                "ic_windows": ic_windows,
             }
         return ics, factor_meta
 
@@ -323,16 +339,20 @@ class AlphaFactorModel:
         return f2 * mults["mean_rev_mult"]
 
     def _factor3_volume(self, df: pd.DataFrame) -> pd.Series:
-        """F3 = Z(0.5*OBV_Slope + 0.3*CMF + 0.2*Volume_Osc)."""
+        """Volume-flow factor with BTC-friendly imbalance persistence inputs."""
         obv_slope = df.get("OBV_Slope", pd.Series(0.0, index=df.index))
         cmf = df.get("CMF", pd.Series(0.0, index=df.index))
         vol_osc = df.get("Volume_Osc", pd.Series(0.0, index=df.index))
+        imbalance = df.get("Order_Imbalance", pd.Series(0.0, index=df.index))
+        cvd_z = df.get("CVD_Z", pd.Series(0.0, index=df.index))
 
         obv_z = _zscore(obv_slope.fillna(0), self.ic_window)
         cmf_z = _zscore(cmf.fillna(0), self.ic_window)
         vosc_z = _zscore(vol_osc.fillna(0), self.ic_window)
+        imbalance_z = _zscore(imbalance.fillna(0), self.ic_window)
+        cvd_flow_z = _zscore(cvd_z.fillna(0), self.ic_window)
 
-        raw = 0.5 * obv_z + 0.3 * cmf_z + 0.2 * vosc_z
+        raw = 0.35 * obv_z + 0.25 * cmf_z + 0.15 * vosc_z + 0.15 * imbalance_z + 0.10 * cvd_flow_z
         return _zscore(raw, self.ic_window)
 
     def _factor4_ml(self, ml_scores: pd.Series) -> pd.Series:
@@ -347,11 +367,15 @@ class AlphaFactorModel:
         """Volatility/squeeze state factor."""
         atr_pct = df.get("ATR_Percentile", pd.Series(50.0, index=df.index)) / 100.0
         squeeze = df.get("Keltner_Squeeze", pd.Series(0.0, index=df.index))
+        jump_intensity = df.get("Jump_Intensity_20", pd.Series(0.0, index=df.index)).clip(lower=0.0, upper=1.0)
+        downside_ratio = df.get("Downside_Vol_Ratio_20", pd.Series(0.5, index=df.index)).clip(lower=0.0, upper=1.0)
 
-        f5 = -atr_pct
+        f5 = -atr_pct - 0.5 * jump_intensity + (0.5 - downside_ratio)
         if momentum_factor is not None:
             momentum_dir = np.sign(momentum_factor.fillna(0))
-            f5 = f5.where(squeeze == 0, (1 - atr_pct) * momentum_dir)
+            compression_edge = (1.0 - atr_pct).clip(lower=-1.0, upper=1.0) * (1.0 - jump_intensity)
+            breakout_bias = compression_edge * momentum_dir
+            f5 = f5.where(squeeze == 0, breakout_bias)
 
         return _zscore(f5.fillna(0), self.ic_window)
 
@@ -367,13 +391,26 @@ class AlphaFactorModel:
         return pd.Series(float(np.clip(val, -1.0, 1.0)), index=df.index)
 
     def _factor7_ensemble(self, df: pd.DataFrame) -> pd.Series:
-        """Ensemble proxy factor from available engineered columns."""
+        """Ensemble factor using model output, then orthogonal technical fallback."""
         if "Ensemble_Score" in df.columns:
             raw = pd.Series(df["Ensemble_Score"], index=df.index)
-        elif "Alpha_Momentum" in df.columns:
-            raw = pd.Series(df["Alpha_Momentum"], index=df.index)
         else:
-            raw = pd.Series(0.0, index=df.index)
+            if {"Ichimoku_SpanA", "Ichimoku_SpanB", "Close"}.issubset(df.columns):
+                span_a = pd.Series(df["Ichimoku_SpanA"], index=df.index)
+                span_b = pd.Series(df["Ichimoku_SpanB"], index=df.index)
+                close = pd.Series(df["Close"], index=df.index)
+                cloud_mid = (span_a + span_b) / 2.0
+                cloud_width = (span_a - span_b).abs().replace(0, np.nan)
+                cloud_pos = ((close - cloud_mid) / cloud_width).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+            else:
+                cloud_pos = pd.Series(0.0, index=df.index)
+
+            if "Rolling_Beta" in df.columns:
+                beta_proxy = -(pd.Series(df["Rolling_Beta"], index=df.index).fillna(1.0) - 1.0)
+            else:
+                beta_proxy = pd.Series(0.0, index=df.index)
+
+            raw = 0.7 * cloud_pos + 0.3 * beta_proxy
         return _zscore(raw.fillna(0.0), self.ic_window)
 
     def _factor8_microstructure(self, df: pd.DataFrame) -> pd.Series:
@@ -385,12 +422,23 @@ class AlphaFactorModel:
         vpin_z = _zscore(df.get("VPIN", pd.Series(0.0, index=df.index)).fillna(0), self.ic_window)
         micro_z = _zscore(df.get("Micro_Price_Offset", pd.Series(0.0, index=df.index)).fillna(0), self.ic_window)
         kyle_z = _zscore(df.get("Kyle_Lambda", pd.Series(0.0, index=df.index)).fillna(0), self.ic_window)
+        cvd_z = _zscore(df.get("CVD_Z", pd.Series(0.0, index=df.index)).fillna(0), self.ic_window)
+        micro_trend_z = _zscore(df.get("Micro_Price_Trend", pd.Series(0.0, index=df.index)).fillna(0), self.ic_window)
+        shock_z = _zscore(df.get("Flow_Imbalance_Shock", pd.Series(0.0, index=df.index)).fillna(0), self.ic_window)
 
-        raw = 0.35 * ofi_z + 0.25 * micro_z + 0.25 * vpin_z + 0.15 * kyle_z
+        raw = (
+            0.25 * ofi_z
+            + 0.15 * micro_z
+            + 0.20 * vpin_z
+            + 0.10 * kyle_z
+            + 0.15 * cvd_z
+            + 0.10 * micro_trend_z
+            + 0.05 * shock_z
+        )
         return _zscore(raw, self.ic_window)
 
     def _factor9_options_flow(self, df: pd.DataFrame, asset: str | None, asset_class: str | None) -> pd.Series:
-        """India options flow factor from PCR with explicit thresholds."""
+        """India options flow factor from PCR with continuous scaling."""
         if not _is_indian_asset(asset, asset_class):
             return pd.Series(0.0, index=df.index)
         try:
@@ -399,12 +447,7 @@ class AlphaFactorModel:
             logger.warning("F9 PCR fetch failed: %s", exc)
             pcr = 1.0
 
-        if pcr > 1.3:
-            score = -1.0
-        elif pcr < 0.7:
-            score = 1.0
-        else:
-            score = 0.0
+        score = float(-np.tanh((pcr - 1.0) * 3.0))
         return pd.Series(score, index=df.index)
 
     def _factor10_fii_dii_flow(self, df: pd.DataFrame, asset: str | None, asset_class: str | None) -> pd.Series:
@@ -446,21 +489,17 @@ class AlphaFactorModel:
         return float(_vix_cache["value"])
 
     def _factor11_vix_regime(self, df: pd.DataFrame, asset: str | None, asset_class: str | None) -> tuple[pd.Series, float]:
-        """India VIX factor plus multiplier for final alpha."""
+        """India VIX factor plus smooth volatility multiplier for final alpha."""
         vix = self._india_vix_value(asset, asset_class)
-        if vix < 13:
-            score = 0.5
-            mult = 1.10
-        elif vix < 18:
-            score = 0.0
-            mult = 1.00
-        elif vix <= 22:
-            score = -0.5
-            mult = 0.80
-        else:
-            score = -1.0
-            mult = 0.60
+        vix_stress = float(np.tanh((vix - 18.0) / 6.0))
+        score = float(-vix_stress)
+        mult = float(np.clip(1.0 - 0.40 * max(vix_stress, 0.0) + 0.10 * max(-vix_stress, 0.0), 0.60, 1.10))
         return pd.Series(score, index=df.index), mult
+
+    @staticmethod
+    def _vix_z_proxy(vix_value: float) -> float:
+        """Approximate a VIX z-score proxy when only the latest level is available."""
+        return float((vix_value - 18.0) / 4.0)
 
     def _factor12_expiry_calendar(self, df: pd.DataFrame, asset: str | None, asset_class: str | None) -> tuple[pd.Series, bool]:
         """Expiry-week calendar factor and boolean flag."""
@@ -474,10 +513,16 @@ class AlphaFactorModel:
     # IC computation helpers
     # ------------------------------------------------------------------
 
-    def _composite_ic(self, factor: pd.Series, fwd_ret: pd.Series) -> tuple[float, dict[str, float]]:
+    def _composite_ic(
+        self,
+        factor: pd.Series,
+        fwd_ret: pd.Series,
+        asset_class: str | None = None,
+    ) -> tuple[float, dict[str, float]]:
         """Compute weighted IC blend over short/medium/long windows."""
+        ic_windows = _ic_windows_for_asset_class(asset_class)
         ic_vals: list[float] = []
-        for w in IC_WINDOWS:
+        for w in ic_windows:
             ic_series = _rolling_ic(factor, fwd_ret, w)
             ic_vals.append(_latest_usable_ic(ic_series))
         composite = float(
@@ -489,12 +534,20 @@ class AlphaFactorModel:
             "ic_10": round(float(ic_vals[0]), 4),
             "ic_21": round(float(ic_vals[1]), 4),
             "ic_63": round(float(ic_vals[2]), 4),
+            "ic_windows": [int(w) for w in ic_windows],
             "ic_composite": round(float(composite), 4),
         }
 
-    def _calibrated_confidence(self, alpha_score: float, regime: str, vix_value: float) -> float:
+    def _calibrated_confidence(
+        self,
+        alpha_score: float,
+        regime: str,
+        vix_value: float,
+        asset_class: str | None = None,
+    ) -> float:
         """Platt-style calibrated confidence with regime and VIX adjustments."""
-        calibrated = 1.0 / (1.0 + float(np.exp(-5.0 * alpha_score)))
+        scale = 3.5 if (asset_class or "").strip().lower() == "crypto" else 5.0
+        calibrated = 1.0 / (1.0 + float(np.exp(-scale * alpha_score)))
         confidence = calibrated * 100.0
 
         ru = (regime or "SIDEWAYS").upper()
@@ -505,10 +558,11 @@ class AlphaFactorModel:
         elif ru == "BULL":
             confidence *= 1.1
 
-        if vix_value > 22:
-            confidence *= 0.6
-        elif 18 <= vix_value <= 22:
-            confidence *= 0.8
+        if _is_indian_asset(asset_class=asset_class):
+            if vix_value > 22:
+                confidence *= 0.6
+            elif 18 <= vix_value <= 22:
+                confidence *= 0.8
 
         return float(np.clip(confidence, 0.0, 100.0))
 
@@ -577,7 +631,7 @@ class AlphaFactorModel:
 
         out: dict[str, float] = {}
         for name, factor in factors.items():
-            composite_ic, _ = self._composite_ic(factor, fwd_ret)
+            composite_ic, _ = self._composite_ic(factor, fwd_ret, asset_class=asset_class)
             out[name] = composite_ic
         return out
 
@@ -649,15 +703,30 @@ class AlphaFactorModel:
             n_rows=len(df),
             last_ts=df.index[-1] if len(df.index) else "na",
         )
-        ics, factor_meta = self._get_cached_ic_bundle(cache_key, factors, fwd_ret)
+        ics, factor_meta = self._get_cached_ic_bundle(cache_key, factors, fwd_ret, asset_class=asset_class)
+        factor_meta = {name: dict(meta) for name, meta in factor_meta.items()}
 
         latest: dict[str, float] = {
             name: float(series.iloc[-1]) if not series.empty else 0.0
             for name, series in factors.items()
         }
 
-        denom = max(sum(abs(v) for v in ics.values()), 0.1)
-        alpha_score = sum(ics[k] * latest[k] for k in ics) / denom
+        vix_value = self._india_vix_value(asset, asset_class)
+        regime_for_conf = self._regime_for_confidence(df, vix_value=vix_value, regime=regime)
+        adjusted_ics = self._meta_model.adjust_weights(
+            ics,
+            regime=regime_for_conf,
+            hurst=hurst,
+            vix_z=self._vix_z_proxy(vix_value) if _is_indian_asset(asset, asset_class) else 0.0,
+            drawdown_active=False,
+        )
+        for factor_name, meta in factor_meta.items():
+            base_ic = float(ics.get(factor_name, 0.0))
+            adj_ic = float(adjusted_ics.get(factor_name, base_ic))
+            meta["meta_multiplier"] = round(adj_ic / base_ic, 4) if abs(base_ic) > 1e-9 else 1.0
+
+        denom = max(sum(abs(v) for v in adjusted_ics.values()), 0.1)
+        alpha_score = sum(adjusted_ics[k] * latest[k] for k in adjusted_ics) / denom
         alpha_score *= vix_mult
 
         if alpha_score > self.alpha_threshold:
@@ -667,9 +736,12 @@ class AlphaFactorModel:
         else:
             signal = "HOLD"
 
-        vix_value = self._india_vix_value(asset, asset_class)
-        regime_for_conf = self._regime_for_confidence(df, vix_value=vix_value, regime=regime)
-        confidence = self._calibrated_confidence(alpha_score, regime_for_conf, vix_value)
+        confidence = self._calibrated_confidence(
+            alpha_score,
+            regime_for_conf,
+            vix_value,
+            asset_class=asset_class,
+        )
 
         if confidence > 75:
             strength = "STRONG"
@@ -684,7 +756,8 @@ class AlphaFactorModel:
             "signal": signal,
             "strength": strength,
             "factor_scores": {k: round(float(v), 4) for k, v in latest.items()},
-            "ic_weights": {k: round(float(v), 4) for k, v in ics.items()},
+            "ic_weights": {k: round(float(v), 4) for k, v in adjusted_ics.items()},
+            "raw_ic_weights": {k: round(float(v), 4) for k, v in ics.items()},
             "factor_meta": factor_meta,
             "regime_for_confidence": regime_for_conf,
             "india_vix": round(float(vix_value), 3),
@@ -714,6 +787,7 @@ class AlphaFactorModel:
             "strength": "WEAK",
             "factor_scores": dict(_zeros),
             "ic_weights": dict(_zeros),
+            "raw_ic_weights": dict(_zeros),
             "factor_meta": {},
             "reason": reason,
         }

@@ -470,7 +470,10 @@ class LiveRunner:
 
         ensemble = self.ensemble_models.get(symbol)
         if ensemble is not None and ensemble.is_trained:
-            scores.append(ensemble.directional_score(df))
+            if "Ensemble_Score" in df.columns:
+                scores.append(float(df["Ensemble_Score"].iloc[-1]))
+            else:
+                scores.append(ensemble.directional_score(df))
 
         # Temporal Attention Transformer
         _attn = self.attention_model
@@ -480,6 +483,18 @@ class LiveRunner:
                 scores.append(attn_score)
 
         return float(sum(scores) / len(scores)) if scores else 0.0
+
+    def _attach_ensemble_score(self, symbol: str, df: pd.DataFrame) -> pd.DataFrame:
+        ensemble = self.ensemble_models.get(symbol)
+        if ensemble is None or not ensemble.is_trained:
+            return df
+        try:
+            enriched = df.copy()
+            enriched["Ensemble_Score"] = ensemble.predict_series(df)
+            return enriched
+        except Exception as exc:
+            logger.warning("Ensemble score injection failed for %s: %s", symbol, exc)
+            return df
 
     def _execute_and_track(self, sig) -> bool:
         receipt = self.executor.execute(sig)
@@ -754,6 +769,7 @@ class LiveRunner:
 
                 regime_det = self._regime_cache.get(asset_class)
                 regime, regime_probs = regime_state.get(asset_class, ("SIDEWAYS", {}))
+                df = self._attach_ensemble_score(symbol, df)
 
                 alpha_start_ms = time_module.perf_counter() * 1000.0
                 ml_score = self._combined_ml_score(symbol, asset_class, df, entry_price)
@@ -979,7 +995,7 @@ class LiveRunner:
                     if ensemble.train(
                         df,
                         forward_horizon=self.cfg.get("ensemble", {}).get("forward_horizon", 5),
-                        oot_days=self.cfg.get("ml_validation", {}).get("oot_days", 10),
+                        oot_days=self.cfg.get("ml_validation", {}).get("oot_days", 21),
                         refit_meta_walkforward=True,
                     ):
                         self._save_model_validation(
@@ -1012,11 +1028,12 @@ class LiveRunner:
                     retrain_days=self.cfg.get("ml_validation", {}).get("lstm_retrain_days", 63),
                 ):
                     try:
-                        _lstm.train(df[["Close"]], epochs=5, verbose=0, oot_days=self.cfg.get("ml_validation", {}).get("oot_days", 10))
+                        _lstm.train(df[["Close"]], epochs=5, verbose=0, oot_days=self.cfg.get("ml_validation", {}).get("oot_days", 21))
                         self._save_model_validation("lstm", asset_class, _lstm.validation_report, [{"feature": "Close", "importance": 1.0, "rank": 1}])
                     except Exception as exc:
                         self._log_health("lstm", "WARNING", f"LSTM retrain failed for {symbol}: {exc}")
 
+                df = self._attach_ensemble_score(symbol, df)
                 ml_score = self._combined_ml_score(symbol, asset_class, df, entry_price)
 
                 alpha_result = self.alpha_model.score(

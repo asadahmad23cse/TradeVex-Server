@@ -40,6 +40,11 @@ FACTOR_NAMES = {
     "F5": "VolSqueeze",
     "F6": "AltData",
     "F7": "Ensemble",
+    "F8": "Microstructure",
+    "F9": "OptionsPCR",
+    "F10": "FIIDIIFlow",
+    "F11": "IndiaVIX",
+    "F12": "ExpiryCalendar",
 }
 
 # Regime-specific multipliers (can be tuned via config)
@@ -52,6 +57,11 @@ REGIME_WEIGHTS = {
         "F5": 0.8,
         "F6": 1.0,
         "F7": 1.3,   # Ensemble up
+        "F8": 0.9,
+        "F9": 0.8,
+        "F10": 1.1,
+        "F11": 0.9,
+        "F12": 0.8,
     },
     "MEAN_REVERT": {
         "F1": 0.5,   # Momentum down
@@ -61,6 +71,11 @@ REGIME_WEIGHTS = {
         "F5": 1.3,   # Vol/squeeze up
         "F6": 1.0,
         "F7": 0.8,
+        "F8": 0.8,
+        "F9": 1.1,
+        "F10": 0.9,
+        "F11": 1.1,
+        "F12": 1.3,
     },
     "CRISIS": {
         "F1": 0.3,   # Reduce all
@@ -68,8 +83,13 @@ REGIME_WEIGHTS = {
         "F3": 1.5,   # Volume dominant in panic
         "F4": 0.5,
         "F5": 0.3,
-        "F6": 1.5,   # FII/DII flow matters in crisis
+        "F6": 1.2,
         "F7": 0.5,
+        "F8": 2.0,   # Microstructure dominates during dislocation
+        "F9": 1.5,
+        "F10": 1.7,
+        "F11": 1.6,
+        "F12": 1.2,
     },
     "NEUTRAL": {
         "F1": 1.0,
@@ -79,6 +99,11 @@ REGIME_WEIGHTS = {
         "F5": 1.0,
         "F6": 1.0,
         "F7": 1.0,
+        "F8": 1.0,
+        "F9": 1.0,
+        "F10": 1.0,
+        "F11": 1.0,
+        "F12": 1.0,
     },
 }
 
@@ -113,7 +138,7 @@ class MetaModel:
             return "CRISIS"
 
         # Hurst-based classification
-        if hurst > 0.55 and regime in ("BULL", "BEAR"):
+        if hurst > 0.55 and regime in ("BULL", "BEAR", "HIGH_VOL_BULL", "HIGH_VOL_BEAR"):
             return "TRENDING"
         elif hurst < 0.45 and regime == "SIDEWAYS":
             return "MEAN_REVERT"

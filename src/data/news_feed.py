@@ -15,6 +15,7 @@ import re
 import time
 from datetime import datetime, timezone
 from typing import Any
+from xml.etree import ElementTree as ET
 
 import requests
 try:
@@ -99,10 +100,16 @@ def _strip_html(text: str) -> str:
     return " ".join(clean.split())
 
 
+def _entry_get(entry: Any, field: str, default: Any = None) -> Any:
+    if isinstance(entry, dict):
+        return entry.get(field, default)
+    return getattr(entry, field, default)
+
+
 def _extract_published(entry: Any) -> str:
     # Prefer parsed timestamps when available
     try:
-        published_parsed = getattr(entry, "published_parsed", None)
+        published_parsed = _entry_get(entry, "published_parsed", None)
         if published_parsed:
             dt = datetime(
                 published_parsed.tm_year,
@@ -118,7 +125,7 @@ def _extract_published(entry: Any) -> str:
         pass
 
     for field in ("published", "updated"):
-        value = getattr(entry, field, None)
+        value = _entry_get(entry, field, None)
         if value:
             return str(value)
     return datetime.now(timezone.utc).isoformat()
@@ -151,8 +158,26 @@ def _matches_asset(text: str, keywords: list[str]) -> bool:
 
 def _parse_feed_entries(url: str) -> list[Any]:
     if feedparser is None:
-        logger.warning("feedparser not available; cannot parse RSS for %s", url)
-        return []
+        try:
+            resp = requests.get(url, timeout=HTTP_TIMEOUT)
+            resp.raise_for_status()
+            root = ET.fromstring(resp.content)
+            entries: list[dict[str, Any]] = []
+            for item in root.findall(".//item")[:20]:
+                entries.append(
+                    {
+                        "title": item.findtext("title", default=""),
+                        "link": item.findtext("link", default=""),
+                        "summary": item.findtext("description", default=""),
+                        "description": item.findtext("description", default=""),
+                        "published": item.findtext("pubDate", default=""),
+                        "author": item.findtext("source", default="Unknown"),
+                    }
+                )
+            return entries
+        except Exception as exc:
+            logger.warning("RSS XML fallback failed for %s: %s", url, exc)
+            return []
     try:
         resp = requests.get(url, timeout=HTTP_TIMEOUT)
         resp.raise_for_status()
@@ -174,24 +199,24 @@ def _normalize_items(
     seen: set[str] = set()
 
     for entry in entries:
-        title = _strip_html(str(getattr(entry, "title", "") or ""))
-        link = str(getattr(entry, "link", "") or "")
+        title = _strip_html(str(_entry_get(entry, "title", "") or ""))
+        link = str(_entry_get(entry, "link", "") or "")
         summary = _strip_html(
             str(
-                getattr(entry, "summary", "")
-                or getattr(entry, "description", "")
+                _entry_get(entry, "summary", "")
+                or _entry_get(entry, "description", "")
                 or ""
             )
         )
         source = ""
-        source_obj = getattr(entry, "source", None)
+        source_obj = _entry_get(entry, "source", None)
         if isinstance(source_obj, dict):
             source = str(source_obj.get("title", "") or "")
         elif hasattr(source_obj, "title"):
             source = str(getattr(source_obj, "title", "") or "")
 
         if not source:
-            source = str(getattr(entry, "author", "") or "Unknown")
+            source = str(_entry_get(entry, "author", "") or "Unknown")
 
         text_blob = f"{title} {summary}"
         if keywords and not _matches_asset(text_blob, keywords):

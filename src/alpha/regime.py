@@ -1,7 +1,7 @@
 """
 Layer 4 — Regime Detection via Hidden Markov Model.
 
-Uses GaussianHMM (hmmlearn) with 3 hidden states and 7 emission features:
+Uses GaussianHMM (hmmlearn) with 5 hidden states and 7 emission features:
   1. Daily log-return          — captures drift direction
   2. Realised volatility (20d) — captures volatility regime
   3. Volume ratio              — volume / 20d avg (panic vs accumulation)
@@ -44,7 +44,7 @@ HMM_PERSIST_DIR = Path("data")
 
 class RegimeDetector:
 
-    def __init__(self, n_states: int = 3, n_iter: int = 200):
+    def __init__(self, n_states: int = 5, n_iter: int = HMM_N_ITER):
         self.n_states = n_states
         self.n_iter = n_iter
         self.model: GaussianHMM | None = None
@@ -145,7 +145,6 @@ class RegimeDetector:
         self.model.fit(features)
 
         mean_returns = self.model.means_[:, 0]
-        sorted_idx = np.argsort(mean_returns)
         self.state_labels = self._assign_state_labels()
 
         self._trained = True
@@ -237,11 +236,6 @@ class RegimeDetector:
         """
         Gate logic: returns True if the signal is allowed in the current regime.
         """
-        # TEMP DEBUG
-        allow_all_signals = True
-        if allow_all_signals:
-            return True
-
         if regime == "BULL":
             return signal == "BUY"
         if regime == "HIGH_VOL_BULL":
@@ -292,6 +286,8 @@ class RegimeDetector:
             data = pickle.load(f)
         self.model = data["model"]
         self.state_labels = data["labels"]
+        if self.model is not None:
+            self.n_states = int(self.model.n_components)
         self._trained = True
         logger.info("RegimeDetector loaded from %s", path)
         return self

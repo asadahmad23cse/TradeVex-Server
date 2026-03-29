@@ -119,6 +119,9 @@ class FeatureEngineer:
         df["SMA_20"] = df["Close"].rolling(20).mean()
         df["SMA_50"] = df["Close"].rolling(50).mean()
         df["EMA_20"] = df["Close"].ewm(span=20, adjust=False).mean()
+        df["EMA_21"] = df["Close"].ewm(span=21, adjust=False).mean()
+        df["EMA_50"] = df["Close"].ewm(span=50, adjust=False).mean()
+        df["EMA_55"] = df["Close"].ewm(span=55, adjust=False).mean()
 
         # RSI (14)
         delta = df["Close"].diff()
@@ -126,6 +129,7 @@ class FeatureEngineer:
         loss = (-delta.where(delta < 0, 0.0)).rolling(14).mean()
         rs = gain / loss.replace(0, np.nan)
         df["RSI"] = 100 - (100 / (1 + rs))
+        df["RSI_14"] = df["RSI"]
 
         # MACD
         exp1 = df["Close"].ewm(span=12, adjust=False).mean()
@@ -271,6 +275,8 @@ class FeatureEngineer:
 
     def add_extended_volatility(self, df: pd.DataFrame) -> pd.DataFrame:
         df = df.copy()
+        log_returns = df.get("Log_Returns", np.log(df["Close"] / df["Close"].shift(1)))
+        log_returns = pd.Series(log_returns, index=df.index).replace([np.inf, -np.inf], np.nan).fillna(0.0)
 
         # --- Keltner Channels (EMA ± 2×ATR_10) ---
         atr10_hl = df["High"] - df["Low"]
@@ -300,6 +306,33 @@ class FeatureEngineer:
         roll_max = df["Close"].rolling(14).max()
         pct_drawdown = ((df["Close"] - roll_max) / roll_max.replace(0, np.nan)) * 100
         df["Ulcer_Index"] = np.sqrt((pct_drawdown ** 2).rolling(14).mean())
+
+        # --- Jump-aware realised volatility features ---
+        rv_window = 20
+        realised_var = log_returns.pow(2).rolling(rv_window).sum()
+        bipower_var = (
+            (np.pi / 2.0) * (log_returns.abs() * log_returns.abs().shift(1))
+        ).rolling(rv_window).sum()
+        jump_var = (realised_var - bipower_var).clip(lower=0.0)
+        upside_semivar = log_returns.clip(lower=0.0).pow(2).rolling(rv_window).sum()
+        downside_semivar = log_returns.clip(upper=0.0).abs().pow(2).rolling(rv_window).sum()
+        total_semivar = upside_semivar + downside_semivar
+        parkinson_var = (
+            np.log(df["High"] / df["Low"]).replace([np.inf, -np.inf], np.nan).pow(2)
+            .rolling(rv_window)
+            .mean()
+            / (4.0 * np.log(2.0))
+        )
+
+        df["Realized_Var_20"] = realised_var
+        df["Bipower_Var_20"] = bipower_var.clip(lower=0.0)
+        df["Jump_Var_20"] = jump_var
+        df["Jump_Intensity_20"] = (jump_var / realised_var.replace(0.0, np.nan)).clip(lower=0.0, upper=1.0)
+        df["Upside_Semivar_20"] = upside_semivar
+        df["Downside_Semivar_20"] = downside_semivar
+        df["Downside_Vol_Ratio_20"] = (downside_semivar / total_semivar.replace(0.0, np.nan)).clip(lower=0.0, upper=1.0)
+        df["Parkinson_Vol_20"] = np.sqrt(parkinson_var.clip(lower=0.0))
+        df["Vol_Of_Vol_20"] = log_returns.rolling(rv_window).std().rolling(10).std()
 
         return df
 
@@ -441,18 +474,22 @@ class FeatureEngineer:
         df = df.copy()
 
         # 1. Spread proxy (Corwin-Schultz 2012)
-        h = np.log(df["High"] / df["Low"])
+        h = np.log(df["High"] / df["Low"]).replace([np.inf, -np.inf], np.nan)
         h_sq = h ** 2
         beta = h_sq.rolling(2).sum()
         gamma = np.log(
             df["High"].rolling(2).max() / df["Low"].rolling(2).min()
-        ) ** 2
-        sqrt_2 = np.sqrt(2)
-        alpha = (np.sqrt(beta) - np.sqrt(beta)) / (3 - 2 * sqrt_2) - np.sqrt(
-            gamma / (3 - 2 * sqrt_2)
+        ).replace([np.inf, -np.inf], np.nan) ** 2
+        sqrt_2 = np.sqrt(2.0)
+        denom = 3.0 - 2.0 * sqrt_2
+        cs_alpha = (np.sqrt((2.0 * beta).clip(lower=0.0)) - np.sqrt(beta.clip(lower=0.0))) / denom - np.sqrt(
+            (gamma / denom).clip(lower=0.0)
         )
         # Simplified: use log(H/L) as spread proxy directly
         df["Spread_Proxy"] = h  # log(H/L) ≈ proportional to spread
+        cs_alpha = cs_alpha.replace([np.inf, -np.inf], np.nan).clip(lower=0.0)
+        df["CS_Spread"] = (2.0 * (np.exp(cs_alpha) - 1.0) / (1.0 + np.exp(cs_alpha))).clip(lower=0.0)
+        df["Spread_Proxy"] = df["Spread_Proxy"].abs()
         df["Spread_Proxy_SMA"] = df["Spread_Proxy"].rolling(20).mean()
 
         # 2. Order imbalance proxy (signed volume)
@@ -462,6 +499,7 @@ class FeatureEngineer:
             signed_volume.rolling(20).sum()
             / df["Volume"].rolling(20).sum().replace(0, np.nan)
         )
+        df["Order_Imbalance_Change"] = df["Order_Imbalance"].diff()
 
         # 3. Return distribution
         if "Returns" in df.columns:

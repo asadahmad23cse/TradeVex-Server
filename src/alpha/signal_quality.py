@@ -66,13 +66,7 @@ class SignalQualityScorer:
         top = vals[:3]
         mean_ic = float(np.mean(top))
 
-        if mean_ic > 0.08:
-            return 100.0
-        if mean_ic >= 0.05:
-            return 70.0
-        if mean_ic >= 0.02:
-            return 40.0
-        return 10.0
+        return float(np.clip((mean_ic / 0.08) * 100.0, 0.0, 100.0))
 
     @staticmethod
     def regime_alignment_score(signal: str, regime: str) -> float:

@@ -135,6 +135,8 @@ _response_cache_ttl = {
     "/api/market-overview": 30,
     "/api/btc/candles": 30,
     "/api/btc/markers": 60,
+    "/api/btc/market-context": 10,
+    "/api/btc/system-report": 10,
     "/api/btc/signal": 10,
     "/api/btc/signal/history": 10,
     "/api/btc/news": 120,
@@ -563,6 +565,14 @@ def get_btc_signal(interval: str = "5m"):
     return _btc_service.get_realtime_signal(interval=interval)
 
 
+@app.get("/api/btc/market-context")
+def get_btc_market_context(interval: str = "5m"):
+    """Current BTC macro/derivatives context used by the live signal."""
+    if _btc_service is None:
+        raise HTTPException(503, "BTC service not initialised")
+    return _btc_service.get_market_context(interval=interval)
+
+
 @app.get("/api/btc/signal/history")
 def signal_history(limit: int = 50):
     return {"signals": get_signal_history(limit), "stats": get_signal_stats()}
@@ -571,6 +581,72 @@ def signal_history(limit: int = 50):
 @app.get("/api/btc/signal/stats")
 def signal_stats():
     return get_signal_stats()
+
+
+@app.get("/api/btc/system-report")
+def btc_system_report(interval: str = "5m"):
+    if _btc_service is None:
+        raise HTTPException(503, "BTC service not initialised")
+
+    report = {
+        "timestamp_utc": datetime.utcnow().isoformat() + "Z",
+        "runtime": _btc_service.get_runtime_stats(),
+        "known_gaps": [
+            {
+                "key": "btc_replay_backtest",
+                "severity": "high",
+                "status": "missing",
+                "summary": "No dedicated bar-by-bar BTC replay backtest for the live BitcoinMarketService pipeline.",
+            },
+            {
+                "key": "liquidation_heatmap_clusters",
+                "severity": "medium",
+                "status": "missing",
+                "summary": "System detects liquidation events after the move, not pre-positioned heatmap clusters.",
+            },
+            {
+                "key": "llm_transport_live",
+                "severity": "medium",
+                "status": "partial",
+                "summary": "LLM validation logic exists, but the transport is still safe-fallback unless a real provider is wired.",
+            },
+        ],
+    }
+
+    try:
+        signal = _btc_service.get_realtime_signal(interval=interval)
+        report["signal_snapshot"] = {
+            "signal": signal.get("signal"),
+            "validated_signal": signal.get("validated_signal"),
+            "validated": signal.get("validated"),
+            "confidence": signal.get("confidence"),
+            "reason": signal.get("reason"),
+            "regime": signal.get("regime"),
+            "as_of_utc": signal.get("as_of_utc"),
+        }
+    except Exception as exc:
+        report["signal_snapshot"] = {"error": str(exc)}
+
+    try:
+        from src.paper_trading import get_auto_executor, get_paper_engine
+
+        engine = get_paper_engine()
+        executor = get_auto_executor()
+        report["automation"] = {
+            "paper_engine_ready": True,
+            "mode": engine._state.get("mode", "manual"),
+            "open_positions": len(engine.get_open_positions()),
+            "closed_trades": len(engine.get_closed_trades(500)),
+            "pending_signals": len(executor.get_pending_signals()),
+            "auto_executor_running": bool(executor._running),
+        }
+    except Exception as exc:
+        report["automation"] = {
+            "paper_engine_ready": False,
+            "error": str(exc),
+        }
+
+    return report
 
 
 @app.get("/api/btc/markers")

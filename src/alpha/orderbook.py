@@ -160,23 +160,29 @@ class OrderFlowAnalyser:
         df = df.copy()
 
         if len(df) < 10:
-            for col in ("OFI", "VPIN", "Kyle_Lambda", "Trade_Arrival", "Micro_Price_Offset"):
+            for col in (
+                "OFI",
+                "VPIN",
+                "Kyle_Lambda",
+                "Trade_Arrival",
+                "Micro_Price_Offset",
+                "CVD",
+                "CVD_Z",
+                "Micro_Price_Trend",
+                "Flow_Imbalance_Shock",
+            ):
                 df[col] = 0.0
             return df
 
         # --- 1. Order Flow Imbalance (OFI) ---
         # Tick-rule signed volume: if close > open → buy, else sell
-        signed_volume = np.where(
-            df["Close"].values > df["Open"].values,
-            df["Volume"].values,
-            -df["Volume"].values,
-        ).astype(float)
+        price_delta = df["Close"].diff().fillna(df["Close"] - df["Open"])
+        candle_bias = np.sign(df["Close"] - df["Open"])
+        signed_direction = np.sign(price_delta).replace(0.0, np.nan).fillna(candle_bias).replace(0.0, 1.0)
+        signed_volume = (df["Volume"] * signed_direction).astype(float).values
 
         # OFI = Δ(signed cumulative volume) normalised
-        cum_sv = np.cumsum(signed_volume)
-        ofi = np.zeros(len(df))
-        ofi[1:] = np.diff(cum_sv)
-        # Normalise by rolling total volume
+        ofi = pd.Series(signed_volume, index=df.index).rolling(5, min_periods=1).sum().values
         vol_sum = df["Volume"].rolling(20, min_periods=1).sum().values
         ofi = ofi / np.maximum(vol_sum, 1e-9)
         df["OFI"] = ofi
@@ -221,6 +227,18 @@ class OrderFlowAnalyser:
                 micro = (bv * ap + av * bp) / total
                 micro_offset[i] = (micro - df["Close"].iloc[i]) / max(df["Close"].iloc[i], 1e-9)
         df["Micro_Price_Offset"] = micro_offset
+
+        cvd_series = pd.Series(np.cumsum(signed_volume), index=df.index)
+        cvd_std = cvd_series.rolling(20, min_periods=5).std().replace(0.0, np.nan)
+        df["CVD"] = cvd_series
+        df["CVD_Z"] = (
+            (cvd_series - cvd_series.rolling(20, min_periods=5).mean()) / cvd_std
+        ).replace([np.inf, -np.inf], 0.0).fillna(0.0)
+        df["Micro_Price_Trend"] = pd.Series(micro_offset, index=df.index).rolling(5, min_periods=1).mean().diff().fillna(0.0)
+        signed_std = pd.Series(signed_volume, index=df.index).rolling(20, min_periods=5).std().replace(0.0, np.nan)
+        df["Flow_Imbalance_Shock"] = (
+            pd.Series(signed_volume, index=df.index) / signed_std
+        ).replace([np.inf, -np.inf], 0.0).fillna(0.0)
 
         return df
 

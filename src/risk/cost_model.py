@@ -43,6 +43,7 @@ class CostModel:
         "indian_stock": 0.0002,   # ~0.02% for large-cap NSE
         "us_stock":     0.0001,   # ~0.01% for NYSE/NASDAQ large-cap
         "forex":        0.00005,  # Major forex pairs
+        "crypto":       0.00025,  # BTC perpetuals/spot are tighter than altcoins but wider than majors
     }
 
     # Default slippage if not in config
@@ -50,6 +51,7 @@ class CostModel:
         "indian_stock": 0.0003,
         "us_stock":     0.0001,
         "forex":        0.00005,
+        "crypto":       0.0002,
     }
 
     def __init__(self, config: dict | None = None):
