@@ -28,7 +28,7 @@ load_dotenv()
 logger = logging.getLogger(__name__)
 
 # Shared singletons
-_rate_limiter = AVRateLimiter(calls_per_minute=5, daily_limit=500)
+_rate_limiter = AVRateLimiter(calls_per_minute=4, daily_limit=20, min_interval_seconds=15.0)
 _cache = TTLCache()
 
 # TTL constants (seconds)
@@ -236,6 +236,7 @@ class MarketDataConnector:
         ticker: str,
         period: str,
         interval: str,
+        asset_info: dict | None = None,
     ) -> pd.DataFrame:
         try:
             logger.debug("yfinance fetch: %s period=%s interval=%s", ticker, period, interval)
@@ -247,6 +248,18 @@ class MarketDataConnector:
                 progress=False,
                 threads=False,
             )
+            info = asset_info or {}
+            if raw.empty and info.get("alt_ticker"):
+                alt = str(info["alt_ticker"])
+                logger.warning("Primary ticker %s failed, trying alt %s", ticker, alt)
+                raw = yf.download(
+                    alt,
+                    period=period,
+                    interval=interval,
+                    auto_adjust=True,
+                    progress=False,
+                    threads=False,
+                )
             if raw.empty:
                 raise ValueError(f"yfinance returned empty data for {ticker}")
 
