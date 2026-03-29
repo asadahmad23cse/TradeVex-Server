@@ -182,7 +182,60 @@ class BitcoinMarketService:
             self._signal_cache.set(cache_key, payload, ttl_seconds=5)
             return payload
 
-        alpha = self._alpha.score(feat, ml_score=0.0, hurst=0.5)
+        price_change_1h = 0.0
+        price_change_24h = 0.0
+        bars_1h = self._bars_for_hours(interval, 1)
+        bars_24h = self._bars_for_hours(interval, 24)
+        if "Close" in feat.columns and len(feat) > max(bars_1h, 2):
+            current = float(feat["Close"].iloc[-1])
+            price_1h_ago = float(feat["Close"].iloc[-(bars_1h + 1)]) if len(feat) > bars_1h else current
+            price_change_1h = round(((current - price_1h_ago) / price_1h_ago) * 100, 2)
+            if len(feat) > bars_24h:
+                price_24h_ago = float(feat["Close"].iloc[-(bars_24h + 1)])
+                price_change_24h = round(((current - price_24h_ago) / price_24h_ago) * 100, 2)
+
+        futures = {
+            "funding_rate_pct": 0.0,
+            "funding_rate_z": 0.0,
+            "funding_sentiment": "NEUTRAL",
+            "open_interest_btc": 0.0,
+            "oi_delta_pct_1h": 0.0,
+            "oi_delta_pct_4h": 0.0,
+            "liquidation_event": False,
+            "liquidation_bias": "NONE",
+            "liquidation_score": 0.0,
+            "mark_price": 0.0,
+        }
+        try:
+            futures = futures_data_module.get_futures_sentiment()
+            logger.info(
+                "Futures data: funding=%.4f%%, OI=%.1f",
+                futures.get("funding_rate_pct", 0.0),
+                futures.get("open_interest_btc", 0.0),
+            )
+        except Exception as exc:
+            logger.warning("Futures data unavailable (may be geo-blocked): %s", exc)
+
+        funding_rate = float(futures.get("funding_rate_pct", 0.0))
+        funding_rate_z = float(futures.get("funding_rate_z", 0.0))
+        funding_sentiment = str(futures.get("funding_sentiment", "NEUTRAL"))
+        oi_delta_1h = float(futures.get("oi_delta_pct_1h", 0.0))
+        oi_delta_4h = float(futures.get("oi_delta_pct_4h", 0.0))
+        liquidation_event = bool(futures.get("liquidation_event", False))
+        liquidation_bias = str(futures.get("liquidation_bias", "NONE"))
+        etf_flow = self._etf_flow_snapshot()
+        etf_flow_z = float(etf_flow.get("flow_z", 0.0))
+
+        alpha = self._alpha.compute(
+            feat,
+            ml_score=0.0,
+            hurst=0.5,
+            asset_class="crypto",
+            funding_rate_z=funding_rate_z,
+            oi_delta_1h=oi_delta_1h,
+            price_change_1h=price_change_1h,
+            etf_flow_z=etf_flow_z,
+        )
         raw_alpha = float(alpha.get("alpha_score", 0.0))
         confidence = float(alpha.get("confidence", 50.0))
         model_signal = str(alpha.get("signal", "HOLD")).upper()
@@ -258,41 +311,9 @@ class BitcoinMarketService:
         session_name = self._session_name(now_utc)
         hour = now_utc.hour
 
-        futures = {
-            "funding_rate_pct": 0.0,
-            "funding_rate_z": 0.0,
-            "funding_sentiment": "NEUTRAL",
-            "open_interest_btc": 0.0,
-            "oi_delta_pct_1h": 0.0,
-            "oi_delta_pct_4h": 0.0,
-            "liquidation_event": False,
-            "liquidation_bias": "NONE",
-            "liquidation_score": 0.0,
-            "mark_price": 0.0,
-        }
-        try:
-            futures = futures_data_module.get_futures_sentiment()
-            logger.info(
-                "Futures data: funding=%.4f%%, OI=%.1f",
-                futures.get("funding_rate_pct", 0.0),
-                futures.get("open_interest_btc", 0.0),
-            )
-        except Exception as exc:
-            logger.warning("Futures data unavailable (may be geo-blocked): %s", exc)
-
-        funding_rate = float(futures.get("funding_rate_pct", 0.0))
-        funding_rate_z = float(futures.get("funding_rate_z", 0.0))
-        funding_sentiment = str(futures.get("funding_sentiment", "NEUTRAL"))
-        oi_delta_1h = float(futures.get("oi_delta_pct_1h", 0.0))
-        oi_delta_4h = float(futures.get("oi_delta_pct_4h", 0.0))
-        liquidation_event = bool(futures.get("liquidation_event", False))
-        liquidation_bias = str(futures.get("liquidation_bias", "NONE"))
-
         fear_greed_snapshot = self._fear_greed_snapshot(feat)
         fear_greed = int(fear_greed_snapshot.get("value", self._fear_greed_index(feat)))
         fear_greed_z = float(fear_greed_snapshot.get("z_score", 0.0))
-        etf_flow = self._etf_flow_snapshot()
-        etf_flow_z = float(etf_flow.get("flow_z", 0.0))
         etf_source = str(etf_flow.get("source", "")).lower()
         fear_source = str(fear_greed_snapshot.get("source", "")).lower()
         halving = self._halving_phase_context(now_utc.date())
@@ -316,6 +337,8 @@ class BitcoinMarketService:
                 etf_multiplier = 1.0
             confidence = float(np.clip(confidence * etf_multiplier * halving_multiplier, 0.0, 100.0))
 
+        # NOTE: F13/F14/F21 are now formal IC-weighted factors in alpha_score.
+        # These gates remain as hard stops for extreme values only.
         funding_confirms = False
         if signal == "LONG" and (funding_rate < -0.03 or funding_rate_z < -0.5):
             funding_confirms = True
@@ -584,20 +607,12 @@ class BitcoinMarketService:
             take_out = round(float(take), 2) if take is not None else None
             if not reason:
                 if validated:
-                    factor_names = {
-                        "F1": "Momentum",
-                        "F2": "MeanRev",
-                        "F3": "Volume",
-                        "F4": "ML",
-                        "F5": "VolSqueeze",
-                        "F8": "Microstructure",
-                    }
-                    parts = [regime, session_name, f"Conf:{confidence:.0f}%", strength]
-                    fs = alpha.get("factor_scores", {})
-                    for fk, fv in sorted(fs.items(), key=lambda x: abs(x[1]), reverse=True)[:3]:
-                        name = factor_names.get(fk, fk)
-                        parts.append(f"{name}({fv:+.1f})")
-                    reason = " | ".join(parts)
+                    reason = (
+                        f"{regime} | {session_name} | Conf:{confidence:.0f}% | {strength} "
+                        f"| F13(funding:{funding_rate_z:+.1f}z) "
+                        f"| F14(OI:{oi_delta_1h:+.1f}%) "
+                        f"| F21(ETF:{etf_flow_z:+.1f}z)"
+                    )
                 else:
                     failed = []
                     if not checks.get("confidence_ok", True):
@@ -620,17 +635,6 @@ class BitcoinMarketService:
                         failed.append("SL distance outside 0.3-2.5% range")
                     reason = f"Signal {signal} blocked: {', '.join(failed)}" if failed else "All gates passed but unvalidated"
 
-        price_change_1h = 0.0
-        price_change_24h = 0.0
-        bars_1h = self._bars_for_hours(interval, 1)
-        bars_24h = self._bars_for_hours(interval, 24)
-        if "Close" in feat.columns and len(feat) > max(bars_1h, 2):
-            current = float(feat["Close"].iloc[-1])
-            price_1h_ago = float(feat["Close"].iloc[-(bars_1h + 1)]) if len(feat) > bars_1h else current
-            price_change_1h = round(((current - price_1h_ago) / price_1h_ago) * 100, 2)
-            if len(feat) > bars_24h:
-                price_24h_ago = float(feat["Close"].iloc[-(bars_24h + 1)])
-                price_change_24h = round(((current - price_24h_ago) / price_24h_ago) * 100, 2)
         atr_pct = round(atr / entry * 100, 3) if entry > 0 else 0
 
         market_context = {
@@ -646,6 +650,7 @@ class BitcoinMarketService:
 
         payload = {
             "asset": "BTCUSDT",
+            "asset_class": "crypto",
             "interval": interval,
             "signal": signal,
             "validated_signal": signal if validated else "HOLD",

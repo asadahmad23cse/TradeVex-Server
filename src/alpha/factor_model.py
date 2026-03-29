@@ -1,5 +1,5 @@
 """
-Layer 3 - 12-Factor IC-Weighted Alpha Model.
+Layer 3 - IC-Weighted Alpha Model.
 
 Factors (signed: + bullish, - bearish):
   F1  Momentum
@@ -14,6 +14,9 @@ Factors (signed: + bullish, - bearish):
   F10 FII/DII Net Flow (India)
   F11 India VIX Regime Factor (India)
   F12 Expiry Week Calendar Factor (India)
+  F13 Funding Rate Z-Score (crypto only)
+  F14 Open Interest Delta (crypto only)
+  F21 ETF Flow Z-Score (crypto only)
 
 IC weighting:
   Composite IC = 0.2 * IC_10 + 0.5 * IC_21 + 0.3 * IC_63
@@ -173,6 +176,7 @@ def _compute_effective_ic_bundle(
     factors: dict[str, pd.Series],
     fwd_ret: pd.Series,
     ic_windows: tuple[int, int, int] = IC_WINDOWS,
+    asset_class: str | None = None,
 ) -> tuple[dict[str, float], dict[str, dict[str, float | bool]]]:
     """
     Compute effective IC weights + metadata bundle for all factors.
@@ -180,7 +184,25 @@ def _compute_effective_ic_bundle(
     """
     ics: dict[str, float] = {}
     factor_meta: dict[str, dict[str, float | bool]] = {}
+    is_crypto = (asset_class or "").strip().lower() == "crypto"
     for name, factor in factors.items():
+        if not is_crypto and name in {"F13", "F14", "F21"}:
+            ics[name] = 0.0
+            factor_meta[name] = {
+                "ic_10": 0.0,
+                "ic_21": 0.0,
+                "ic_63": 0.0,
+                "ic_windows": [int(w) for w in ic_windows],
+                "ic_composite": 0.0,
+                "ic_ci_center": 0.0,
+                "ic_ci_low": 0.0,
+                "ic_ci_high": 0.0,
+                "lag1_autocorr": 0.0,
+                "turnover_penalty": 1.0,
+                "ic_boosted": False,
+                "zero_weighted": True,
+            }
+            continue
         ic_vals: list[float] = []
         for w in ic_windows:
             ic_series = _rolling_ic(factor, fwd_ret, w)
@@ -235,7 +257,12 @@ def _refresh_ic_cache_worker() -> None:
                 continue
             try:
                 ic_windows = tuple(ctx.get("ic_windows", IC_WINDOWS))  # type: ignore[arg-type]
-                ics, factor_meta = _compute_effective_ic_bundle(factors, fwd_ret, ic_windows=ic_windows)
+                ics, factor_meta = _compute_effective_ic_bundle(
+                    factors,
+                    fwd_ret,
+                    ic_windows=ic_windows,
+                    asset_class=ctx.get("asset_class"),  # type: ignore[arg-type]
+                )
                 with _ic_cache_lock:
                     _ic_weight_cache[key] = {
                         "ts": time.time(),
@@ -296,7 +323,12 @@ class AlphaFactorModel:
                     return ics, meta  # type: ignore[return-value]
 
         ic_windows = _ic_windows_for_asset_class(asset_class)
-        ics, factor_meta = _compute_effective_ic_bundle(factors, fwd_ret, ic_windows=ic_windows)
+        ics, factor_meta = _compute_effective_ic_bundle(
+            factors,
+            fwd_ret,
+            ic_windows=ic_windows,
+            asset_class=asset_class,
+        )
         with _ic_cache_lock:
             _ic_weight_cache[cache_key] = {"ts": now, "ics": ics, "factor_meta": factor_meta}
             # store small rolling context for async refresh
@@ -304,6 +336,7 @@ class AlphaFactorModel:
                 "factors": {k: v.tail(700).copy() for k, v in factors.items()},
                 "fwd_ret": fwd_ret.tail(700).copy(),
                 "ic_windows": ic_windows,
+                "asset_class": asset_class,
             }
         return ics, factor_meta
 
@@ -509,6 +542,20 @@ class AlphaFactorModel:
         in_window = _in_expiry_window(now_ist, lookback_days=5)
         return pd.Series(1.0 if in_window else 0.0, index=df.index), in_window
 
+    def _crypto_context_series(self, df: pd.DataFrame, latest_score: float) -> pd.Series:
+        """
+        Build a bounded factor series with exact latest value and light history variation.
+        The tiny history variation avoids zero-variance IC collapse when context inputs are scalar.
+        """
+        series = pd.Series(float(np.clip(latest_score, -1.0, 1.0)), index=df.index, dtype=float)
+        if len(series) < 3:
+            return series
+        ret = df.get("Returns", pd.Series(0.0, index=df.index)).fillna(0.0)
+        proxy = _zscore(ret, self.ic_window)
+        series = (series + 0.05 * proxy).clip(-1.0, 1.0)
+        series.iloc[-1] = float(np.clip(latest_score, -1.0, 1.0))
+        return series
+
     # ------------------------------------------------------------------
     # IC computation helpers
     # ------------------------------------------------------------------
@@ -594,9 +641,15 @@ class AlphaFactorModel:
         hurst: float = 0.5,
         asset: str | None = None,
         asset_class: str | None = None,
+        **kwargs: float,
     ) -> dict[str, float]:
         """Compute latest composite IC for each factor."""
         fwd_ret = df["Returns"].shift(-1)
+        funding_rate_z = float(kwargs.get("funding_rate_z", 0.0))
+        oi_delta_1h = float(kwargs.get("oi_delta_1h", 0.0))
+        price_change_1h = float(kwargs.get("price_change_1h", 0.0))
+        etf_flow_z = float(kwargs.get("etf_flow_z", 0.0))
+        is_crypto = (asset_class or "").strip().lower() == "crypto"
 
         f1 = self._factor1_momentum(df, hurst)
         f2 = self._factor2_mean_reversion(df, hurst)
@@ -610,6 +663,21 @@ class AlphaFactorModel:
         f10 = self._factor10_fii_dii_flow(df, asset, asset_class)
         f11, _ = self._factor11_vix_regime(df, asset, asset_class)
         f12, in_expiry = self._factor12_expiry_calendar(df, asset, asset_class)
+        if is_crypto:
+            f13_score = float(-np.tanh(funding_rate_z * 1.5))
+            price_direction = 1.0 if price_change_1h >= 0.0 else -1.0
+            f14_score = float(np.tanh(oi_delta_1h * 2.0) * price_direction)
+            f21_score = float(np.tanh(etf_flow_z * 0.8))
+            f13 = self._crypto_context_series(df, f13_score)
+            f14 = self._crypto_context_series(df, f14_score)
+            f21 = self._crypto_context_series(df, f21_score)
+        else:
+            f13_score = 0.0
+            f14_score = 0.0
+            f21_score = 0.0
+            f13 = pd.Series(f13_score, index=df.index)
+            f14 = pd.Series(f14_score, index=df.index)
+            f21 = pd.Series(f21_score, index=df.index)
         if in_expiry:
             f1 = f1 * 0.7
             f2 = f2 * 1.5
@@ -627,6 +695,9 @@ class AlphaFactorModel:
             "F10": f10,
             "F11": f11,
             "F12": f12,
+            "F13": f13,
+            "F14": f14,
+            "F21": f21,
         }
 
         out: dict[str, float] = {}
@@ -647,19 +718,25 @@ class AlphaFactorModel:
         asset: str | None = None,
         asset_class: str | None = None,
         regime: str | None = None,
+        **kwargs: float,
     ) -> dict:
         """
         Compute alpha score for the most recent bar.
 
         Returns keys:
           alpha_score, confidence, signal, strength,
-          factor_scores {F1..F12}, ic_weights {F1..F12}, factor_meta.
+          factor_scores {F1..F14,F21}, ic_weights {F1..F14,F21}, factor_meta.
         """
         min_required = max(self.ic_window + 10, 80)
         if len(df) < min_required:
             return self._hold_result("Insufficient data")
 
         fwd_ret = df["Returns"].shift(-1)
+        funding_rate_z = float(kwargs.get("funding_rate_z", 0.0))
+        oi_delta_1h = float(kwargs.get("oi_delta_1h", 0.0))
+        price_change_1h = float(kwargs.get("price_change_1h", 0.0))
+        etf_flow_z = float(kwargs.get("etf_flow_z", 0.0))
+        is_crypto = (asset_class or "").strip().lower() == "crypto"
 
         ml_series = pd.Series(0.0, index=df.index)
         ml_series.iloc[-1] = ml_score
@@ -676,6 +753,21 @@ class AlphaFactorModel:
         f10 = self._factor10_fii_dii_flow(df, asset, asset_class)
         f11, vix_mult = self._factor11_vix_regime(df, asset, asset_class)
         f12, in_expiry = self._factor12_expiry_calendar(df, asset, asset_class)
+        if is_crypto:
+            f13_score = float(-np.tanh(funding_rate_z * 1.5))
+            price_direction = 1.0 if price_change_1h >= 0.0 else -1.0
+            f14_score = float(np.tanh(oi_delta_1h * 2.0) * price_direction)
+            f21_score = float(np.tanh(etf_flow_z * 0.8))
+            f13 = self._crypto_context_series(df, f13_score)
+            f14 = self._crypto_context_series(df, f14_score)
+            f21 = self._crypto_context_series(df, f21_score)
+        else:
+            f13_score = 0.0
+            f14_score = 0.0
+            f21_score = 0.0
+            f13 = pd.Series(f13_score, index=df.index)
+            f14 = pd.Series(f14_score, index=df.index)
+            f21 = pd.Series(f21_score, index=df.index)
 
         if in_expiry:
             # Expiry-week bias: higher mean-reversion weight, lower momentum weight.
@@ -695,6 +787,9 @@ class AlphaFactorModel:
             "F10": f10,
             "F11": f11,
             "F12": f12,
+            "F13": f13,
+            "F14": f14,
+            "F21": f21,
         }
 
         cache_key = self._ic_cache_key(
@@ -779,6 +874,9 @@ class AlphaFactorModel:
             "F10": 0.0,
             "F11": 0.0,
             "F12": 0.0,
+            "F13": 0.0,
+            "F14": 0.0,
+            "F21": 0.0,
         }
         return {
             "alpha_score": 0.0,
@@ -791,6 +889,30 @@ class AlphaFactorModel:
             "factor_meta": {},
             "reason": reason,
         }
+
+    def compute(
+        self,
+        df: pd.DataFrame,
+        ml_score: float = 0.0,
+        hurst: float = 0.5,
+        asset: str | None = None,
+        asset_class: str | None = None,
+        regime: str | None = None,
+        **kwargs: float,
+    ) -> dict:
+        """
+        Backward-compatible compute alias used by dashboard services.
+        Supports contextual factor kwargs (e.g., funding_rate_z, oi_delta_1h).
+        """
+        return self.score(
+            df,
+            ml_score=ml_score,
+            hurst=hurst,
+            asset=asset,
+            asset_class=asset_class,
+            regime=regime,
+            **kwargs,
+        )
 
 
 def get_cached_alpha_model(

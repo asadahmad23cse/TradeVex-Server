@@ -237,6 +237,48 @@ body{
   color: #e6edf3;
   font-weight: 700;
 }
+.factor-row{
+  display:grid;
+  grid-template-columns:30px 140px 1fr 66px;
+  gap:8px;
+  align-items:center;
+  padding:7px 0;
+  border-bottom:1px dashed rgba(65,78,97,.35);
+}
+.factor-row:last-child{border-bottom:none}
+.factor-code{
+  color:#8f9db3;
+  font-family:"JetBrains Mono",monospace;
+  font-size:11px;
+  font-weight:700;
+}
+.factor-name{
+  color:#cdd6e3;
+  font-size:11px;
+}
+.factor-track{
+  height:8px;
+  border-radius:999px;
+  background:rgba(148,163,184,.18);
+  border:1px solid rgba(148,163,184,.22);
+  overflow:hidden;
+}
+.factor-fill{
+  height:100%;
+  width:0%;
+  background:#64748b;
+  transition:width .25s ease, background-color .25s ease;
+}
+.factor-meta{
+  display:flex;
+  flex-direction:column;
+  align-items:flex-end;
+  gap:2px;
+  font-family:"JetBrains Mono",monospace;
+  font-size:10px;
+}
+.factor-score{color:#e6edf3}
+.factor-ic{color:#94a3b8}
 
 .history-row-win { background: rgba(0,200,83,0.05); }
 .history-row-loss { background: rgba(255,23,68,0.05); }
@@ -430,6 +472,29 @@ body{
         <div class="panel-row"><span class="panel-label">Sentiment</span><span id="deriv-sentiment" class="panel-value">—</span></div>
         <div class="panel-row"><span class="panel-label">Open Interest</span><span id="deriv-oi" class="panel-value">—</span></div>
         <div class="panel-row"><span class="panel-label">Mark Price</span><span id="deriv-mark" class="panel-value">—</span></div>
+      </div>
+
+      <div id="factor-panel" class="info-panel">
+        <div class="panel-title">Factor Scores</div>
+        <div class="panel-subtitle">Score bar + IC weight (crypto only)</div>
+        <div class="factor-row">
+          <span class="factor-code">F13</span>
+          <span class="factor-name">Funding Rate Z</span>
+          <div class="factor-track"><div id="f13-fill" class="factor-fill"></div></div>
+          <div class="factor-meta"><span id="f13-score" class="factor-score">—</span><span id="f13-ic" class="factor-ic">w: —</span></div>
+        </div>
+        <div class="factor-row">
+          <span class="factor-code">F14</span>
+          <span class="factor-name">OI Delta</span>
+          <div class="factor-track"><div id="f14-fill" class="factor-fill"></div></div>
+          <div class="factor-meta"><span id="f14-score" class="factor-score">—</span><span id="f14-ic" class="factor-ic">w: —</span></div>
+        </div>
+        <div class="factor-row">
+          <span class="factor-code">F21</span>
+          <span class="factor-name">ETF Flow</span>
+          <div class="factor-track"><div id="f21-fill" class="factor-fill"></div></div>
+          <div class="factor-meta"><span id="f21-score" class="factor-score">—</span><span id="f21-ic" class="factor-ic">w: —</span></div>
+        </div>
       </div>
 
       <div class="info-panel" style="max-height:220px; overflow-y:auto;">
@@ -637,6 +702,38 @@ function setOf(id, val, color){
     e.textContent = val;
     if(color) e.style.color = color;
   }
+}
+function setFactorChip(key, score, icWeight){
+  const fill = document.getElementById(`${key}-fill`);
+  const scoreEl = document.getElementById(`${key}-score`);
+  const icEl = document.getElementById(`${key}-ic`);
+  if(!fill || !scoreEl || !icEl) return;
+
+  const s = Number(score);
+  const w = Number(icWeight);
+  const scoreSafe = Number.isFinite(s) ? s : 0.0;
+  const weightSafe = Number.isFinite(w) ? w : 0.0;
+  const widthPct = Math.min(Math.abs(scoreSafe), 1.0) * 100.0;
+  const color = scoreSafe > 0 ? "#00c853" : scoreSafe < 0 ? "#ff4d4d" : "#64748b";
+
+  fill.style.width = `${widthPct.toFixed(1)}%`;
+  fill.style.backgroundColor = color;
+  scoreEl.textContent = scoreSafe.toFixed(3);
+  scoreEl.style.color = color;
+  icEl.textContent = `w: ${weightSafe >= 0 ? "+" : ""}${weightSafe.toFixed(3)}`;
+}
+function updateFactorPanel(s){
+  const panel = document.getElementById("factor-panel");
+  if(!panel) return;
+  const isCrypto = String(s.asset_class || "").toLowerCase() === "crypto";
+  panel.style.display = isCrypto ? "block" : "none";
+  if(!isCrypto) return;
+
+  const fs = s.factor_scores || {};
+  const iw = s.ic_weights || {};
+  setFactorChip("f13", fs.F13, iw.F13);
+  setFactorChip("f14", fs.F14, iw.F14);
+  setFactorChip("f21", fs.F21, iw.F21);
 }
 function fmt(v){return Number(v).toLocaleString("en-US",{maximumFractionDigits:2});}
 function fmtPx(v){if(v===null||v===undefined||Number.isNaN(Number(v))) return "—"; return fmt(v);}
@@ -1202,6 +1299,7 @@ function applySignalPayload(s, source){
   setOf('deriv-sentiment', s.funding_sentiment||'—', s.funding_sentiment==='OVERLEVERAGED_LONG'?'#ff1744':s.funding_sentiment==='OVERLEVERAGED_SHORT'?'#00c853':'#8b949e');
   setOf('deriv-oi', ((s.open_interest_btc||0)/1000).toFixed(1)+'K BTC', '#e6edf3');
   setOf('deriv-mark', '$'+(s.mark_price||0).toLocaleString(), '#e6edf3');
+  updateFactorPanel(s);
 
   const mo = s.market_overview || {};
   const ch1h = mo.price_change_1h || 0;
