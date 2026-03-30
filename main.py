@@ -6,6 +6,7 @@ Modes:
   dashboard  — Dashboard server only (no data fetching)
   signals    — Terminal-only signal printing (no dashboard)
   backtest   — Run Walk-Forward Optimization on a ticker
+  btc_backtest — Run BTC walk-forward backtest on Binance history
 """
 
 import argparse
@@ -115,7 +116,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--mode",
-        choices=["live", "dashboard", "signals", "backtest", "capacity"],
+        choices=["live", "dashboard", "signals", "backtest", "capacity", "btc_backtest"],
         default="live",
         help="Execution mode (default: live)",
     )
@@ -165,6 +166,22 @@ def main() -> None:
             print(sim.run_watchlist())
         else:
             sim.run(ticker=args.ticker)
+    elif args.mode == "btc_backtest":
+        from src.backtest.btc_backtest import (  # type: ignore[import]
+            BTCHistoricalLoader,
+            BTCWalkForwardBacktest,
+            BTCBacktestReport,
+        )
+
+        loader = BTCHistoricalLoader()
+        df = loader.fetch(
+            symbol=args.ticker or "BTCUSDT",
+            interval="1h",
+        )
+        backtest = BTCWalkForwardBacktest()
+        results = backtest.run(df, symbol=args.ticker or "BTCUSDT", interval="1h")
+        report = BTCBacktestReport(config_path=args.config)
+        report.generate(results)
 
 
 if __name__ == "__main__":
