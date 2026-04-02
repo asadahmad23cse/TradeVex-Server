@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import logging
 import smtplib
+import time
+from datetime import datetime, timezone
 from email.message import EmailMessage
 
 import requests
@@ -66,3 +68,46 @@ class NotificationManager:
                 smtp.send_message(msg)
         except Exception as exc:
             logger.warning("Email notification failed: %s", exc)
+
+    def push_outgoing_webhook(self, signal: dict, target_url: str) -> bool:
+        """
+        POST a sanitized TradeVex signal snapshot to an external URL.
+        Retries 3 times with 1s / 2s / 4s backoff. Never raises.
+        """
+        if not target_url or not str(target_url).strip():
+            return False
+
+        url = str(target_url).strip()
+        payload = {
+            "source": "tradevex",
+            "ticker": signal.get("asset") or signal.get("ticker"),
+            "action": signal.get("direction"),
+            "alpha_score": signal.get("alpha_score", signal.get("alpha")),
+            "regime": signal.get("regime"),
+            "sl": signal.get("sl"),
+            "tp": signal.get("tp"),
+            "sqs": signal.get("sqs"),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        for attempt, wait in enumerate([1, 2, 4], start=1):
+            try:
+                resp = requests.post(url, json=payload, timeout=5)
+                if resp.status_code < 300:
+                    return True
+                logger.warning(
+                    "Outgoing webhook attempt %d: HTTP %d",
+                    attempt,
+                    resp.status_code,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Outgoing webhook attempt %d failed: %s",
+                    attempt,
+                    exc,
+                )
+            if attempt < 3:
+                time.sleep(wait)
+
+        logger.warning("Outgoing webhook failed after 3 attempts to %s", url)
+        return False

@@ -1,4 +1,4 @@
-﻿"""
+"""
 Layer 5 â€” Signal Engine.
 
 Takes the alpha score, regime, ATR, and entry price, then
@@ -11,12 +11,15 @@ produces a fully-specified TradingSignal dataclass with:
   - Kelly position size (passed in from risk layer)
 """
 
+import json
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from src.alpha.signal_quality import SignalQualityScorer
 from src.risk.cost_model import CostModel  # type: ignore[import]
+
+logger = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------
@@ -58,8 +61,16 @@ class TradingSignal:
     execution_price: float = 0.0       # actual fill price (0 = not yet filled)
     implementation_shortfall_pct: float = 0.0  # (exec - entry) / entry * 100
 
+    factor_breakdown: dict = field(default_factory=dict)
+    confluence_grade: str | None = None
+    confluence_pct: float | None = None
+    sqs: int | None = None
+    sqs_grade: str | None = None
+    size_multiplier_used: float | None = None
+    top_aligned_factors: list = field(default_factory=list)
+    top_drag_factors: list = field(default_factory=list)
+
     def to_dict(self) -> dict:
-        import json
         return {
             "signal_id": self.signal_id,
             "timestamp": self.timestamp.isoformat(),
@@ -86,6 +97,18 @@ class TradingSignal:
             "cs_alpha_score": self.cs_alpha_score,
             "execution_price": self.execution_price,
             "implementation_shortfall_pct": self.implementation_shortfall_pct,
+            "factor_breakdown": json.dumps(self.factor_breakdown) if self.factor_breakdown else "{}",
+            "confluence_grade": self.confluence_grade,
+            "confluence_pct": self.confluence_pct,
+            "sqs": self.sqs,
+            "sqs_grade": self.sqs_grade,
+            "size_multiplier_used": self.size_multiplier_used,
+            "top_aligned_factors": json.dumps(self.top_aligned_factors)
+            if self.top_aligned_factors
+            else "[]",
+            "top_drag_factors": json.dumps(self.top_drag_factors)
+            if self.top_drag_factors
+            else "[]",
         }
 
 
@@ -132,7 +155,6 @@ class SignalEngine:
         min_holding_candles: int = 2,
     ):
         self._cost_model = CostModel(cost_config or {})
-        self._sqs_scorer = SignalQualityScorer(min_sqs=min_sqs)
         self._min_sqs = float(min_sqs)
         self._dedup_seconds = float(dedup_hours) * 3600.0
         self._min_holding_candles = int(min_holding_candles)
@@ -188,24 +210,6 @@ class SignalEngine:
         if signal_str == "HOLD" or not regime_allows:
             return None
 
-        # Signal quality gate
-        atr_percentile = float(alpha_result.get("atr_percentile", 50.0))
-        sqs_payload = alpha_result.get("sqs")
-        if sqs_payload is None:
-            sqs_payload = alpha_result.get("signal_quality_score")
-        sqs_val = float(sqs_payload) if sqs_payload is not None else None
-        if sqs_val is None:
-            sqs_eval = self._sqs_scorer.score(
-                signal=signal_str,
-                factor_scores=alpha_result.get("factor_scores", {}),
-                ic_weights=alpha_result.get("ic_weights", {}),
-                regime=regime,
-                atr_percentile=atr_percentile,
-            )
-            sqs_val = float(sqs_eval.sqs)
-        if sqs_val < self._min_sqs:
-            return None
-
         # Same-direction deduplication window
         last_same = self._last_same_direction_ts.get((state_key, direction))
         if last_same is not None:
@@ -225,12 +229,13 @@ class SignalEngine:
                     return None
 
         # Net-alpha gate (GAP 2): discard if transaction cost exceeds gross alpha
-        final_size = position_size_pct * regime_size_mult
+        # Uses base Kelly x regime only; explainability multiplier applied after pass.
+        base_size = position_size_pct * regime_size_mult
         low_liquidity = volume_ratio < 0.8
         net_alpha, cost_pct, is_viable = self._cost_model.net_alpha(
             alpha_score,
             asset_class,
-            final_size,
+            base_size,
             daily_vol,
             volume_ratio,
             regime=regime,
@@ -238,6 +243,71 @@ class SignalEngine:
         )
         if not is_viable:
             return None  # cost eats the alpha â€” don't fire the signal
+
+        # === Confluence + SQS (additive annotation layer) ===
+        _confluence_result: dict = {
+            "grade": "UNKNOWN",
+            "kelly_multiplier": 1.0,
+            "fire_signal": True,
+            "computation_ok": False,
+        }
+        _sqs_result: dict = {
+            "sqs": 50,
+            "grade": "STANDARD",
+            "fire": True,
+            "size_multiplier": 1.0,
+            "computation_ok": False,
+        }
+        _combined_multiplier = 1.0
+        factor_breakdown = alpha_result.get("factor_breakdown") or {}
+
+        try:
+            from src.alpha.confluence import ConfluenceScorer
+            from src.signals.quality_score import SignalQualityScorer as ContextualSQS
+
+            _confluence_result = ConfluenceScorer().score(factor_breakdown, direction)
+
+            if _confluence_result.get("grade") == "D":
+                logger.info("Signal suppressed: confluence grade D for %s", asset)
+                return None
+
+            _sqs_context = {
+                "alpha_score": alpha_score,
+                "confluence_grade": _confluence_result.get("grade"),
+                "regime_confidence": alpha_result.get("regime_confidence"),
+                "mtf_aligned": alpha_result.get("mtf_aligned"),
+                "factor_ic_recency": alpha_result.get("factor_ic_recency"),
+                "liquidity_score": alpha_result.get("liquidity_score"),
+            }
+            _sqs_context = {k: v for k, v in _sqs_context.items() if v is not None}
+
+            _sqs_result = ContextualSQS().compute_sqs(_sqs_context)
+
+            if not _sqs_result.get("fire", True):
+                logger.info(
+                    "Signal suppressed by SQS=%d for %s: %s",
+                    _sqs_result.get("sqs", 0),
+                    asset,
+                    _sqs_result.get("suppression_reason", ""),
+                )
+                return None
+
+            _raw_multiplier = (
+                float(_confluence_result.get("kelly_multiplier", 1.0))
+                * float(_sqs_result.get("size_multiplier", 1.0))
+            )
+            _combined_multiplier = max(_raw_multiplier, 0.25)
+
+        except Exception as e:
+            logger.warning(
+                "Confluence/SQS failed for %s (using defaults): %s",
+                asset,
+                e,
+            )
+            _combined_multiplier = 1.0
+        # === End Confluence + SQS ===
+
+        final_size = base_size * _combined_multiplier
 
         # ATR-based Stop Loss
         atr_mult = ATR_MULTIPLIERS.get(strength, 2.0)
@@ -280,6 +350,14 @@ class SignalEngine:
             cost_pct=round(cost_pct, 5),  # type: ignore[call-overload]
             net_alpha_score=round(net_alpha, 4),  # type: ignore[call-overload]
             cs_alpha_score=round(cs_alpha_score, 4),  # type: ignore[call-overload]
+            factor_breakdown=dict(factor_breakdown) if factor_breakdown else {},
+            confluence_grade=_confluence_result.get("grade", "UNKNOWN"),
+            confluence_pct=_confluence_result.get("confluence_pct"),
+            sqs=_sqs_result.get("sqs"),
+            sqs_grade=_sqs_result.get("grade", "UNKNOWN"),
+            size_multiplier_used=round(float(_combined_multiplier), 6),
+            top_aligned_factors=list(_confluence_result.get("top_aligned", [])),
+            top_drag_factors=list(_confluence_result.get("top_drags", [])),
         )
         self._last_same_direction_ts[(state_key, direction)] = now_utc
         self._last_direction_state[state_key] = {"direction": direction, "bar_index": bar_index}

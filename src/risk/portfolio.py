@@ -120,6 +120,34 @@ class PortfolioTracker:
         self._append_equity_snapshot()
         logger.info("Position opened: %s %s @ %.4f", signal.signal, signal.asset, signal.entry_price)
 
+    def close_position_at_market(self, signal_id: str, exit_price: float) -> bool:
+        """
+        Force-close an open position at exit_price (e.g. webhook CLOSE).
+        Updates equity like an immediate SL/TP hit; returns False if not found.
+        """
+        try:
+            self._sync_day_boundary()
+            pos = self.open_positions.get(signal_id)
+            if pos is None:
+                return False
+            pos.current_price = float(exit_price)
+            trade_pnl = pos.net_pnl_pct
+            self._record_closed(trade_pnl)
+            self._update_equity(pos.weighted_net_pnl_pct)
+            del self.open_positions[signal_id]
+            logger.info(
+                "Position market-closed: %s %s @ %.4f | PnL=%.2f%%",
+                pos.signal,
+                pos.asset,
+                float(exit_price),
+                trade_pnl,
+            )
+            self._append_equity_snapshot()
+            return True
+        except Exception as exc:
+            logger.warning("close_position_at_market failed for %s: %s", signal_id, exc)
+            return False
+
     def update_prices(self, price_map: dict[str, float]) -> list[dict]:
         """
         Update current prices for all open positions.

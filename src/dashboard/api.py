@@ -1,4 +1,4 @@
-﻿"""
+"""
 Layer 10 â€” FastAPI Dashboard + WebSocket.
 
 Binds to 127.0.0.1 (localhost only).
@@ -13,10 +13,10 @@ import logging
 import math
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect  # type: ignore[import]
-from fastapi.responses import HTMLResponse, Response  # type: ignore[import]
+from fastapi.responses import HTMLResponse, JSONResponse, Response  # type: ignore[import]
 from fastapi.staticfiles import StaticFiles  # type: ignore[import]
 from starlette.middleware.base import BaseHTTPMiddleware  # type: ignore[import]
 from src.data.news_feed import get_btc_news
@@ -25,7 +25,10 @@ from src.dashboard.btc_service import BitcoinMarketService
 from src.dashboard.focus_engine import FocusQuantEngine
 from src.options import ExpiryTracker, OptionsEngine
 from src.compliance import SEBIComplianceEngine
+from src.execution.broker import create_executor
+from src.risk.kelly import KellyCalculator
 from src.utils.notifiers import NotificationManager
+from src.webhook.receiver import WebhookReceiver
 
 try:
     import jwt  # type: ignore[import]
@@ -54,7 +57,71 @@ _options_engine: OptionsEngine | None = None
 _expiry_tracker = ExpiryTracker()
 _compliance_engine = SEBIComplianceEngine()
 
-def init_dashboard(store, portfolio, config: dict | None = None) -> None:  # type: ignore[no-untyped-def]
+_webhook_receiver: WebhookReceiver | None = None
+_webhook_enabled: bool = False
+_webhook_request_counts: dict[str, list[float]] = {}
+_options_provider: Optional[object] = None
+
+
+def init_webhook(
+    cfg: dict,
+    store,
+    broker,
+    portfolio,
+    kelly,
+    notifier,
+) -> None:
+    """Enable WebhookReceiver when webhook.enabled and a valid secret are set."""
+    global _webhook_receiver, _webhook_enabled
+    _webhook_receiver = None
+    _webhook_enabled = False
+    try:
+        wh_cfg = cfg.get("webhook") or {}
+        if not wh_cfg.get("enabled", False):
+            logger.info("Webhook bridge: disabled in config")
+            return
+
+        secret = str(wh_cfg.get("secret_token", "") or "").strip()
+        if not secret or secret == "CHANGE_ME":
+            logger.warning(
+                "Webhook bridge: secret_token not set — webhook disabled for security",
+            )
+            return
+
+        _webhook_receiver = WebhookReceiver(
+            secret_token=secret,
+            broker=broker,
+            portfolio_tracker=portfolio,
+            kelly_calculator=kelly,
+            store=store,
+            notifier=notifier,
+            max_kelly=float(wh_cfg.get("max_webhook_kelly", 0.05)),
+        )
+        _webhook_enabled = True
+        logger.info("Webhook bridge: enabled")
+    except Exception as exc:
+        logger.error("Webhook init failed (webhook disabled): %s", exc)
+
+
+def _webhook_rate_limit_per_min() -> int:
+    try:
+        return int(((_dashboard_cfg.get("webhook") or {}).get("rate_limit_per_min", 60)))
+    except Exception:
+        return 60
+
+
+def _check_rate_limit(client_ip: str) -> bool:
+    limit = _webhook_rate_limit_per_min()
+    now = time.time()
+    window_start = now - 60.0
+    counts = _webhook_request_counts.get(client_ip, [])
+    counts = [t for t in counts if t > window_start]
+    counts.append(now)
+    _webhook_request_counts[client_ip] = counts
+    return len(counts) <= limit
+
+
+def init_dashboard(store, portfolio, config: dict | None = None, **kwargs) -> None:  # type: ignore[no-untyped-def]
     """Inject SignalStore and PortfolioTracker into the dashboard."""
     global _store, _portfolio, _dashboard_cfg, _focus_engine, _btc_service, _options_engine
     _store = store
@@ -72,6 +139,28 @@ def init_dashboard(store, portfolio, config: dict | None = None) -> None:  # typ
         logger.info("Paper trading engine initialized")
     except Exception as e:
         logger.warning("Paper engine init failed: %s", e)
+
+    risk = (_dashboard_cfg.get("risk") or {})
+    broker = kwargs.get("broker") or create_executor(_dashboard_cfg)
+    kelly = kwargs.get("kelly") or KellyCalculator(
+        kelly_fraction=float(risk.get("kelly_fraction", 0.25)),
+        max_position_pct=float(risk.get("max_position_size_pct", 5.0)) / 100.0,
+        cold_start_pct=float(risk.get("cold_start_position_pct", 2.0)) / 100.0,
+        min_trades=int(risk.get("min_kelly_trades", 30)),
+    )
+    notifier = kwargs.get("notifier") or NotificationManager(
+        _dashboard_cfg.get("notifications", {}),
+    )
+    init_webhook(_dashboard_cfg, _store, broker, _portfolio, kelly, notifier)
+
+    global _options_provider
+    _options_provider = None
+    try:
+        from src.api.options_alt_data import OptionsAltDataProvider
+
+        _options_provider = OptionsAltDataProvider(_dashboard_cfg)
+    except Exception:
+        pass
 
 
 def set_live_runner(runner) -> None:  # type: ignore[no-untyped-def]
@@ -111,7 +200,12 @@ class DashboardAuthMiddleware(BaseHTTPMiddleware):
         if not _auth_enabled():
             return await call_next(request)
         open_paths = {"/auth/token"}
-        if request.url.path.startswith("/static") or request.url.path in open_paths:
+        if (
+            request.url.path.startswith("/static")
+            or request.url.path.startswith("/webhook")
+            or request.url.path == "/api/options-intelligence"
+            or request.url.path in open_paths
+        ):
             return await call_next(request)
         auth_header = request.headers.get("Authorization", "")
         token = auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else ""
@@ -1192,6 +1286,23 @@ async def run_backtest_endpoint(payload: dict):
     return {"mode": "simple", **_simulate(feat_df, signals)}
 
 
+@app.get("/api/backtest/regime-analysis")
+async def get_regime_analysis():
+    """
+    Returns last saved regime analysis.
+    Reads from store — no computation here.
+    Returns empty dict if none available yet.
+    JWT: same protection as other GET routes.
+    """
+    try:
+        if _store is None:
+            return {}
+        data = _store.get_latest_regime_analysis()
+        return data or {}
+    except Exception:
+        return {}
+
+
 @app.get("/api/stock-signal")
 def get_stock_signal(ticker: str = "RELIANCE.NS"):
     """Return AI signal for a specific stock â€” live alpha computation."""
@@ -1356,6 +1467,44 @@ def get_signal_quality(ticker: str = "RELIANCE.NS"):
         }
     except Exception as e:
         return {"ticker": ticker, "error": str(e)}
+
+
+@app.get("/api/signal-audit/{signal_id}")
+async def get_signal_audit(signal_id: str):
+    """Full factor breakdown + confluence + SQS for one signal."""
+    try:
+        if _store is None:
+            return {"error": "store unavailable"}
+        signal = _store.get_signal_by_id(signal_id)
+        if not signal:
+            return {"error": "signal not found"}
+        return {
+            "signal_id": signal_id,
+            "ticker": signal.get("asset"),
+            "direction": signal.get("signal"),
+            "alpha_score": signal.get("alpha_score"),
+            "factor_breakdown": signal.get("factor_breakdown", {}),
+            "confluence_grade": signal.get("confluence_grade"),
+            "confluence_pct": signal.get("confluence_pct"),
+            "sqs": signal.get("sqs"),
+            "sqs_grade": signal.get("sqs_grade"),
+            "size_multiplier_used": signal.get("size_multiplier_used"),
+            "top_aligned_factors": signal.get("top_aligned_factors", []),
+            "top_drag_factors": signal.get("top_drag_factors", []),
+        }
+    except Exception:
+        return {"error": "audit unavailable"}
+
+
+@app.get("/api/signal-quality-stats")
+async def get_signal_quality_stats():
+    """Aggregated SQS stats for last 7 days."""
+    try:
+        if _store is None:
+            return {}
+        return _store.get_signal_quality_stats(days=7)
+    except Exception:
+        return {}
 
 
 @app.get("/api/chart-markers")
@@ -1982,6 +2131,111 @@ def latency_report():
         "n_assets": 0,
         "errors": [],
     }
+
+
+# ------------------------------------------------------------------
+# Inbound webhooks (HMAC in JSON body; no dashboard JWT)
+# ------------------------------------------------------------------
+
+
+async def _handle_webhook_ingress(request: Request, default_source: str) -> JSONResponse:
+    if not _webhook_enabled or _webhook_receiver is None:
+        return JSONResponse({"error": "webhook disabled"}, status_code=503)
+
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_rate_limit(client_ip):
+        logger.warning("Webhook rate limit exceeded for IP: %s", client_ip)
+        return JSONResponse({"error": "rate_limit_exceeded"}, status_code=429)
+
+    try:
+        raw_payload = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+
+    if isinstance(raw_payload, dict):
+        if not str(raw_payload.get("source", "")).strip():
+            raw_payload["source"] = default_source
+    else:
+        return JSONResponse({"error": "invalid_json"}, status_code=400)
+
+    result = await asyncio.to_thread(_webhook_receiver.process, raw_payload)
+    status_code = 200 if result.get("status") == "success" else 400
+    return JSONResponse(result, status_code=status_code)
+
+
+@app.post("/webhook/tradingview")
+async def webhook_tradingview(request: Request):
+    return await _handle_webhook_ingress(request, "tradingview")
+
+
+@app.post("/webhook/custom")
+async def webhook_custom(request: Request):
+    return await _handle_webhook_ingress(request, "custom")
+
+
+@app.get("/api/webhook-log")
+def get_webhook_log():
+    if _store is None:
+        return []
+    try:
+        return _store.get_webhook_log(limit=50)
+    except Exception as exc:
+        logger.warning("webhook-log fetch failed: %s", exc)
+        return []
+
+
+@app.get("/api/options-intelligence")
+def get_options_intelligence():
+    """
+    Latest F15/F16/F17-style snapshot for Indian watchlist tickers.
+    Public (no dashboard JWT). Returns {} when options intelligence is off or empty.
+    """
+    try:
+        if _options_provider is None:
+            return {}
+
+        wl = _dashboard_cfg.get("watchlist") or {}
+        indian_tickers: list[str] = []
+        for row in wl.get("indian_stocks") or []:
+            if isinstance(row, dict) and row.get("yf_ticker"):
+                indian_tickers.append(str(row["yf_ticker"]))
+        if not indian_tickers:
+            is_in = getattr(_options_provider, "is_indian_ticker", None)
+            if callable(is_in):
+                for row in wl.get("assets") or []:
+                    if isinstance(row, dict) and row.get("yf_ticker"):
+                        t = str(row["yf_ticker"])
+                        if is_in(t):
+                            indian_tickers.append(t)
+
+        raw = _options_provider.get_all_tickers_snapshot(indian_tickers)
+
+        result: dict[str, dict] = {}
+        for ticker, factors in raw.items():
+            if not factors.get("available"):
+                continue
+            iv = float(factors.get("F15_iv_skew") or 0.0)
+            mp = float(factors.get("F16_max_pain") or 0.0)
+            gx = float(factors.get("F17_gex") or 0.0)
+            result[ticker] = {
+                "iv_skew": round(iv, 4),
+                "iv_skew_signal": (
+                    "BEARISH" if iv > 0.5 else "BULLISH" if iv < -0.5 else "NEUTRAL"
+                ),
+                "max_pain_level": factors.get("max_pain_level"),
+                "max_pain_signal": (
+                    "PULL_DOWN" if mp > 0.2 else "PULL_UP" if mp < -0.2 else "NEUTRAL"
+                ),
+                "gex": round(gx, 4),
+                "gex_signal": (
+                    "STABILIZING" if gx > 0.3 else "AMPLIFYING" if gx < -0.3 else "NEUTRAL"
+                ),
+                "available": True,
+            }
+        return result
+    except Exception as exc:
+        logger.warning("options-intelligence endpoint failed: %s", exc)
+        return {}
 
 
 # ------------------------------------------------------------------

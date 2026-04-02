@@ -167,6 +167,24 @@ CREATE TABLE IF NOT EXISTS system_health (
 );
 """
 
+CREATE_WEBHOOK_EVENTS = """
+CREATE TABLE IF NOT EXISTS webhook_events (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp   TEXT    NOT NULL,
+    source      TEXT,
+    ticker      TEXT,
+    action      TEXT,
+    status      TEXT,
+    reason      TEXT,
+    order_id    TEXT,
+    sized_qty   REAL,
+    sl_used     REAL,
+    tp_used     REAL,
+    auto_sized  INTEGER,
+    auto_sltp   INTEGER
+);
+"""
+
 
 class SignalStore:
 
@@ -195,6 +213,7 @@ class SignalStore:
                 CREATE_DATA_QUALITY_EVENTS,
                 CREATE_MODEL_VALIDATION,
                 CREATE_SYSTEM_HEALTH,
+                CREATE_WEBHOOK_EVENTS,
             ]:
                 conn.execute(text(stmt))
             # Migration: add new columns if they don't exist (SQLite safe ALTER TABLE)
@@ -210,6 +229,21 @@ class SignalStore:
                     conn.execute(text(f"ALTER TABLE signals ADD COLUMN {col_name} {col_def}"))
                 except Exception:
                     pass  # column already exists
+            _explain_cols = [
+                ("confluence_grade", "TEXT"),
+                ("confluence_pct", "REAL"),
+                ("sqs", "INTEGER"),
+                ("sqs_grade", "TEXT"),
+                ("size_multiplier_used", "REAL"),
+                ("factor_breakdown", "TEXT"),
+                ("top_aligned_factors", "TEXT"),
+                ("top_drag_factors", "TEXT"),
+            ]
+            for col_name, col_type in _explain_cols:
+                try:
+                    conn.execute(text(f"ALTER TABLE signals ADD COLUMN {col_name} {col_type}"))
+                except Exception:
+                    pass
             conn.commit()
         logger.info("SignalStore schema initialised (with execution tracking columns).")
 
@@ -227,14 +261,20 @@ class SignalStore:
              entry_price, stop_loss, take_profit, position_size_pct,
              kelly_fraction, hurst_exponent, factor_scores, ic_weights,
              slippage_cost_pct, cost_pct, net_alpha_score, cs_alpha_score,
-             execution_price, implementation_shortfall_pct)
+             execution_price, implementation_shortfall_pct,
+             confluence_grade, confluence_pct, sqs, sqs_grade,
+             size_multiplier_used, factor_breakdown, top_aligned_factors,
+             top_drag_factors)
             VALUES
             (:signal_id, :timestamp, :asset, :asset_class, :timeframe,
              :signal, :strength, :confidence, :alpha_score, :regime,
              :entry_price, :stop_loss, :take_profit, :position_size_pct,
              :kelly_fraction, :hurst_exponent, :factor_scores, :ic_weights,
              :slippage_cost_pct, :cost_pct, :net_alpha_score, :cs_alpha_score,
-             :execution_price, :implementation_shortfall_pct)
+             :execution_price, :implementation_shortfall_pct,
+             :confluence_grade, :confluence_pct, :sqs, :sqs_grade,
+             :size_multiplier_used, :factor_breakdown, :top_aligned_factors,
+             :top_drag_factors)
         """)
         with self.engine.connect() as conn:
             conn.execute(sql, d)
@@ -455,3 +495,209 @@ class SignalStore:
         with self.engine.connect() as conn:
             rows = conn.execute(sql, {"lim": limit}).mappings().fetchall()
         return [dict(r) for r in rows]
+
+    def get_signal_by_id(self, signal_id) -> dict:
+        """Returns single signal dict by id. {} if not found."""
+        try:
+            sid = str(signal_id).strip()
+            if not sid:
+                return {}
+            sql = text("SELECT * FROM signals WHERE signal_id = :sid LIMIT 1")
+            with self.engine.connect() as conn:
+                row = conn.execute(sql, {"sid": sid}).mappings().fetchone()
+            if row is None:
+                return {}
+            d = dict(row)
+            for k in ("factor_breakdown",):
+                raw = d.get(k)
+                if isinstance(raw, str) and raw.strip():
+                    try:
+                        d[k] = json.loads(raw)
+                    except Exception:
+                        d[k] = {}
+            for k in ("top_aligned_factors", "top_drag_factors"):
+                raw = d.get(k)
+                if isinstance(raw, str) and raw.strip():
+                    try:
+                        d[k] = json.loads(raw)
+                    except Exception:
+                        d[k] = []
+            return d
+        except Exception:
+            return {}
+
+    def get_signal_quality_stats(self, days: int = 7) -> dict:
+        """
+        Aggregated SQS stats for recent window.
+        suppressed_count from system_health messages when available.
+        """
+        try:
+            from datetime import datetime, timedelta, timezone
+
+            cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))
+            recent = self.get_recent_signals(limit=3000)
+            filtered: list[dict] = []
+            for r in recent:
+                ts = r.get("timestamp")
+                try:
+                    if not isinstance(ts, str):
+                        continue
+                    t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                    if t.tzinfo is None:
+                        t = t.replace(tzinfo=timezone.utc)
+                    if t >= cutoff:
+                        filtered.append(r)
+                except Exception:
+                    continue
+
+            premium_count = sum(1 for r in filtered if r.get("sqs_grade") == "PREMIUM")
+            standard_count = sum(1 for r in filtered if r.get("sqs_grade") == "STANDARD")
+            weak_count = sum(1 for r in filtered if r.get("sqs_grade") == "WEAK")
+            sqs_vals = [float(r["sqs"]) for r in filtered if r.get("sqs") is not None]
+            conf_vals = [
+                float(r["confluence_pct"])
+                for r in filtered
+                if r.get("confluence_pct") is not None
+            ]
+            avg_sqs = float(sum(sqs_vals) / len(sqs_vals)) if sqs_vals else 0.0
+            avg_conf = float(sum(conf_vals) / len(conf_vals)) if conf_vals else 0.0
+
+            suppressed_count = 0
+            try:
+                csql = text("""
+                    SELECT COUNT(*) AS n FROM system_health
+                    WHERE timestamp >= :ts
+                      AND (
+                        message LIKE '%Signal suppressed by SQS%'
+                        OR message LIKE '%confluence grade D%'
+                      )
+                """)
+                with self.engine.connect() as conn:
+                    crow = conn.execute(csql, {"ts": cutoff.isoformat()}).fetchone()
+                if crow is not None and crow[0] is not None:
+                    suppressed_count = int(crow[0])
+            except Exception:
+                suppressed_count = 0
+
+            return {
+                "last_7d": {
+                    "premium_count": premium_count,
+                    "standard_count": standard_count,
+                    "weak_count": weak_count,
+                    "suppressed_count": suppressed_count,
+                    "avg_sqs": round(avg_sqs, 2),
+                    "avg_confluence_pct": round(avg_conf, 2),
+                }
+            }
+        except Exception:
+            return {"last_7d": {}}
+
+    def save_regime_analysis(self, analysis: dict) -> None:
+        """Save regime analysis as JSON in system_health table.
+        Uses existing system_health table — no schema change needed.
+        Key: 'regime_analysis', value: json.dumps(analysis)
+        SAFETY: fails silently on any exception."""
+        try:
+            from datetime import datetime, timezone
+            import uuid
+
+            payload = {
+                "health_id": str(uuid.uuid4()),
+                "component": "regime_analysis",
+                "status": "info",
+                "message": "regime_analysis_snapshot",
+                "details": json.dumps({"regime_analysis": analysis}),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            self.save_system_health(payload)
+        except Exception:
+            pass
+
+    def get_latest_regime_analysis(self) -> dict:
+        """Retrieve latest regime_analysis from system_health table.
+        Returns {} if not found."""
+        try:
+            sql = text("""
+                SELECT details FROM system_health
+                WHERE component = :comp
+                ORDER BY timestamp DESC LIMIT 1
+            """)
+            with self.engine.connect() as conn:
+                row = conn.execute(sql, {"comp": "regime_analysis"}).fetchone()
+            if row is None or row[0] is None:
+                return {}
+            raw = row[0]
+            if isinstance(raw, str):
+                d = json.loads(raw)
+            else:
+                d = json.loads(str(raw))
+            if not isinstance(d, dict):
+                return {}
+            return d.get("regime_analysis") or {}
+        except Exception:
+            return {}
+
+    def save_webhook_event(self, event: dict) -> None:
+        """Persist a webhook audit row (no raw payload — may contain secrets)."""
+        try:
+            sql = text("""
+                INSERT INTO webhook_events
+                (timestamp, source, ticker, action, status, reason, order_id,
+                 sized_qty, sl_used, tp_used, auto_sized, auto_sltp)
+                VALUES
+                (:timestamp, :source, :ticker, :action, :status, :reason, :order_id,
+                 :sized_qty, :sl_used, :tp_used, :auto_sized, :auto_sltp)
+            """)
+            row = {
+                "timestamp": event.get("timestamp", ""),
+                "source": event.get("source"),
+                "ticker": event.get("ticker"),
+                "action": event.get("action"),
+                "status": event.get("status"),
+                "reason": event.get("reason"),
+                "order_id": event.get("order_id"),
+                "sized_qty": event.get("sized_qty"),
+                "sl_used": event.get("sl_used"),
+                "tp_used": event.get("tp_used"),
+                "auto_sized": int(event.get("auto_sized") or 0),
+                "auto_sltp": int(event.get("auto_sltp") or 0),
+            }
+            with self.engine.connect() as conn:
+                conn.execute(sql, row)
+                conn.commit()
+        except Exception as exc:
+            logger.warning("save_webhook_event failed (non-critical): %s", exc)
+
+    def get_webhook_log(self, limit: int = 50) -> list:
+        """Last N webhook events, newest first; each row as a dict."""
+        try:
+            lim = max(1, min(int(limit), 500))
+            sql = text("""
+                SELECT id, timestamp, source, ticker, action, status, reason, order_id,
+                       sized_qty, sl_used, tp_used, auto_sized, auto_sltp
+                FROM webhook_events
+                ORDER BY id DESC
+                LIMIT :lim
+            """)
+            with self.engine.connect() as conn:
+                rows = conn.execute(sql, {"lim": lim}).fetchall()
+            out: list = []
+            for r in rows:
+                out.append({
+                    "id": r[0],
+                    "timestamp": r[1],
+                    "source": r[2],
+                    "ticker": r[3],
+                    "action": r[4],
+                    "status": r[5],
+                    "reason": r[6],
+                    "order_id": r[7],
+                    "sized_qty": r[8],
+                    "sl_used": r[9],
+                    "tp_used": r[10],
+                    "auto_sized": bool(r[11]) if r[11] is not None else False,
+                    "auto_sltp": bool(r[12]) if r[12] is not None else False,
+                })
+            return out
+        except Exception:
+            return []

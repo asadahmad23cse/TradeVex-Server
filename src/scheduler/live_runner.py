@@ -1,4 +1,4 @@
-﻿"""
+"""
 Layer 8 â€” Live Scheduler.
 
 Two APScheduler jobs:
@@ -528,6 +528,24 @@ class LiveRunner:
         if self._ws_broadcast:
             self._ws_broadcast(sig.to_dict())
 
+        _outgoing_url = str((self.cfg.get("webhook") or {}).get("outgoing_url") or "").strip()
+        if _outgoing_url:
+            try:
+                out_sig = {
+                    "asset": sig.asset,
+                    "ticker": sig.asset,
+                    "direction": sig.signal,
+                    "alpha_score": sig.alpha_score,
+                    "alpha": sig.alpha_score,
+                    "regime": sig.regime,
+                    "sl": sig.stop_loss,
+                    "tp": sig.take_profit,
+                    "sqs": sig.sqs,
+                }
+                self.notifier.push_outgoing_webhook(out_sig, _outgoing_url)
+            except Exception as _ow_exc:
+                logger.warning("Outgoing webhook failed (non-critical): %s", _ow_exc)
+
         self._impact_observations.append(
             {
                 "actual_slippage_pct": abs(sig.implementation_shortfall_pct),
@@ -805,6 +823,17 @@ class LiveRunner:
                 alpha_result["atr_percentile"] = float(
                     df.get("ATR_Percentile", pd.Series([50.0], index=df.index)).iloc[-1]
                 )
+                try:
+                    _rp = regime_probs if isinstance(regime_probs, dict) else {}
+                    _rc = float(_rp.get(regime, 0.0)) if _rp else None
+                    if _rc is not None and _rc <= 0.0 and _rp:
+                        _rc = float(max(_rp.values()))
+                    alpha_result["regime_confidence"] = _rc
+                except Exception:
+                    alpha_result["regime_confidence"] = None
+                alpha_result["liquidity_score"] = float(
+                    min(1.0, max(0.0, volume_ratio / 1.5))
+                )
                 timing_totals["alpha_score_ms"] += (time_module.perf_counter() * 1000.0 - alpha_start_ms)
 
                 if alpha_result["signal"] == "HOLD":
@@ -1074,6 +1103,25 @@ class LiveRunner:
                 )
                 alpha_result["atr_percentile"] = float(
                     df.get("ATR_Percentile", pd.Series([50.0], index=df.index)).iloc[-1]
+                )
+                _eod_probs: dict = {}
+                try:
+                    if regime_det and regime_det._trained:
+                        _rd_df = self._regime_input_df(asset_class, "daily")
+                        if not _rd_df.empty:
+                            _, _eod_probs = regime_det.predict(_rd_df)
+                except Exception:
+                    _eod_probs = {}
+                try:
+                    _erp = _eod_probs if isinstance(_eod_probs, dict) else {}
+                    _erc = float(_erp.get(regime, 0.0)) if _erp else None
+                    if _erc is not None and _erc <= 0.0 and _erp:
+                        _erc = float(max(_erp.values()))
+                    alpha_result["regime_confidence"] = _erc
+                except Exception:
+                    alpha_result["regime_confidence"] = None
+                alpha_result["liquidity_score"] = float(
+                    min(1.0, max(0.0, volume_ratio / 1.5))
                 )
                 if alpha_result["signal"] == "HOLD":
                     continue

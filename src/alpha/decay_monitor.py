@@ -148,15 +148,34 @@ class FactorDecayMonitor:
             for s in self._states.values()
         ]
 
-    def apply_weights(self, ic_weights: dict[str, float]) -> dict[str, float]:
+    def apply_weights(
+        self,
+        ic_weights: dict[str, float],
+        *,
+        options_coldstart_bars: int | None = None,
+        bars_seen_by_ticker: dict[str, int] | None = None,
+        ticker_key: str | None = None,
+    ) -> dict[str, float]:
         """
         Multiply IC weights by decay weights.
 
-        Usage in AlphaFactorModel.score():
-            ics = self.compute_ic(df, ...)
-            ics = decay_monitor.apply_weights(ics)
+        F15/F16/F17: while bars_seen <= options_coldstart_bars for this ticker,
+        skip decay (treat decay multiplier as 1.0) so IC_21 gating does not
+        zero them during the options cold-start window.
         """
-        return {
-            f: ic * self.get_weight(f)
-            for f, ic in ic_weights.items()
-        }
+        tk = (ticker_key or "").strip().upper()
+        bars = 999_999
+        if bars_seen_by_ticker is not None and tk:
+            bars = int(bars_seen_by_ticker.get(tk, 999_999))
+        out: dict[str, float] = {}
+        for f, ic in ic_weights.items():
+            if (
+                f in ("F15", "F16", "F17")
+                and options_coldstart_bars is not None
+                and bars <= int(options_coldstart_bars)
+            ):
+                out[f] = float(ic)
+                continue
+            w = self.get_weight(f)
+            out[f] = float(ic) * float(w)
+        return out

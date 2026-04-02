@@ -39,6 +39,7 @@ from src.utils.math_utils import (
     calculate_sortino_ratio,
     calculate_max_drawdown,
 )
+from src.backtest.regime_analysis import RegimePerformanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -349,6 +350,39 @@ class BacktestEngine:
             [c for _, c in equity_curve],
             index=pd.DatetimeIndex([d for d, _ in equity_curve]),
         )
+
+        # --- Regime Analysis (additive, never affects existing result) ---
+        try:
+            _regime_tracker = RegimePerformanceTracker()
+            _trade_dicts: list[dict] = []
+            for t in result.trades:
+                try:
+                    if t.outcome == "OPEN":
+                        continue
+                    hold_b = 1
+                    if t.exit_date is not None and t.entry_date is not None:
+                        hold_b = max(1, (t.exit_date - t.entry_date).days)
+                    _trade_dicts.append({
+                        "regime_at_entry": str(getattr(t, "regime", "SIDEWAYS")),
+                        "net_pnl_pct": float(t.net_pnl_pct),
+                        "outcome": str(t.outcome),
+                        "hold_bars": float(hold_b),
+                    })
+                except Exception:
+                    continue
+            _regime_analysis = _regime_tracker.compute_regime_stats(_trade_dicts)
+            setattr(result, "regime_analysis", _regime_analysis)
+            try:
+                _db_url = (self.cfg.get("database", {}) or {}).get("url", "data/signals.db")
+                from src.signals.store import SignalStore
+
+                SignalStore(_db_url).save_regime_analysis(_regime_analysis)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning("Regime analysis failed (non-critical): %s", e)
+            setattr(result, "regime_analysis", {})
+        # --- End Regime Analysis ---
 
         result.print_summary()
         return result

@@ -23,6 +23,7 @@ from src.api.connectors import MarketDataConnector
 from src.features.engineer import FeatureEngineer
 from src.alpha.factor_model import AlphaFactorModel
 from src.research.validation import CPCVValidator
+from src.backtest.regime_analysis import RegimePerformanceTracker
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +127,7 @@ class WFOValidator:
             print(f"  ✗ NO parameter sets passed IR > {self.ir_threshold} — system not ready for live trading")
         print(f"{'='*60}\n")
 
-        return {
+        result_payload = {
             "best_alpha_threshold": best["alpha_threshold"],
             "best_ic_window": best["ic_window"],
             "best_ir": best["oos_ir"],
@@ -135,6 +136,40 @@ class WFOValidator:
             "ticker": self.ticker,
             "timestamp": datetime.utcnow().isoformat(),
         }
+
+        try:
+            from src.alpha.regime import RegimeDetector
+
+            _rd = RegimeDetector()
+            _tn = min(252, len(df))
+            if _tn >= 20:
+                _rd.train(df.iloc[:_tn])
+            self._wfo_regime_detector = _rd
+        except Exception as exc:
+            logger.warning("WFO regime detector train failed: %s", exc)
+            self._wfo_regime_detector = None
+
+        try:
+            self._collect_regime_folds = True
+            self._wfo_fold_regime_accumulator = []
+            _ = self._run_wfo(df, best["alpha_threshold"], best["ic_window"])
+        except Exception as exc:
+            logger.warning("WFO regime fold collection failed: %s", exc)
+        finally:
+            self._collect_regime_folds = False
+
+        try:
+            _acc = getattr(self, "_wfo_fold_regime_accumulator", [])
+            result_payload["regime_analysis_by_fold"] = list(_acc)
+            _all_fold_regime = [x for x in _acc if isinstance(x, dict)]
+            result_payload["regime_analysis"] = RegimePerformanceTracker().aggregate_folds(
+                _all_fold_regime
+            )
+        except Exception as e:
+            logger.warning("WFO regime aggregation failed: %s", e)
+            result_payload["regime_analysis"] = {}
+
+        return result_payload
 
     # ------------------------------------------------------------------
     # Single WFO run for one parameter set
@@ -161,6 +196,7 @@ class WFOValidator:
             train_df = df.iloc[:train_end]
             oos_df = df.iloc[train_end: train_end + self.oos_step]
             oos_fwd = fwd_returns.iloc[train_end: train_end + self.oos_step]
+            fold_trades: list[dict] = []
 
             if len(train_df) < ic_window + 10:
                 train_end += self.oos_step
@@ -179,11 +215,40 @@ class WFOValidator:
                     alpha_score = result.get("alpha_score", 0.0)
                     actual_fwd = float(oos_fwd.iloc[i]) if i < len(oos_fwd) else np.nan
 
+                    if getattr(self, "_collect_regime_folds", False):
+                        try:
+                            regime_guess = "SIDEWAYS"
+                            det = getattr(self, "_wfo_regime_detector", None)
+                            if det is not None and getattr(det, "_trained", False):
+                                try:
+                                    win = df.iloc[max(0, window_end - 60): window_end]
+                                    if len(win) >= 20:
+                                        regime_guess, _ = det.predict(win.tail(60))
+                                except Exception:
+                                    regime_guess = "SIDEWAYS"
+                            if not np.isnan(actual_fwd):
+                                fold_trades.append({
+                                    "regime_at_entry": str(regime_guess),
+                                    "net_pnl_pct": float(actual_fwd) * 100.0,
+                                    "outcome": "WIN" if actual_fwd > 0 else "LOSS",
+                                    "hold_bars": 1.0,
+                                })
+                        except Exception:
+                            pass
+
                     if not np.isnan(actual_fwd) and not np.isnan(alpha_score):
                         oos_ics.append(alpha_score * np.sign(actual_fwd))
 
             except Exception as exc:
                 logger.debug("WFO step error (alpha=%.2f, ic=%d): %s", alpha_threshold, ic_window, exc)
+
+            if getattr(self, "_collect_regime_folds", False):
+                try:
+                    _fold_regime_stats = RegimePerformanceTracker().compute_regime_stats(fold_trades)
+                    self._wfo_fold_regime_accumulator.append(_fold_regime_stats)
+                except Exception as e:
+                    logger.warning("Fold regime analysis failed: %s", e)
+                    self._wfo_fold_regime_accumulator.append({})
 
             train_end += self.oos_step
 

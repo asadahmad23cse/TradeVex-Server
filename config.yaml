@@ -359,3 +359,20 @@ optuna:
   alpha_trials: 30
   timeout_sec: 600
   db_path: data/optuna_study.db
+
+options_intelligence:
+  enabled: false
+  log_only_mode: false
+  cache_ttl_minutes: 5
+  nse_session_timeout: 10
+  initial_ic_weight: 0.08
+  cold_start_bars: 63
+  max_strikes_for_gex: 50
+  risk_free_rate: 0.065
+
+webhook:
+  enabled: false
+  secret_token: "CHANGE_ME"
+  outgoing_url: ""
+  rate_limit_per_min: 60
+  max_webhook_kelly: 0.05

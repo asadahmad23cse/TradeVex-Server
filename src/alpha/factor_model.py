@@ -16,6 +16,9 @@ Factors (signed: + bullish, - bearish):
   F12 Expiry Week Calendar Factor (India)
   F13 Funding Rate Z-Score (crypto only)
   F14 Open Interest Delta (crypto only)
+  F15 IV Skew (India options — optional)
+  F16 Max Pain (India options — optional)
+  F17 GEX (India options — optional)
   F21 ETF Flow Z-Score (crypto only)
 
 IC weighting:
@@ -42,6 +45,7 @@ import numpy as np
 import pandas as pd
 
 from src.api.alt_data import AltDataProvider
+from src.alpha.decay_monitor import FactorDecayMonitor
 from src.alpha.meta_model import MetaModel
 from src.alpha.orderbook import OrderFlowAnalyser
 from src.features.hurst import hurst_factor_multiplier
@@ -53,6 +57,15 @@ except Exception:  # pragma: no cover - optional dependency for VIX enrichment
     yf = None  # type: ignore[assignment]
 
 logger = logging.getLogger(__name__)
+
+try:
+    from src.api.options_alt_data import OptionsAltDataProvider
+
+    _OPTIONS_IMPORT_OK = True
+except ImportError:
+    OptionsAltDataProvider = None  # type: ignore[misc, assignment]
+    _OPTIONS_IMPORT_OK = False
+    logger.warning("OptionsAltDataProvider unavailable — F15/F16/F17 will be 0.0")
 
 _orderflow = OrderFlowAnalyser()
 _alt_data = AltDataProvider(cache_ttl_seconds=300)
@@ -75,6 +88,31 @@ _ic_cache_lock = threading.Lock()
 _ic_refresh_started = False
 _model_cache: dict[str, "AlphaFactorModel"] = {}
 _model_cache_lock = threading.Lock()
+
+_alpha_yaml_cfg: dict | None = None
+
+
+def _alpha_yaml_config() -> dict:
+    """Load config.yaml once for options_intelligence and paths."""
+    global _alpha_yaml_cfg
+    if _alpha_yaml_cfg is not None:
+        return _alpha_yaml_cfg
+    try:
+        import yaml
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2]
+        p = root / "config.yaml"
+        if not p.exists():
+            p = Path("config.yaml")
+        if p.exists():
+            with open(p, encoding="utf-8") as f:
+                _alpha_yaml_cfg = yaml.safe_load(f) or {}
+        else:
+            _alpha_yaml_cfg = {}
+    except Exception:
+        _alpha_yaml_cfg = {}
+    return _alpha_yaml_cfg
 
 
 def _zscore(series: pd.Series, window: int = 60) -> pd.Series:
@@ -205,6 +243,23 @@ def _compute_effective_ic_bundle(
                 "zero_weighted": True,
             }
             continue
+        if is_crypto and name in {"F15", "F16", "F17"}:
+            ics[name] = 0.0
+            factor_meta[name] = {
+                "ic_10": 0.0,
+                "ic_21": 0.0,
+                "ic_63": 0.0,
+                "ic_windows": [int(w) for w in ic_windows],
+                "ic_composite": 0.0,
+                "ic_ci_center": 0.0,
+                "ic_ci_low": 0.0,
+                "ic_ci_high": 0.0,
+                "lag1_autocorr": 0.0,
+                "turnover_penalty": 1.0,
+                "ic_boosted": False,
+                "zero_weighted": True,
+            }
+            continue
         ic_vals: list[float] = []
         ic_series_list: list[pd.Series] = []
         for w in ic_windows:
@@ -246,6 +301,11 @@ def _compute_effective_ic_bundle(
         else:
             icir_weight = 1.0  # insufficient history — no penalty
         effective_ic *= icir_weight
+
+        if name in {"F15", "F16", "F17"} and not is_crypto:
+            zlast = abs(float(factor.fillna(0).iloc[-1])) if len(factor.index) else 0.0
+            if zlast > 1e-12 and composite_ic >= 0.0:
+                effective_ic = max(float(effective_ic), 0.08)
 
         ics[name] = float(effective_ic)
         factor_meta[name] = {
@@ -304,10 +364,22 @@ class AlphaFactorModel:
         alpha_threshold: float = ALPHA_THRESHOLD,
         ic_window: int = IC_WINDOW,
         meta_config: dict | None = None,
+        config: dict | None = None,
     ):
         self.alpha_threshold = alpha_threshold
         self.ic_window = ic_window
         self._meta_model = MetaModel(meta_config)
+        cfg = config if isinstance(config, dict) else _alpha_yaml_config()
+        oi = cfg.get("options_intelligence") or {}
+        self._OPTIONS_COLDSTART_BARS = int(oi.get("cold_start_bars", 63))
+        self._bar_count: dict[str, int] = {}
+        self._options_provider = None
+        if _OPTIONS_IMPORT_OK and OptionsAltDataProvider is not None:
+            try:
+                self._options_provider = OptionsAltDataProvider(cfg)
+            except Exception as oe:
+                logger.warning("Options provider init failed: %s", oe)
+        self._decay_monitor = FactorDecayMonitor()
         global _ic_refresh_started
         if not _ic_refresh_started:
             with _ic_cache_lock:
@@ -319,6 +391,36 @@ class AlphaFactorModel:
                     )
                     th.start()
                     _ic_refresh_started = True
+
+    def _options_factor_triplet(
+        self,
+        asset: str | None,
+        asset_class: str | None,
+        *,
+        bump_bars: bool = True,
+    ) -> tuple[float, float, float]:
+        if self._options_provider is None or not _is_indian_asset(asset, asset_class):
+            return (0.0, 0.0, 0.0)
+        ak = (asset or "").strip().upper() or "_UNK_"
+        if bump_bars:
+            self._bar_count[ak] = self._bar_count.get(ak, 0) + 1
+        bars = self._bar_count.get(ak, 0)
+        if bars <= self._OPTIONS_COLDSTART_BARS:
+            return (0.0, 0.0, 0.0)
+        try:
+            po = self._options_provider.get_options_factors(asset or "")
+            return (
+                float(po.get("F15_iv_skew", 0.0)),
+                float(po.get("F16_max_pain", 0.0)),
+                float(po.get("F17_gex", 0.0)),
+            )
+        except Exception as exc:
+            logger.warning(
+                "Options factors failed for %s: %s — using 0.0",
+                asset,
+                exc,
+            )
+            return (0.0, 0.0, 0.0)
 
     @staticmethod
     def _ic_cache_key(
@@ -686,6 +788,12 @@ class AlphaFactorModel:
         f10 = self._factor10_fii_dii_flow(df, asset, asset_class)
         f11, _ = self._factor11_vix_regime(df, asset, asset_class)
         f12, in_expiry = self._factor12_expiry_calendar(df, asset, asset_class)
+        f15_v, f16_v, f17_v = self._options_factor_triplet(
+            asset, asset_class, bump_bars=False
+        )
+        f15 = pd.Series(f15_v, index=df.index)
+        f16 = pd.Series(f16_v, index=df.index)
+        f17 = pd.Series(f17_v, index=df.index)
         if is_crypto:
             f13_score = float(-np.tanh(funding_rate_z * 1.5))
             price_direction = 1.0 if price_change_1h >= 0.0 else -1.0
@@ -720,6 +828,9 @@ class AlphaFactorModel:
             "F12": f12,
             "F13": f13,
             "F14": f14,
+            "F15": f15,
+            "F16": f16,
+            "F17": f17,
             "F21": f21,
         }
 
@@ -748,7 +859,7 @@ class AlphaFactorModel:
 
         Returns keys:
           alpha_score, confidence, signal, strength,
-          factor_scores {F1..F14,F21}, ic_weights {F1..F14,F21}, factor_meta.
+          factor_scores {F1..F17,F21}, ic_weights {F1..F17,F21}, factor_meta.
         """
         min_required = max(self.ic_window + 10, 80)
         if len(df) < min_required:
@@ -776,6 +887,10 @@ class AlphaFactorModel:
         f10 = self._factor10_fii_dii_flow(df, asset, asset_class)
         f11, vix_mult = self._factor11_vix_regime(df, asset, asset_class)
         f12, in_expiry = self._factor12_expiry_calendar(df, asset, asset_class)
+        f15_v, f16_v, f17_v = self._options_factor_triplet(asset, asset_class)
+        f15 = pd.Series(f15_v, index=df.index)
+        f16 = pd.Series(f16_v, index=df.index)
+        f17 = pd.Series(f17_v, index=df.index)
         if is_crypto:
             f13_score = float(-np.tanh(funding_rate_z * 1.5))
             price_direction = 1.0 if price_change_1h >= 0.0 else -1.0
@@ -812,6 +927,9 @@ class AlphaFactorModel:
             "F12": f12,
             "F13": f13,
             "F14": f14,
+            "F15": f15,
+            "F16": f16,
+            "F17": f17,
             "F21": f21,
         }
 
@@ -823,6 +941,27 @@ class AlphaFactorModel:
         )
         ics, factor_meta = self._get_cached_ic_bundle(cache_key, factors, fwd_ret, asset_class=asset_class)
         factor_meta = {name: dict(meta) for name, meta in factor_meta.items()}
+
+        ak_decay = (asset or "").strip().upper() or "_UNK_"
+        bars_seen = self._bar_count.get(ak_decay, 0)
+        if (
+            _is_indian_asset(asset, asset_class)
+            and bars_seen > self._OPTIONS_COLDSTART_BARS
+        ):
+            for fname in ("F15", "F16", "F17"):
+                meta_o = factor_meta.get(fname, {})
+                if isinstance(meta_o, dict):
+                    self._decay_monitor.update(
+                        fname,
+                        float(meta_o.get("ic_21", 0.0)),
+                        float(meta_o.get("ic_63", 0.0)),
+                    )
+        ics = self._decay_monitor.apply_weights(
+            ics,
+            options_coldstart_bars=self._OPTIONS_COLDSTART_BARS,
+            bars_seen_by_ticker=self._bar_count,
+            ticker_key=ak_decay,
+        )
 
         latest: dict[str, float] = {
             name: float(series.iloc[-1]) if not series.empty else 0.0
@@ -848,6 +987,64 @@ class AlphaFactorModel:
         denom = max(sum(abs(v) for v in adjusted_ics.values()), 0.01)
         alpha_score = sum(adjusted_ics[k] * latest[k] for k in adjusted_ics) / denom
         alpha_score *= vix_mult
+
+        # === Factor Breakdown (additive — zero impact on alpha value) ===
+        factor_breakdown: dict = {}
+        factor_ic_recency: float | None = None
+        try:
+            _fb_names = [
+                "F1_momentum",
+                "F2_mean_reversion",
+                "F3_volume",
+                "F4_ml_lstm",
+                "F5_vol_squeeze",
+                "F6_alt_data",
+                "F7_ensemble_ml",
+                "F8_microstructure",
+            ]
+            _fb_keys = ["F1", "F2", "F3", "F4", "F5", "F6", "F7", "F8"]
+            for _name, _fk in zip(_fb_names, _fb_keys):
+                _z = float(latest.get(_fk, 0.0))
+                _iw = float(adjusted_ics.get(_fk, 0.0))
+                _contrib = (_iw * _z / denom) * vix_mult
+                factor_breakdown[_name] = {
+                    "raw_z": _z,
+                    "ic_weight": _iw,
+                    "contribution": float(_contrib),
+                }
+            _extra_fb = [
+                ("F9_options_pcr", "F9"),
+                ("F10_fii_dii", "F10"),
+                ("F11_vix", "F11"),
+                ("F12_expiry", "F12"),
+                ("F15_iv_skew", "F15"),
+                ("F16_max_pain", "F16"),
+                ("F17_gex", "F17"),
+            ]
+            for _name, _fk in _extra_fb:
+                _z = float(latest.get(_fk, 0.0))
+                _iw = float(adjusted_ics.get(_fk, 0.0))
+                _contrib = (_iw * _z / denom) * vix_mult
+                factor_breakdown[_name] = {
+                    "raw_z": _z,
+                    "ic_weight": _iw,
+                    "contribution": float(_contrib),
+                }
+        except Exception as e:
+            logger.warning("Factor breakdown failed (non-critical): %s", e)
+            factor_breakdown = {}
+        try:
+            _ic21_vals: list[float] = []
+            for _meta in factor_meta.values():
+                if isinstance(_meta, dict) and _meta.get("ic_21") is not None:
+                    _ic21_vals.append(abs(float(_meta["ic_21"])))
+            if _ic21_vals:
+                factor_ic_recency = float(
+                    min(1.0, max(0.0, (sum(_ic21_vals) / len(_ic21_vals)) / 0.08))
+                )
+        except Exception:
+            factor_ic_recency = None
+        # === End Factor Breakdown ===
 
         if alpha_score > self.alpha_threshold:
             signal = "BUY"
@@ -882,6 +1079,8 @@ class AlphaFactorModel:
             "regime_for_confidence": regime_for_conf,
             "india_vix": round(float(vix_value), 3),
             "expiry_week": bool(in_expiry),
+            "factor_breakdown": factor_breakdown,
+            "factor_ic_recency": factor_ic_recency,
         }
 
     @staticmethod
@@ -901,6 +1100,9 @@ class AlphaFactorModel:
             "F12": 0.0,
             "F13": 0.0,
             "F14": 0.0,
+            "F15": 0.0,
+            "F16": 0.0,
+            "F17": 0.0,
             "F21": 0.0,
         }
         return {
@@ -913,6 +1115,8 @@ class AlphaFactorModel:
             "raw_ic_weights": dict(_zeros),
             "factor_meta": {},
             "reason": reason,
+            "factor_breakdown": {},
+            "factor_ic_recency": None,
         }
 
     def compute(

@@ -28,6 +28,7 @@ from src.dashboard.mtf_bias import MTFBiasFilter
 from src.data.signal_history import check_open_signals, record_signal
 from src.features.engineer import FeatureEngineer
 from src.risk.cost_model import CostModel
+from src.risk.kelly_warm_start import BTCKellyWarmStart
 
 logger = logging.getLogger(__name__)
 _last_signal_time: dict[str, float] = {}  # {"LONG": ts, "SHORT": ts, "__ANY__": ts}
@@ -35,24 +36,35 @@ COOLDOWN_MINUTES = {
     "same_direction": 45,
     "any_signal": 10,
 }
-BEARISH_REGIMES = {"BEARISH TREND", "HIGH_VOL_BEAR", "BEAR"}
-BULLISH_REGIMES = {"BULLISH TREND", "HIGH_VOL_BULL", "BULL"}
+BEARISH_REGIMES = {"BEARISH TREND", "HIGH_VOL_BEAR", "BEAR", "CAPITULATION"}
+BULLISH_REGIMES = {"BULLISH TREND", "HIGH_VOL_BULL", "BULL", "DISTRIBUTION"}
 BASE_CONFIDENCE_THRESHOLD = 0.65
+
+# Multiplier applied to BASE_CONFIDENCE_THRESHOLD for COUNTER-TREND signals only.
+# WITH-TREND signals (e.g., SHORT in BEARISH regime) use BASE_CONFIDENCE_THRESHOLD × 1.0
+# so the bar is no higher than normal — the regime already confirms direction.
+# Counter-trend signals get the full multiplier (higher bar required).
 REGIME_CONFIDENCE_MULTIPLIER = {
     "BEARISH TREND": 1.25,
     "HIGH_VOL_BEAR": 1.20,
     "HIGH_VOL_BULL": 1.20,
     "BULLISH TREND": 1.00,
     "SIDEWAYS": 1.15,
+    # Capitulation / Distribution: contrarian setups where sentiment extremes
+    # support a reversal — allow with-trend signals at a LOWER bar than normal.
+    "CAPITULATION": 0.85,   # extreme-fear LONG: lower bar for LONG entry
+    "DISTRIBUTION": 0.85,   # extreme-greed SHORT: lower bar for SHORT entry
 }
 SHORT_SETUP_SL_PCT = 0.0035
 SHORT_SETUP_TP1_PCT = 0.0070
 SHORT_SETUP_TP2_PCT = 0.0105
 SHORT_SETUP_TP3_PCT = 0.0140
+OI_EXTREME_NEG_DELTA_PCT = -2.0
 
 BINANCE_REST = "https://api.binance.com"
 BTC_SYMBOL = "BTCUSDT"
 BINANCE_BTC_EARLIEST_MS = 1502942400000  # 2017-08-17T04:00:00Z approx listing start
+BINANCE_HTTP_TIMEOUT_SECONDS = 6
 
 INTERVAL_TO_MS = {
     "1m": 60_000,
@@ -94,6 +106,7 @@ class BitcoinMarketService:
         self._etf_flow = get_etf_flow_provider()
         self._fear_greed = get_fear_greed_provider()
         self._mtf_bias = MTFBiasFilter(self)
+        self._kelly = BTCKellyWarmStart()
         self._config = config
 
     def get_all_time_history(self, interval: str = "1d") -> dict[str, Any]:
@@ -243,8 +256,30 @@ class BitcoinMarketService:
         requested_signal = signal if signal in {"LONG", "SHORT"} else None
         reason = ""
         blocked_by: str | None = None
-        regime = self._infer_regime(feat)
-        adjusted_threshold = BASE_CONFIDENCE_THRESHOLD * REGIME_CONFIDENCE_MULTIPLIER.get(regime, 1.0) * 100.0
+        regime = self._infer_regime(feat, funding_rate_z=funding_rate_z)
+
+        # Direction-aware regime threshold:
+        #   WITH-TREND  (SHORT in BEARISH / LONG in BULLISH / LONG in CAPITULATION
+        #                / SHORT in DISTRIBUTION) → base threshold, no penalty.
+        #   COUNTER-TREND (LONG in BEARISH / SHORT in BULLISH) → full multiplier;
+        #                need high conviction to trade against the regime.
+        #   NEUTRAL regimes (SIDEWAYS, RANGE) → moderate multiplier as before.
+        _base_mult = REGIME_CONFIDENCE_MULTIPLIER.get(regime, 1.0)
+        _with_trend = (
+            (regime in BEARISH_REGIMES and signal == "SHORT")
+            or (regime in BULLISH_REGIMES and signal == "LONG")
+        )
+        _counter_trend = (
+            (regime in BEARISH_REGIMES and signal == "LONG")
+            or (regime in BULLISH_REGIMES and signal == "SHORT")
+        )
+        if _with_trend:
+            adjusted_threshold = BASE_CONFIDENCE_THRESHOLD * _base_mult * 100.0
+        elif _counter_trend:
+            # Extra 10% penalty on top of regime multiplier for counter-trend signals
+            adjusted_threshold = BASE_CONFIDENCE_THRESHOLD * _base_mult * 1.10 * 100.0
+        else:
+            adjusted_threshold = BASE_CONFIDENCE_THRESHOLD * _base_mult * 100.0
         computed_score = round(float(np.clip((abs(raw_alpha) * 100.0 * 0.55) + (confidence * 0.45), 0, 100)), 2)
 
         entry = float(feat["Close"].iloc[-1])
@@ -422,7 +457,7 @@ class BitcoinMarketService:
             reason = f"HOLD: SHORT blocked - funding rate {funding_rate:+.4f}% (overleveraged shorts, squeeze risk)"
 
         if signal in {"LONG", "SHORT"}:
-            oi_ok = oi_delta_1h > -0.4
+            oi_ok = oi_delta_1h > OI_EXTREME_NEG_DELTA_PCT
 
         # 8) Cooldown (must run last)
         if signal in {"LONG", "SHORT"}:
@@ -443,10 +478,16 @@ class BitcoinMarketService:
         atr = self._last_feature_or_default(feat, "ATR_14", entry * 0.02)
         daily_vol = self._last_feature_or_default(feat, "Volatility_20", 0.5)
         volume_ratio = vol_ratio
+        # BTC FIX: pass the actual representative order size to the Almgren-Chriss
+        # cost model instead of 1.0 (100%).  Market impact scales with √(order_size),
+        # so using 1.0 inflated cost ~10× vs the real 1-2% Kelly size and caused
+        # every signal to fail the cost gate.  Use 0.02 (2%) as a conservative
+        # upper-bound estimate that matches cold-start Kelly sizing.
+        _btc_position_size_for_cost = 0.02
         net_alpha, cost_pct, viable = self._cost.net_alpha(
             alpha_score=raw_alpha,
             asset_class="crypto",
-            position_size_pct=1.0,
+            position_size_pct=_btc_position_size_for_cost,
             daily_vol=daily_vol,
             volume_ratio=max(volume_ratio, 0.1),
             regime=regime,
@@ -581,8 +622,14 @@ class BitcoinMarketService:
                 risk_reward = None
 
         validated = signal in {"LONG", "SHORT"} and all(checks.values())
+        sizing_signal = signal if signal in {"LONG", "SHORT"} else (requested_signal if requested_signal in {"LONG", "SHORT"} else "LONG")
+        kelly_result = self._kelly.compute_btc_position(
+            signal=sizing_signal,
+            confidence=confidence,
+            regime=regime,
+        )
         if validated:
-            position_size_pct = round(float(np.clip((confidence - 50.0) / 10.0, 0.5, 5.0)), 2)
+            position_size_pct = float(kelly_result["position_size_pct"])
             _last_signal_time[signal] = _time.time()
             _last_signal_time["__ANY__"] = _last_signal_time[signal]
 
@@ -683,6 +730,18 @@ class BitcoinMarketService:
             "tp3_pct": round(float(tp3_pct), 2) if tp3_pct is not None else None,
             "risk_reward": round(float(risk_reward), 2) if risk_reward is not None else None,
             "position_size_pct": position_size_pct,
+            "position_sizing": {
+                "position_size_pct": kelly_result["position_size_pct"],
+                "position_size_usd": kelly_result["position_size_usd"],
+                "method": kelly_result["method"],
+                "raw_kelly": kelly_result["raw_kelly"],
+                "quarter_kelly": kelly_result["quarter_kelly"],
+                "bucket_key": kelly_result["bucket_key"],
+                "trades_in_bucket": kelly_result["trades_in_bucket"],
+                "smoothing_weight": kelly_result["smoothing_weight"],
+                "p": kelly_result["p"],
+                "b": kelly_result["b"],
+            },
             "entry": entry_out,
             "sl": stop_out,
             "rr": round(float(risk_reward), 2) if risk_reward is not None else None,
@@ -746,6 +805,18 @@ class BitcoinMarketService:
             "funding_confirms_signal": funding_confirms if signal in {"LONG", "SHORT"} else None,
             "etf_flow": etf_flow,
             "market_context": market_context,
+            "on_chain_sqs": self._compute_on_chain_signal_quality(
+                signal=signal if signal in {"LONG", "SHORT"} else (requested_signal or "LONG"),
+                regime=regime,
+                funding_rate_z=funding_rate_z,
+                oi_delta_1h=oi_delta_1h,
+                fear_greed=fear_greed,
+                fear_greed_z=fear_greed_z,
+                etf_flow_z=etf_flow_z,
+                mtf_alignment_score=float(mtf_result.get("alignment_score", 0.5)),
+                rsi=rsi,
+                cmf=cmf,
+            ),
             "as_of_utc": datetime.now(timezone.utc).isoformat(),
             "algo": "quant_alpha_factor_model_v1",
         }
@@ -818,6 +889,118 @@ class BitcoinMarketService:
     def _bars_for_hours(interval: str, hours: int) -> int:
         step_ms = INTERVAL_TO_MS.get(interval, INTERVAL_TO_MS["5m"])
         return max(int(round((hours * 3_600_000) / step_ms)), 1)
+
+    @staticmethod
+    def _compute_on_chain_signal_quality(
+        signal: str,
+        regime: str,
+        funding_rate_z: float,
+        oi_delta_1h: float,
+        fear_greed: int,
+        fear_greed_z: float,
+        etf_flow_z: float,
+        mtf_alignment_score: float,
+        rsi: float,
+        cmf: float,
+    ) -> dict[str, Any]:
+        """
+        BTC-specific Signal Quality Score (SQS) — 0 to 100.
+
+        Four components:
+          1. On-chain / derivatives alignment  (35 pts)
+             Funding rate, OI delta, and ETF flow all supporting the signal.
+          2. Sentiment alignment               (25 pts)
+             Fear & Greed reading consistent with the signal direction.
+          3. Regime + MTF alignment            (25 pts)
+             EMA regime structure + multi-timeframe bias score.
+          4. Technical momentum                (15 pts)
+             RSI and CMF pointing in signal direction.
+        """
+        s = signal.upper()
+        score = 0.0
+        detail: dict[str, float] = {}
+
+        # 1 — On-chain / derivatives (35 pts)
+        # Funding: negative z supports LONG (shorts paying), positive supports SHORT
+        fund_pts = 0.0
+        if s == "LONG":
+            fund_pts = float(np.clip(((-funding_rate_z + 1.0) / 2.5) * 12, 0, 12))
+        elif s == "SHORT":
+            fund_pts = float(np.clip(((funding_rate_z + 1.0) / 2.5) * 12, 0, 12))
+
+        # OI delta: rising OI + rising price confirms LONG; falling OI confirms SHORT
+        oi_pts = 0.0
+        if s == "LONG" and oi_delta_1h > 0:
+            oi_pts = float(np.clip((oi_delta_1h / 3.0) * 11, 0, 11))
+        elif s == "SHORT" and oi_delta_1h < 0:
+            oi_pts = float(np.clip((abs(oi_delta_1h) / 3.0) * 11, 0, 11))
+
+        # ETF flow: inflows support LONG, outflows support SHORT
+        etf_pts = 0.0
+        if s == "LONG" and etf_flow_z > 0:
+            etf_pts = float(np.clip((etf_flow_z / 2.0) * 12, 0, 12))
+        elif s == "SHORT" and etf_flow_z < 0:
+            etf_pts = float(np.clip((abs(etf_flow_z) / 2.0) * 12, 0, 12))
+
+        onchain_score = fund_pts + oi_pts + etf_pts
+        detail["onchain_pts"] = round(onchain_score, 1)
+
+        # 2 — Sentiment (25 pts)
+        sent_pts = 0.0
+        if s == "LONG":
+            # Extreme fear (< 25) is a LONG setup; greed (> 75) is hostile
+            if fear_greed < 25:
+                sent_pts = float(np.clip(((25 - fear_greed) / 25) * 25, 0, 25))
+            elif fear_greed < 50:
+                sent_pts = float(np.clip(((50 - fear_greed) / 50) * 12, 0, 12))
+        elif s == "SHORT":
+            # Extreme greed (> 75) is a SHORT setup; fear (< 25) is hostile
+            if fear_greed > 75:
+                sent_pts = float(np.clip(((fear_greed - 75) / 25) * 25, 0, 25))
+            elif fear_greed > 50:
+                sent_pts = float(np.clip(((fear_greed - 50) / 50) * 12, 0, 12))
+        detail["sentiment_pts"] = round(sent_pts, 1)
+
+        # 3 — Regime + MTF (25 pts)
+        regime_pts = 0.0
+        with_trend = (
+            (s == "SHORT" and regime in {"BEARISH TREND", "HIGH_VOL_BEAR", "BEAR"})
+            or (s == "LONG" and regime in {"BULLISH TREND", "HIGH_VOL_BULL", "BULL"})
+            or (s == "LONG" and regime == "CAPITULATION")
+            or (s == "SHORT" and regime == "DISTRIBUTION")
+        )
+        if with_trend:
+            regime_pts = 15.0
+        elif regime in {"SIDEWAYS", "RANGE", "RANGE (SQUEEZE)"}:
+            regime_pts = 8.0
+        mtf_pts = float(np.clip(mtf_alignment_score * 10.0, 0, 10))
+        detail["regime_pts"] = round(regime_pts + mtf_pts, 1)
+
+        # 4 — Technical momentum (15 pts)
+        rsi_pts = 0.0
+        if s == "LONG" and rsi < 50:
+            rsi_pts = float(np.clip(((50 - rsi) / 50) * 8, 0, 8))
+        elif s == "SHORT" and rsi > 50:
+            rsi_pts = float(np.clip(((rsi - 50) / 50) * 8, 0, 8))
+
+        cmf_pts = 0.0
+        if s == "LONG" and cmf > 0:
+            cmf_pts = float(np.clip((cmf / 0.15) * 7, 0, 7))
+        elif s == "SHORT" and cmf < 0:
+            cmf_pts = float(np.clip((abs(cmf) / 0.15) * 7, 0, 7))
+        detail["momentum_pts"] = round(rsi_pts + cmf_pts, 1)
+
+        total = onchain_score + sent_pts + regime_pts + mtf_pts + rsi_pts + cmf_pts
+        return {
+            "score": int(np.clip(round(total), 0, 100)),
+            "detail": detail,
+            "grade": (
+                "A" if total >= 75 else
+                "B" if total >= 55 else
+                "C" if total >= 35 else
+                "D"
+            ),
+        }
 
     def _fear_greed_snapshot(self, feat: pd.DataFrame) -> dict[str, Any]:
         try:
@@ -938,7 +1121,21 @@ class BitcoinMarketService:
         }
 
     @staticmethod
-    def _infer_regime(feat: pd.DataFrame) -> str:
+    def _infer_regime(feat: pd.DataFrame, funding_rate_z: float = 0.0) -> str:
+        """
+        Infer BTC market regime from price structure + on-chain sentiment.
+
+        Regimes (priority order):
+          VOLATILITY SPIKE   — ATR > 2.5× 50-bar avg → no trades
+          CAPITULATION       — bearish structure + extreme negative funding
+                               (overleveraged shorts funding longs → reversal setup)
+          DISTRIBUTION       — bullish structure + extreme positive funding
+                               (overleveraged longs funding shorts → reversal setup)
+          BULLISH TREND      — price > EMA21 > EMA50
+          BEARISH TREND      — price < EMA21 < EMA50
+          RANGE (SQUEEZE)    — compressed ATR between EMAs
+          RANGE              — mixed / transitioning structure
+        """
         if feat.empty or "Close" not in feat.columns or len(feat) < 50:
             return "RANGE"
 
@@ -946,23 +1143,37 @@ class BitcoinMarketService:
         ema_21 = float(feat["Close"].ewm(span=21).mean().iloc[-1])
         ema_50 = float(feat["Close"].ewm(span=50).mean().iloc[-1])
 
-        # ATR-based volatility regime
+        # ATR-based volatility regime (highest priority — overrides everything)
         atr_col = feat.get("ATR_14")
-        current_atr = None
-        avg_atr = None
+        current_atr: float | None = None
+        avg_atr: float | None = None
         if atr_col is not None and len(atr_col) > 50:
             current_atr = float(atr_col.iloc[-1])
             avg_atr = float(atr_col.tail(50).mean())
             if avg_atr > 0 and current_atr > 2.5 * avg_atr:
                 return "VOLATILITY SPIKE"
 
-        # Trend detection using EMA structure
-        if close > ema_21 > ema_50:
+        bearish_structure = close < ema_21 < ema_50
+        bullish_structure = close > ema_21 > ema_50
+
+        # CAPITULATION: bearish EMA structure + extremely negative funding
+        # Funding rate Z < -1.5 means shorts are paying longs a premium →
+        # overleveraged short positioning historically precedes sharp reversals.
+        if bearish_structure and funding_rate_z < -1.5:
+            return "CAPITULATION"
+
+        # DISTRIBUTION: bullish EMA structure + extremely positive funding
+        # Funding rate Z > 1.5 means longs are paying shorts a premium →
+        # overleveraged long positioning historically precedes sharp sell-offs.
+        if bullish_structure and funding_rate_z > 1.5:
+            return "DISTRIBUTION"
+
+        if bullish_structure:
             return "BULLISH TREND"
-        if close < ema_21 < ema_50:
+        if bearish_structure:
             return "BEARISH TREND"
 
-        # Check for range (price between EMAs, low ATR)
+        # Range-bound: price between EMAs
         if atr_col is not None and current_atr is not None and avg_atr is not None:
             if avg_atr > 0 and current_atr < 0.7 * avg_atr:
                 return "RANGE (SQUEEZE)"
@@ -1096,7 +1307,7 @@ class BitcoinMarketService:
 
         url = f"{BINANCE_REST}/api/v3/klines"
         try:
-            resp = self._session.get(url, params=params, timeout=12)
+            resp = self._session.get(url, params=params, timeout=BINANCE_HTTP_TIMEOUT_SECONDS)
             resp.raise_for_status()
             data = resp.json()
             return data if isinstance(data, list) else []

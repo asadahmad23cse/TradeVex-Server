@@ -260,6 +260,7 @@ def check_open_signals(
     history = _load()
     changed = False
     live_signal = str(validated_signal or market_signal or "").upper()
+    _kelly_instance = None
 
     for rec in history:
         if str(rec.get("status", "")).upper() != "OPEN":
@@ -286,6 +287,15 @@ def check_open_signals(
 
         if rec != before:
             changed = True
+
+        before_status = str(before.get("status", "")).upper()
+        after_status = str(rec.get("status", "")).upper()
+        if before_status == "OPEN" and after_status not in {"OPEN", "BLOCKED"}:
+            if _kelly_instance is None:
+                from src.risk.kelly_warm_start import BTCKellyWarmStart
+
+                _kelly_instance = BTCKellyWarmStart()
+            _kelly_instance.update_bucket(dict(rec))
 
     if changed:
         _save(history)

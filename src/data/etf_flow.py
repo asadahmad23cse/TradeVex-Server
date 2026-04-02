@@ -72,6 +72,7 @@ _CACHE_PATH = _HERE.parent.parent / "data" / "etf_flow_cache.json"
 
 # How long before re-fetching from the web (seconds)
 _CACHE_TTL_SECONDS = 3600 * 4  # refresh every 4 hours (data is updated once daily)
+REQUEST_TIMEOUT_SECONDS = 5
 
 # Rolling window for Z-score computation
 _ZSCORE_WINDOW = 30     # 30 trading days
@@ -308,7 +309,7 @@ class ETFFlowProvider:
             "Pragma": "no-cache",
         }
 
-        resp = requests.get(FARSIDE_URL, headers=headers, timeout=15)
+        resp = requests.get(FARSIDE_URL, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
         resp.raise_for_status()
 
         soup = BeautifulSoup(resp.text, "html.parser")

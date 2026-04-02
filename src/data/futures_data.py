@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 FUTURES_BASE = "https://fapi.binance.com"
 SPOT_BASE = "https://api.binance.com"
 BTC_SYMBOL = "BTCUSDT"
+REQUEST_TIMEOUT_SECONDS = 4
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -24,7 +25,7 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def _get_json(base: str, path: str, params: dict[str, Any] | None = None) -> Any:
-    resp = requests.get(f"{base}{path}", params=params or {}, timeout=10)
+    resp = requests.get(f"{base}{path}", params=params or {}, timeout=REQUEST_TIMEOUT_SECONDS)
     resp.raise_for_status()
     return resp.json()
 

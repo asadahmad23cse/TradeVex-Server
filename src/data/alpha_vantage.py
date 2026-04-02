@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import time
-from datetime import datetime, timezone
 from typing import Any
 
 import pandas as pd
@@ -17,6 +16,7 @@ except Exception:  # pragma: no cover - optional dependency path
     load_dotenv = None  # type: ignore[assignment]
 
 from src.alpha.factor_model import AlphaFactorModel
+from src.api.rate_limiter import AVRateLimiter
 from src.features.engineer import FeatureEngineer
 
 if load_dotenv is not None:
@@ -27,11 +27,10 @@ logger = logging.getLogger(__name__)
 ALPHA_VANTAGE_API_KEY = os.getenv("ALPHA_VANTAGE_API_KEY", "").strip()
 BASE_URL = "https://www.alphavantage.co/query"
 TIMEOUT_SECONDS = 10
-DAILY_LIMIT = 23
+DAILY_LIMIT = 20
 
 _cache: dict[str, dict[str, Any]] = {}
-_request_day_utc = ""
-_request_count = 0
+_limiter = AVRateLimiter(calls_per_minute=4, daily_limit=DAILY_LIMIT, min_interval_seconds=15.0)
 
 _INTRADAY_MAP = {
     "5m": "5min",
@@ -41,18 +40,6 @@ _INTRADAY_MAP = {
     "1h": "60min",
     "60min": "60min",
 }
-
-
-def _day_utc() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
-
-
-def _sync_counter_day() -> None:
-    global _request_day_utc, _request_count
-    day = _day_utc()
-    if _request_day_utc != day:
-        _request_day_utc = day
-        _request_count = 0
 
 
 def _cache_get(key: str, ttl: int) -> Any | None:
@@ -76,8 +63,7 @@ def _cached_or_default(key: str, default: Any) -> Any:
 
 
 def _remaining_requests() -> int:
-    _sync_counter_day()
-    return max(DAILY_LIMIT - _request_count, 0)
+    return max(_limiter.daily_remaining, 0)
 
 
 def get_status() -> dict[str, int]:
@@ -108,22 +94,20 @@ def _fetch(params: dict[str, str]) -> tuple[dict[str, Any] | None, bool]:
     Returns: (payload, was_rate_limited)
     `was_rate_limited=True` means caller should return cached fallback.
     """
-    global _request_count
-    _sync_counter_day()
-
     if not ALPHA_VANTAGE_API_KEY:
         logger.warning("ALPHA_VANTAGE_API_KEY missing in environment")
         return None, False
 
-    if _request_count >= DAILY_LIMIT:
-        logger.warning("Alpha Vantage daily budget exhausted (%s)", DAILY_LIMIT)
+    try:
+        _limiter.acquire()
+    except RuntimeError as exc:
+        logger.warning("Alpha Vantage budget exhausted/rate-limited: %s", exc)
         return None, True
 
     request_params = dict(params)
     request_params["apikey"] = ALPHA_VANTAGE_API_KEY
 
     try:
-        _request_count += 1
         resp = requests.get(BASE_URL, params=request_params, timeout=TIMEOUT_SECONDS)
         resp.raise_for_status()
         payload = resp.json()

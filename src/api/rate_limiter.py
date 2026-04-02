@@ -1,6 +1,9 @@
 """
 Token-bucket rate limiter for Alpha Vantage API.
-Enforces: 5 requests/minute + 500 requests/day hard limit.
+Enforces conservative free-tier protection:
+  - minimum 15s gap between calls
+  - max 20 requests/day
+  - token-bucket shaping for burst control
 
 Also provides a TTL in-memory cache so repeated calls for the same
 ticker within the TTL window don't consume API quota.
@@ -14,12 +17,14 @@ from datetime import date
 class AVRateLimiter:
     """Thread-safe token-bucket limiter for Alpha Vantage."""
 
-    def __init__(self, calls_per_minute: int = 5, daily_limit: int = 500):
+    def __init__(self, calls_per_minute: int = 4, daily_limit: int = 20, min_interval_seconds: float = 15.0):
         self.calls_per_minute = calls_per_minute
         self.daily_limit = daily_limit
+        self.min_interval_seconds = float(max(0.0, min_interval_seconds))
         self._lock = threading.Lock()
         self._tokens: float = float(calls_per_minute)
         self._last_refill = time.monotonic()
+        self._last_call_ts = 0.0
         self._daily_count: int = 0
         self._last_reset_date = date.today()
 
@@ -50,20 +55,24 @@ class AVRateLimiter:
         Raises RuntimeError if the daily limit is exhausted.
         """
         with self._lock:
-            self._reset_daily_if_needed()
-            if self._daily_count >= self.daily_limit:
-                raise RuntimeError(
-                    f"Alpha Vantage daily limit of {self.daily_limit} requests reached. "
-                    "Resets at midnight."
-                )
             while True:
+                self._reset_daily_if_needed()
+                if self._daily_count >= self.daily_limit:
+                    raise RuntimeError(
+                        f"Alpha Vantage daily limit of {self.daily_limit} requests reached. "
+                        "Resets at midnight."
+                    )
                 self._refill()
-                if self._tokens >= 1.0:
+                now = time.monotonic()
+                gap_ok = (now - self._last_call_ts) >= self.min_interval_seconds
+                if self._tokens >= 1.0 and gap_ok:
                     self._tokens -= 1.0
                     self._daily_count += 1
+                    self._last_call_ts = now
                     return
-                # Wait until the next token arrives
-                wait_sec = (1.0 - self._tokens) / (self.calls_per_minute / 60.0)
+                token_wait = (1.0 - self._tokens) / (self.calls_per_minute / 60.0) if self._tokens < 1.0 else 0.0
+                gap_wait = max(self.min_interval_seconds - (now - self._last_call_ts), 0.0)
+                wait_sec = max(token_wait, gap_wait, 0.1)
                 time.sleep(min(wait_sec, 1.0))
 
     @property

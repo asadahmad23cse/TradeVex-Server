@@ -34,7 +34,14 @@ def run_live(config_path: str) -> None:
         cfg = yaml.safe_load(f)
 
     runner = LiveRunner(config_path=config_path)
-    init_dashboard(runner.store, runner.portfolio, cfg)
+    init_dashboard(
+        runner.store,
+        runner.portfolio,
+        cfg,
+        broker=runner.executor,
+        kelly=runner.kelly,
+        notifier=runner.notifier,
+    )
     set_live_runner(runner)
     runner.set_broadcast(push_broadcast_threadsafe)
 
@@ -105,6 +112,46 @@ def run_backtest(ticker: str, train_days: int, config_path: str = "config.yaml")
         wfo_cfg = {}
     validator = WFOValidator(ticker=ticker, train_window=train_days, wfo_config=wfo_cfg)
     result = validator.run_validation()
+    try:
+        with open(config_path) as _sf:
+            _cfg_save = yaml.safe_load(_sf) or {}
+        _db_u = (_cfg_save.get("database", {}) or {}).get("url", "data/signals.db")
+        from src.signals.store import SignalStore  # type: ignore[import]
+
+        SignalStore(_db_u).save_regime_analysis(result.get("regime_analysis") or {})
+    except Exception:
+        pass
+
+    regime_data = result.get("regime_analysis", {})
+    by_regime = regime_data.get("by_regime", {})
+    if by_regime:
+        logger.info("%s", "═" * 55)
+        logger.info("  REGIME PERFORMANCE BREAKDOWN")
+        logger.info("%s", "═" * 55)
+        icons = {
+            "KEEP": "✅",
+            "REDUCE_SIZE": "⚠️",
+            "REVIEW": "🔍",
+            "INSUFFICIENT_DATA": "📊",
+            "COMPUTATION_ERROR": "❌",
+        }
+        for regime, stats in by_regime.items():
+            rec = stats.get("recommendation", "UNKNOWN")
+            icon = icons.get(rec, "❓")
+            logger.info(
+                "  %-16s │ %2d trades │ WR %3.0f%% │ R:R %.1f │ %s %s",
+                regime,
+                stats.get("trade_count", 0),
+                stats.get("win_rate", 0) * 100,
+                stats.get("avg_rr", 0),
+                icon,
+                rec,
+            )
+        summary = regime_data.get("summary", "")
+        if summary:
+            logger.info("  💡 %s", summary)
+        logger.info("%s", "═" * 55)
+
     if result.get("passed"):
         logger.info(
             "WFO PASSED — best params: alpha_threshold=%.2f, ic_window=%d, OOS IR=%.3f",
