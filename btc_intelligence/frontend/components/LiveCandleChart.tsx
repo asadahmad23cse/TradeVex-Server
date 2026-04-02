@@ -3,6 +3,8 @@
 import { createChart, CandlestickData, ColorType, IChartApi, ISeriesApi, Time } from "lightweight-charts";
 import { useEffect, useRef, useState } from "react";
 
+import UnderChartIntelligence from "./UnderChartIntelligence";
+
 type Candle = {
   open_time: number;
   open: number;
@@ -96,6 +98,7 @@ export default function LiveCandleChart() {
         </select>
       </header>
       <div ref={rootRef} className="chartRoot" />
+      <UnderChartIntelligence />
     </section>
   );
 }

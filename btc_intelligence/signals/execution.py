@@ -100,6 +100,36 @@ def estimate_slippage_pct(depth: dict, side: str, qty_btc: float = 0.1) -> float
     return max(0.0, slip)
 
 
+def recommended_max_position_btc(
+    depth: dict,
+    side: str,
+    slippage_limit_pct: float,
+    min_qty_btc: float = 0.01,
+    max_qty_btc: float = 10.0,
+    steps: int = 18,
+) -> float:
+    """
+    Estimate the maximum executable BTC size under a slippage limit.
+
+    Uses a monotonic scan over log-spaced qty buckets for robustness
+    against sparse order books.
+    """
+    if slippage_limit_pct <= 0:
+        return 0.0
+    lo = max(float(min_qty_btc), 1e-4)
+    hi = max(float(max_qty_btc), lo)
+    best = 0.0
+    for i in range(max(int(steps), 2)):
+        w = i / max(steps - 1, 1)
+        qty = lo * ((hi / lo) ** w)
+        slip = estimate_slippage_pct(depth, side=side, qty_btc=qty)
+        if slip <= slippage_limit_pct:
+            best = qty
+        else:
+            break
+    return round(best, 4)
+
+
 def _price_move_30s_pct(agg_trades: list[dict]) -> float:
     if len(agg_trades) < 2:
         return 0.0
