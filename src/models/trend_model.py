@@ -77,7 +77,7 @@ class TrendPredictionModel:
         epochs: int = 20,
         batch_size: int = 32,
         verbose: int = 0,
-        oot_days: int = 10,
+        oot_days: int = 60,  # I4: 10 days gave only 2 non-overlapping 5-day observations
     ) -> None:
         """
         Train on a DataFrame. First column used as target (Close).

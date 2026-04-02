@@ -11,6 +11,7 @@ Usage in live_runner.py:
 """
 
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
@@ -75,24 +76,29 @@ class FeatureCache:
     def __init__(self, ttl_sec: int = 300):
         self.ttl_sec = ttl_sec
         self._cache: Dict[str, dict] = {}
+        self._lock = threading.RLock()  # C3: guard compound get/put/delete ops
 
     def get(self, key: str) -> Optional[Any]:
-        entry = self._cache.get(key)
-        if entry is None:
-            return None
-        if time.time() - entry["ts"] > self.ttl_sec:
-            del self._cache[key]
-            return None
-        return entry["value"]
+        with self._lock:
+            entry = self._cache.get(key)
+            if entry is None:
+                return None
+            if time.time() - entry["ts"] > self.ttl_sec:
+                del self._cache[key]
+                return None
+            return entry["value"]
 
     def put(self, key: str, value: Any):
-        self._cache[key] = {"value": value, "ts": time.time()}
+        with self._lock:
+            self._cache[key] = {"value": value, "ts": time.time()}
 
     def invalidate(self, key: str):
-        self._cache.pop(key, None)
+        with self._lock:
+            self._cache.pop(key, None)
 
     def clear(self):
-        self._cache.clear()
+        with self._lock:
+            self._cache.clear()
 
     @property
     def size(self) -> int:

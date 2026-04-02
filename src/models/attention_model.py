@@ -164,7 +164,7 @@ class TemporalAttentionModel:
             return True
         return (date.today() - self._last_train_date).days >= self.retrain_days
 
-    def train(self, df: pd.DataFrame, oot_days: int = 10) -> bool:
+    def train(self, df: pd.DataFrame, oot_days: int = 60) -> bool:  # I4: was 10 days
         """Train on feature DataFrame. Returns True on success."""
         if not _TF:
             logger.warning("TensorFlow unavailable — skipping Attention training")

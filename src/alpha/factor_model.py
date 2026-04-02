@@ -65,6 +65,8 @@ CRYPTO_IC_WINDOWS = (24, 72, 168)
 IC_BLEND_WEIGHTS = (0.2, 0.5, 0.3)
 VIX_CACHE_TTL_SEC = 300
 IC_CACHE_TTL_SEC = 300
+# Bootstrap CIs are useful, but 1000 resamples per factor is too slow for live API latency.
+IC_BOOTSTRAP_SAMPLES = 120
 
 _vix_cache: dict[str, float] = {"value": 18.0, "ts": 0.0}
 _ic_weight_cache: dict[str, dict[str, object]] = {}
@@ -110,7 +112,7 @@ def _bootstrap_ic_ci(factor: pd.Series, fwd_ret: pd.Series, window: int = 126) -
 
     return bootstrap_confidence_interval(
         np.arange(len(combined)),
-        n_bootstrap=1000,
+        n_bootstrap=IC_BOOTSTRAP_SAMPLES,
         confidence=0.95,
         statistic=_corr_stat,
     )
@@ -204,9 +206,11 @@ def _compute_effective_ic_bundle(
             }
             continue
         ic_vals: list[float] = []
+        ic_series_list: list[pd.Series] = []
         for w in ic_windows:
             ic_series = _rolling_ic(factor, fwd_ret, w)
             ic_vals.append(_latest_usable_ic(ic_series))
+            ic_series_list.append(ic_series)
         composite_ic = float(
             IC_BLEND_WEIGHTS[0] * ic_vals[0]
             + IC_BLEND_WEIGHTS[1] * ic_vals[1]
@@ -225,6 +229,24 @@ def _compute_effective_ic_bundle(
         if ci_high < 0.0:
             effective_ic = 0.0
 
+        # I1: ICIR = mean(IC) / std(IC) — factors with volatile IC histories are
+        # down-weighted even if their mean IC is positive.  Uses the middle window
+        # (IC_WINDOWS[1] = 21 bars) for the reliability estimate.
+        # Scale: ICIR ≥ 2 → full weight (1.0), ICIR = 1 → ~0.8, ICIR = 0 → 0.5 floor.
+        # Only applied once we have enough IC history; otherwise no penalty.
+        mid_ic_series = ic_series_list[1].dropna()
+        if len(mid_ic_series) >= max(ic_windows[0], 5):
+            ic_std = float(mid_ic_series.std())
+            ic_mean = float(mid_ic_series.mean())
+            if ic_std > 1e-9:
+                icir = ic_mean / ic_std
+                icir_weight = float(np.clip(0.5 + 0.25 * icir, 0.5, 1.0))
+            else:
+                icir_weight = 1.0  # no variance → perfectly consistent
+        else:
+            icir_weight = 1.0  # insufficient history — no penalty
+        effective_ic *= icir_weight
+
         ics[name] = float(effective_ic)
         factor_meta[name] = {
             "ic_10": round(float(ic_vals[0]), 4),
@@ -237,6 +259,7 @@ def _compute_effective_ic_bundle(
             "ic_ci_high": round(float(ci_high), 4),
             "lag1_autocorr": round(float(autocorr), 4),
             "turnover_penalty": round(float(penalty), 4),
+            "icir_weight": round(float(icir_weight), 4),
             "ic_boosted": bool(composite_ic > 0.08),
             "zero_weighted": bool((composite_ic < 0.0) or (ci_high < 0.0)),
         }
@@ -820,7 +843,9 @@ class AlphaFactorModel:
             adj_ic = float(adjusted_ics.get(factor_name, base_ic))
             meta["meta_multiplier"] = round(adj_ic / base_ic, 4) if abs(base_ic) > 1e-9 else 1.0
 
-        denom = max(sum(abs(v) for v in adjusted_ics.values()), 0.1)
+        # M1: floor was 0.1 which is enormous vs typical IC range (0.02–0.06);
+        # lowered to 0.01 to avoid excessive alpha dampening in moderate-IC regimes.
+        denom = max(sum(abs(v) for v in adjusted_ics.values()), 0.01)
         alpha_score = sum(adjusted_ics[k] * latest[k] for k in adjusted_ics) / denom
         alpha_score *= vix_mult
 

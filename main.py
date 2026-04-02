@@ -46,12 +46,19 @@ def run_live(config_path: str) -> None:
     port = cfg["dashboard"]["port"]
     logger.info("Dashboard: http://%s:%d", host, port)
 
-    uvicorn.run(
-        app,
-        host=host,
-        port=port,
-        log_level="warning",
-    )
+    try:
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            log_level="warning",
+        )
+    finally:
+        # Ensure scheduler/resources are flushed when the API process exits.
+        try:
+            runner.stop()
+        except Exception as exc:
+            logger.warning("Live runner shutdown during exit failed: %s", exc)
 
 
 def run_dashboard(config_path: str) -> None:

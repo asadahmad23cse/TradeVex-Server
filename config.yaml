@@ -247,7 +247,7 @@ notifications:
     use_tls: true
 
 ml_validation:
-  oot_days: 10
+  oot_days: 60
   lstm_min_oot_accuracy: 0.52
   lstm_retrain_days: 63
 

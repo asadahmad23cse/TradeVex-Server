@@ -110,7 +110,8 @@ class CrossSectionalAlpha:
         # IC-weighted combination per asset
         for i, asset in enumerate(assets):
             ic_weights = self._universe[asset]["ic_weights"]
-            denom = max(sum(abs(ic_weights.get(f, 0.0)) for f in self.factors), 0.1)
+            # M1: floor calibrated to typical IC magnitude (0.02–0.06); 0.1 was too large
+            denom = max(sum(abs(ic_weights.get(f, 0.0)) for f in self.factors), 0.01)
 
             cs_alpha = sum(
                 ic_weights.get(f, 0.0) * factor_matrix[f][i]

@@ -27,6 +27,8 @@ Persistence:
 
 import logging
 import pickle
+import threading
+import time as _time
 from pathlib import Path
 
 import numpy as np  # type: ignore[import]
@@ -40,6 +42,13 @@ STATES = ["BULL", "BEAR", "SIDEWAYS"]
 FIVE_STATES = ["HIGH_VOL_BULL", "BULL", "SIDEWAYS", "BEAR", "HIGH_VOL_BEAR"]
 HMM_N_ITER = 300  # increased from 200 for better convergence with 7 features
 HMM_PERSIST_DIR = Path("data")
+
+# I2: Module-level cache for macro series (VIX/DXY/TNX/IRX).
+# Each asset calling predict() previously triggered 4 yfinance downloads.
+# With 31 assets that was 124 downloads per cycle; now it is at most 4.
+_MACRO_CACHE: dict[str, tuple[pd.Series, float]] = {}  # ticker → (series, fetch_ts)
+_MACRO_CACHE_LOCK = threading.Lock()
+MACRO_CACHE_TTL_SEC = 300  # re-fetch at most once every 5 minutes
 
 
 class RegimeDetector:
@@ -114,13 +123,37 @@ class RegimeDetector:
         """
         Fetch a macro series from yfinance and reindex/forward-fill to target_index.
         Returns a zero-filled series on failure.
+
+        I2: Results are cached at module level for MACRO_CACHE_TTL_SEC (300 s) so that
+        repeated calls across all assets in the same intraday cycle hit the cache
+        instead of issuing a new HTTP request every time.
         """
+        now = _time.monotonic()
+        # Check cache under lock to avoid thundering-herd on first call
+        with _MACRO_CACHE_LOCK:
+            entry = _MACRO_CACHE.get(ticker)
+            if entry is not None:
+                cached_series, cached_ts = entry
+                if now - cached_ts < MACRO_CACHE_TTL_SEC:
+                    raw_series = cached_series
+                else:
+                    raw_series = None
+            else:
+                raw_series = None
+
+        if raw_series is None:
+            try:
+                start = target_index[0] - pd.Timedelta(days=100)
+                end   = target_index[-1] + pd.Timedelta(days=1)
+                downloaded = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
+                raw_series = downloaded[col].dropna()
+                with _MACRO_CACHE_LOCK:
+                    _MACRO_CACHE[ticker] = (raw_series, now)
+            except Exception:
+                return pd.Series(0.0, index=target_index)
+
         try:
-            start = target_index[0] - pd.Timedelta(days=100)
-            end   = target_index[-1] + pd.Timedelta(days=1)
-            raw = yf.download(ticker, start=start, end=end, progress=False, auto_adjust=True)
-            s = raw[col].reindex(target_index, method="ffill").fillna(0.0)
-            return s
+            return raw_series.reindex(target_index, method="ffill").fillna(0.0)
         except Exception:
             return pd.Series(0.0, index=target_index)
 
@@ -170,14 +203,39 @@ class RegimeDetector:
         mean_returns = self.model.means_[:, 0]
         vol_feature = self.model.means_[:, 1] if self.model.means_.shape[1] > 1 else np.zeros(self.n_states)
         sorted_idx = np.argsort(mean_returns)
-        if self.n_states <= 3:
+        n = self.n_states
+
+        # C6: handle any n_states value instead of hard-coding exactly-5 unpacking
+        if n == 1:
+            return {int(sorted_idx[0]): "SIDEWAYS"}
+
+        if n == 2:
+            return {int(sorted_idx[0]): "BEAR", int(sorted_idx[1]): "BULL"}
+
+        if n == 3:
             return {
                 int(sorted_idx[0]): "BEAR",
                 int(sorted_idx[1]): "SIDEWAYS",
                 int(sorted_idx[2]): "BULL",
             }
+
+        if n == 4:
+            bear, low_mid, high_mid, bull = [int(i) for i in sorted_idx]
+            return {
+                bear: "BEAR",
+                low_mid: "SIDEWAYS",
+                high_mid: "BULL",
+                bull: "HIGH_VOL_BULL",
+            }
+
+        # n >= 5: assign primary labels using extreme and median-return states,
+        # then map remaining states to nearest label by mean-return proximity.
         labels: dict[int, str] = {}
-        lowest, second_low, middle, second_high, highest = [int(i) for i in sorted_idx[:5]]
+        lowest = int(sorted_idx[0])
+        second_low = int(sorted_idx[1])
+        middle = int(sorted_idx[n // 2])
+        second_high = int(sorted_idx[-2])
+        highest = int(sorted_idx[-1])
         labels[middle] = "SIDEWAYS"
         bull_candidates = [second_high, highest]
         bear_candidates = [lowest, second_low]
@@ -187,6 +245,25 @@ class RegimeDetector:
         labels[bull_vols[-1]] = "HIGH_VOL_BULL"
         labels[bear_vols[-1]] = "HIGH_VOL_BEAR"
         labels[bear_vols[0]] = "BEAR"
+
+        anchor_returns = {
+            "HIGH_VOL_BEAR": float(mean_returns[bear_vols[-1]]),
+            "BEAR": float(mean_returns[bear_vols[0]]),
+            "SIDEWAYS": float(mean_returns[middle]),
+            "BULL": float(mean_returns[bull_vols[0]]),
+            "HIGH_VOL_BULL": float(mean_returns[bull_vols[-1]]),
+        }
+        labeled_states = set(labels.keys())
+        for idx in sorted_idx:
+            state_idx = int(idx)
+            if state_idx in labeled_states:
+                continue
+            state_ret = float(mean_returns[state_idx])
+            nearest_label = min(
+                anchor_returns.keys(),
+                key=lambda label: abs(state_ret - anchor_returns[label]),
+            )
+            labels[state_idx] = nearest_label
         return labels
 
     @classmethod

@@ -228,6 +228,18 @@ async def _capture_loop() -> None:
     _app_loop = asyncio.get_running_loop()
 
 
+@app.on_event("shutdown")
+async def _shutdown_live_runner() -> None:
+    """Ensure scheduler/broker loop is stopped when the API server exits."""
+    runner = _live_runner
+    if runner is None:
+        return
+    try:
+        runner.stop()
+    except Exception as exc:
+        logger.warning("Live runner shutdown hook failed: %s", exc)
+
+
 # ------------------------------------------------------------------
 # WebSocket endpoint
 # ------------------------------------------------------------------
@@ -444,7 +456,7 @@ def get_watchlist():
 
     cfg = _dashboard_cfg or {}
     stocks = []
-    for asset_class in ("indian_stocks", "us_stocks", "forex"):
+    for asset_class in ("indian_stocks", "us_stocks"):
         items = cfg.get("watchlist", {}).get(asset_class, [])
         for item in items:
             stocks.append({
@@ -464,7 +476,27 @@ def get_chart_data(ticker: str = "RELIANCE.NS", interval: str = "5m", period: st
     period: 1d, 5d, 1mo, 3mo, 6mo, 1y
     """
     try:
-        # US stocks: Alpha Vantage first, then yfinance fallback.
+        import yfinance as yf  # type: ignore[import]
+        df = yf.download(ticker, interval=interval, period=period, progress=False)
+        if not df.empty:
+            # Handle MultiIndex columns from yfinance
+            if hasattr(df.columns, 'levels'):
+                df.columns = df.columns.get_level_values(0)
+
+            records = []
+            for idx, row in df.iterrows():
+                ts: Union[int, str] = int(idx.timestamp()) if hasattr(idx, 'timestamp') else str(idx)  # type: ignore[union-attr]
+                records.append({
+                    "time": ts,
+                    "open": _round2(row.get("Open", 0)),
+                    "high": _round2(row.get("High", 0)),
+                    "low": _round2(row.get("Low", 0)),
+                    "close": _round2(row.get("Close", 0)),
+                    "volume": int(row.get("Volume", 0)),
+                })
+            return {"ticker": ticker, "data": records}
+
+        # Secondary fallback for US stocks only.
         if _is_us_stock_ticker(ticker):
             try:
                 from src.data.alpha_vantage import get_daily_candles, get_intraday_candles  # type: ignore[import]
@@ -476,31 +508,12 @@ def get_chart_data(ticker: str = "RELIANCE.NS", interval: str = "5m", period: st
                     else get_daily_candles(ticker)
                 )
                 if av_data:
+                    logger.warning("yfinance empty for %s, using Alpha Vantage fallback", ticker)
                     return {"ticker": ticker, "data": av_data}
             except Exception as e:
-                logger.warning("Alpha Vantage chart fallback for %s: %s", ticker, e)
+                logger.warning("Alpha Vantage chart fallback failed for %s: %s", ticker, e)
 
-        import yfinance as yf  # type: ignore[import]
-        df = yf.download(ticker, interval=interval, period=period, progress=False)
-        if df.empty:
-            return {"ticker": ticker, "data": [], "error": "No data"}
-
-        # Handle MultiIndex columns from yfinance
-        if hasattr(df.columns, 'levels'):
-            df.columns = df.columns.get_level_values(0)
-
-        records = []
-        for idx, row in df.iterrows():
-            ts: Union[int, str] = int(idx.timestamp()) if hasattr(idx, 'timestamp') else str(idx)  # type: ignore[union-attr]
-            records.append({
-                "time": ts,
-                "open": _round2(row.get("Open", 0)),
-                "high": _round2(row.get("High", 0)),
-                "low": _round2(row.get("Low", 0)),
-                "close": _round2(row.get("Close", 0)),
-                "volume": int(row.get("Volume", 0)),
-            })
-        return {"ticker": ticker, "data": records}
+        return {"ticker": ticker, "data": [], "error": "No data"}
     except Exception as e:
         return {"ticker": ticker, "data": [], "error": str(e)}
 
@@ -1189,18 +1202,20 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
             if s.get("asset") == ticker or s.get("asset", "").replace(".NS", "") == ticker.replace(".NS", ""):
                 return _attach_factor_fields(dict(s))
 
-    # US stocks: Alpha Vantage signal first, yfinance fallback next.
-    if _is_us_stock_ticker(ticker):
+    def _av_fallback_signal() -> dict | None:
+        if not _is_us_stock_ticker(ticker):
+            return None
         try:
             from src.data.alpha_vantage import get_us_stock_signal  # type: ignore[import]
-
             av_signal = get_us_stock_signal(ticker)
             if av_signal:
-                return _attach_factor_fields(dict(av_signal))
+                logger.warning("Using Alpha Vantage fallback signal for %s", ticker)
+                return dict(av_signal)
         except Exception as e:
-            logger.warning("Alpha Vantage signal fallback for %s: %s", ticker, e)
+            logger.warning("Alpha Vantage signal fallback failed for %s: %s", ticker, e)
+        return None
 
-    # Live computation fallback
+    # Primary source for stocks: yfinance-based live computation.
     try:
         import yfinance as yf  # type: ignore[import]
         from src.features.engineer import FeatureEngineer  # type: ignore[import]
@@ -1213,6 +1228,9 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
             # Try daily data
             df = yf.download(ticker, period="6mo", progress=False)
         if df.empty or len(df) < 30:
+            av = _av_fallback_signal()
+            if av is not None:
+                return _attach_factor_fields(av)
             return _attach_factor_fields({"ticker": ticker, "signal": "HOLD", "confidence": 50, "alpha_score": 0.0, "message": "Insufficient data"})
 
         # Handle MultiIndex
@@ -1223,6 +1241,9 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
         tf = "daily" if len(df) > 100 else "intraday"
         feat_df = eng.compute_all_features(df, timeframe=tf, ticker=ticker)
         if feat_df.empty:
+            av = _av_fallback_signal()
+            if av is not None:
+                return _attach_factor_fields(av)
             return _attach_factor_fields({"ticker": ticker, "signal": "HOLD", "confidence": 50, "alpha_score": 0.0, "message": "Feature computation failed"})
 
         # Very low threshold for dashboard activity demonstration
@@ -1272,6 +1293,9 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
             "live": True,
         })
     except Exception as e:
+        av = _av_fallback_signal()
+        if av is not None:
+            return _attach_factor_fields(av)
         return _attach_factor_fields({"ticker": ticker, "signal": "HOLD", "confidence": 50, "alpha_score": 0.0, "message": str(e)})
 
 

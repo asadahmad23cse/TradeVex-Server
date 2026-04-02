@@ -13,6 +13,8 @@ Market hours (UTC offsets used so no pytz dependency for basic checks):
 
 import json
 import logging
+import signal
+import threading
 import time as time_module
 import uuid
 from datetime import datetime, timezone, time, timedelta
@@ -199,6 +201,10 @@ class LiveRunner:
         }
         # Price history for correlation filter {asset: pd.Series of daily closes}
         self._price_history: dict[str, pd.Series] = {}
+        self._price_history_lock = threading.RLock()   # C3: guard cross-thread reads/writes
+        self._hurst_cache_lock = threading.RLock()     # C3
+        self._regime_cache_lock = threading.RLock()    # C3
+        self._latency_report_lock = threading.RLock()  # C3
         self._impact_observations: list[dict] = []
         self._intraday_cycles = 0
         self._consumed_daily_returns = 0
@@ -239,7 +245,8 @@ class LiveRunner:
 
     def get_latency_report(self) -> dict:
         """Expose latest intraday latency metrics for the dashboard API."""
-        return dict(self._last_latency_report)
+        with self._latency_report_lock:
+            return dict(self._last_latency_report)
 
     def get_live_validation_report(self) -> dict:
         """Expose latest capital-validation report for the dashboard API."""
@@ -586,6 +593,18 @@ class LiveRunner:
         )
 
     def start(self) -> None:
+        # C7: signal handlers can only be registered from the main thread.
+        # In live mode, start() runs in a background thread, so guard this path.
+        if threading.current_thread() is threading.main_thread():
+            def _sigterm_handler(signum, frame):
+                logger.warning("SIGTERM received — initiating graceful shutdown")
+                try:
+                    self.stop()
+                finally:
+                    raise SystemExit(0)
+
+            signal.signal(signal.SIGTERM, _sigterm_handler)
+
         # Intraday: every 5 minutes
         self._scheduler.add_job(
             self._intraday_cycle,
@@ -635,7 +654,6 @@ class LiveRunner:
         )
 
         # Run an immediate intraday cycle so signals appear right away
-        import threading
         threading.Thread(
             target=self._safe_immediate_cycle,
             daemon=True,
@@ -698,7 +716,8 @@ class LiveRunner:
         }
         regime_state: dict[str, tuple[str, dict]] = {}
         for asset_class in ("indian_stock", "us_stock", "forex"):
-            regime_det = self._regime_cache.get(asset_class)
+            with self._regime_cache_lock:
+                regime_det = self._regime_cache.get(asset_class)
             if regime_det is None or not regime_det._trained:
                 regime_state[asset_class] = ("SIDEWAYS", {})
                 continue
@@ -763,11 +782,13 @@ class LiveRunner:
                         entry_price = float(live_price)
                 price_map[symbol] = entry_price
                 atr_14 = float(df["ATR_14"].iloc[-1])
-                hurst = self._hurst_cache.get(symbol, 0.5)
+                with self._hurst_cache_lock:
+                    hurst = self._hurst_cache.get(symbol, 0.5)
                 daily_vol = float(df.get("Volatility_20", pd.Series([0.2], index=df.index)).iloc[-1] or 0.2)
                 volume_ratio = float(df.get("Volume_Ratio", pd.Series([1.0], index=df.index)).iloc[-1] or 1.0)
 
-                regime_det = self._regime_cache.get(asset_class)
+                with self._regime_cache_lock:
+                    regime_det = self._regime_cache.get(asset_class)
                 regime, regime_probs = regime_state.get(asset_class, ("SIDEWAYS", {}))
                 df = self._attach_ensemble_score(symbol, df)
 
@@ -833,6 +854,8 @@ class LiveRunner:
                     continue
 
                 open_pos = self.store.get_open_signals()
+                with self._price_history_lock:
+                    price_history_snapshot = dict(self._price_history)
                 allowed, reason = self.risk_guard.check_all(
                     sig,
                     open_pos,
@@ -840,7 +863,7 @@ class LiveRunner:
                     portfolio_var_pct=portfolio_metrics.get("var_95", 0.0),
                     portfolio_cvar_pct=portfolio_metrics.get("cvar_95", 0.0),
                     regime=regime,
-                    price_history=self._price_history,
+                    price_history=price_history_snapshot,
                 )
                 if not allowed:
                     logger.info("Signal blocked for %s: %s", symbol, reason)
@@ -866,17 +889,18 @@ class LiveRunner:
         self._refresh_live_validation()
 
         n = max(n_assets_timed, 1)
-        self._last_latency_report = {
-            "cycle_id": datetime.utcnow().strftime("intraday_%Y%m%d_%H%M%S"),
-            "data_fetch_ms": round(timing_totals["data_fetch_ms"] / n, 1),
-            "feature_compute_ms": round(timing_totals["feature_compute_ms"] / n, 1),
-            "alpha_score_ms": round(timing_totals["alpha_score_ms"] / n, 1),
-            "risk_check_ms": round(timing_totals["risk_check_ms"] / n, 1),
-            "execution_ms": round(timing_totals["execution_ms"] / n, 1),
-            "total_ms": round(time_module.perf_counter() * 1000.0 - cycle_start_ms, 1),
-            "n_assets": n_assets_timed,
-            "errors": cycle_errors[-20:],
-        }
+        with self._latency_report_lock:  # C3: dashboard reads this from another thread
+            self._last_latency_report = {
+                "cycle_id": datetime.utcnow().strftime("intraday_%Y%m%d_%H%M%S"),
+                "data_fetch_ms": round(timing_totals["data_fetch_ms"] / n, 1),
+                "feature_compute_ms": round(timing_totals["feature_compute_ms"] / n, 1),
+                "alpha_score_ms": round(timing_totals["alpha_score_ms"] / n, 1),
+                "risk_check_ms": round(timing_totals["risk_check_ms"] / n, 1),
+                "execution_ms": round(timing_totals["execution_ms"] / n, 1),
+                "total_ms": round(time_module.perf_counter() * 1000.0 - cycle_start_ms, 1),
+                "n_assets": n_assets_timed,
+                "errors": cycle_errors[-20:],
+            }
 
     # ------------------------------------------------------------------
     # EOD cycle
@@ -957,11 +981,13 @@ class LiveRunner:
                     continue
 
                 # Update price history for correlation filter (last 30 daily closes)
-                self._price_history[symbol] = df["Close"].tail(30)
+                with self._price_history_lock:
+                    self._price_history[symbol] = df["Close"].tail(30)
 
                 # Compute & cache Hurst exponent
                 hurst = compute_hurst(df["Close"].tail(self.cfg["data"]["hurst_window"]))
-                self._hurst_cache[symbol] = hurst
+                with self._hurst_cache_lock:
+                    self._hurst_cache[symbol] = hurst
                 logger.info("Hurst(%s) = %.3f", symbol, hurst)
 
                 all_dfs.append((symbol, df))
@@ -975,7 +1001,8 @@ class LiveRunner:
             if not regime_df.empty:
                 self._train_regime(asset_class, regime_df)
 
-        regime_det = self._regime_cache.get(asset_class)
+        with self._regime_cache_lock:
+            regime_det = self._regime_cache.get(asset_class)
         regime = "SIDEWAYS"
         if regime_det and regime_det._trained:
             try:
@@ -995,7 +1022,7 @@ class LiveRunner:
                     if ensemble.train(
                         df,
                         forward_horizon=self.cfg.get("ensemble", {}).get("forward_horizon", 5),
-                        oot_days=self.cfg.get("ml_validation", {}).get("oot_days", 21),
+                        oot_days=self.cfg.get("ml_validation", {}).get("oot_days", 60),
                         refit_meta_walkforward=True,
                     ):
                         self._save_model_validation(
@@ -1018,7 +1045,8 @@ class LiveRunner:
                     break
                 entry_price = float(df["Close"].iloc[-1])
                 atr_14 = float(df["ATR_14"].iloc[-1])
-                hurst = self._hurst_cache.get(symbol, 0.5)
+                with self._hurst_cache_lock:
+                    hurst = self._hurst_cache.get(symbol, 0.5)
                 daily_vol = float(df.get("Volatility_20", pd.Series([0.2], index=df.index)).iloc[-1] or 0.2)
                 volume_ratio = float(df.get("Volume_Ratio", pd.Series([1.0], index=df.index)).iloc[-1] or 1.0)
 
@@ -1028,7 +1056,7 @@ class LiveRunner:
                     retrain_days=self.cfg.get("ml_validation", {}).get("lstm_retrain_days", 63),
                 ):
                     try:
-                        _lstm.train(df[["Close"]], epochs=5, verbose=0, oot_days=self.cfg.get("ml_validation", {}).get("oot_days", 21))
+                        _lstm.train(df[["Close"]], epochs=5, verbose=0, oot_days=self.cfg.get("ml_validation", {}).get("oot_days", 60))
                         self._save_model_validation("lstm", asset_class, _lstm.validation_report, [{"feature": "Close", "importance": 1.0, "rank": 1}])
                     except Exception as exc:
                         self._log_health("lstm", "WARNING", f"LSTM retrain failed for {symbol}: {exc}")
@@ -1088,6 +1116,8 @@ class LiveRunner:
                 )
                 if sig:
                     open_pos = self.store.get_open_signals()
+                    with self._price_history_lock:
+                        price_history_snapshot = dict(self._price_history)
                     allowed, reason = self.risk_guard.check_all(
                         sig,
                         open_pos,
@@ -1095,7 +1125,7 @@ class LiveRunner:
                         portfolio_var_pct=portfolio_metrics.get("var_95", 0.0),
                         portfolio_cvar_pct=portfolio_metrics.get("cvar_95", 0.0),
                         regime=regime,
-                        price_history=self._price_history,
+                        price_history=price_history_snapshot,
                     )
                     if not allowed:
                         logger.info("Swing signal blocked for %s: %s", symbol, reason)
@@ -1166,15 +1196,17 @@ class LiveRunner:
             )
             return
         try:
-            det = self._regime_cache.get(
-                asset_class,
-                RegimeDetector(n_states=self.cfg.get("regime", {}).get("n_states", 5)),
-            )
+            with self._regime_cache_lock:
+                det = self._regime_cache.get(
+                    asset_class,
+                    RegimeDetector(n_states=self.cfg.get("regime", {}).get("n_states", 5)),
+                )
             det.train(
                 df.tail(self.cfg["data"]["hmm_train_window"]),
                 asset_class=asset_class,
             )
-            self._regime_cache[asset_class] = det
+            with self._regime_cache_lock:
+                self._regime_cache[asset_class] = det
             self._last_hmm_retrain[asset_class] = now
             logger.info("HMM retrained for %s", asset_class)
         except Exception as exc:
