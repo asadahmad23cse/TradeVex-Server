@@ -207,6 +207,8 @@ def volatility_tradeability(volatility: Any) -> dict[str, Any]:
 
 def execution_rejection_code(reason: str) -> str:
     r = reason.lower()
+    if "volatility regime too low for execution" in r:
+        return "VOL_NO_TRADE"
     if "depth unavailable" in r:
         return "DEPTH_UNAVAILABLE"
     if "spread" in r:

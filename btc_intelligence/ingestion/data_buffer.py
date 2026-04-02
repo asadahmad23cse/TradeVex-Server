@@ -83,6 +83,7 @@ class MarketDataBuffer:
 
         self.monitoring_stats: dict[str, Any] = {}
         self.edge_stats: dict[str, Any] = {}
+        self.volatility_tradeability: dict[str, Any] = {}
 
         self.last_ws_update_utc: str = ""
         self.last_15m_close_time: int = 0
@@ -120,6 +121,7 @@ class MarketDataBuffer:
             "signal_history": list(self.signal_history),
             "monitoring_stats": dict(self.monitoring_stats),
             "edge_stats": dict(self.edge_stats),
+            "volatility_tradeability": dict(self.volatility_tradeability),
             "last_ws_update_utc": self.last_ws_update_utc,
             "last_15m_close_time": self.last_15m_close_time,
             "last_feature_eval_close_time": self.last_feature_eval_close_time,
@@ -308,6 +310,13 @@ class MarketDataBuffer:
                 assert self.redis is not None
                 await self.redis.set_json("edge_stats", payload)
 
+    async def set_volatility_tradeability(self, payload: dict[str, Any]) -> None:
+        async with self.lock:
+            self.volatility_tradeability = payload
+            if self._redis_enabled():
+                assert self.redis is not None
+                await self.redis.set_json("volatility_tradeability", payload)
+
     async def set_ws_update(self, iso_ts: str) -> None:
         async with self.lock:
             self.last_ws_update_utc = iso_ts
@@ -391,6 +400,7 @@ class MarketDataBuffer:
                 "signal_history": await self.redis.lrange_json("signal_history", 0, self._signal_history_size - 1, reverse=False),
                 "monitoring_stats": await self.redis.get_json("monitoring_stats", dict(self.monitoring_stats)),
                 "edge_stats": await self.redis.get_json("edge_stats", dict(self.edge_stats)),
+                "volatility_tradeability": await self.redis.get_json("volatility_tradeability", dict(self.volatility_tradeability)),
                 "last_ws_update_utc": await self.redis.get_json("last_ws_update_utc", self.last_ws_update_utc),
                 "last_15m_close_time": int(await self.redis.get_json("last_15m_close_time", self.last_15m_close_time)),
                 "last_feature_eval_close_time": int(await self.redis.get_json("last_feature_eval_close_time", self.last_feature_eval_close_time)),

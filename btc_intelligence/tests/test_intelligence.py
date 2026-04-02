@@ -3,8 +3,9 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from btc_intelligence.signals.execution import recommended_max_position_btc
+from btc_intelligence.signals.execution import evaluate_execution, recommended_max_position_btc
 from btc_intelligence.signals.intelligence import (
+    execution_rejection_code,
     order_flow_decision_state,
     trade_based_volume_profile,
     volatility_tradeability,
@@ -67,6 +68,26 @@ class TestIntelligence(unittest.TestCase):
         thin = recommended_max_position_btc(thin_book, side="buy", slippage_limit_pct=0.03, max_qty_btc=5.0)
         self.assertGreaterEqual(deep, thin)
         self.assertGreater(deep, 0)
+
+    def test_execution_rejects_when_volatility_no_trade(self) -> None:
+        depth = {
+            "bids": [[50_000, 2.0], [49_990, 2.0]],
+            "asks": [[50_010, 2.0], [50_020, 2.0]],
+        }
+        trades = [_mk_trade(1_000_000 + i * 1_000, 50_000.0 + i * 0.1, 0.02) for i in range(60)]
+        order_flow = SimpleNamespace(single_bar_delta_divergence=False, obi=0.7)
+
+        out = evaluate_execution(
+            depth=depth,
+            agg_trades=trades,
+            direction="LONG",
+            order_flow=order_flow,
+            market_state={"volatility_tradeability": {"tradeability": "NO_TRADE"}},
+            fallback_tradeability="ALLOW",
+        )
+        self.assertFalse(out.accepted)
+        self.assertEqual(out.reason, "Volatility regime too low for execution")
+        self.assertEqual(execution_rejection_code(out.reason), "VOL_NO_TRADE")
 
 
 if __name__ == "__main__":

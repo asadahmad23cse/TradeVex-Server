@@ -157,6 +157,8 @@ class AppRuntime:
                     continue
 
                 state = build_feature_state(snapshot)
+                vol_payload = volatility_tradeability(state.volatility)
+                await self.buffer.set_volatility_tradeability(vol_payload)
                 regime = classify_regime(snapshot, state)
                 payload = self.engine.build(
                     snapshot=snapshot,
@@ -454,6 +456,7 @@ class AppRuntime:
             return {'status': 'warming_up', 'tradeability': 'NO_TRADE'}
         state = build_feature_state(snap)
         payload = volatility_tradeability(state.volatility)
+        await self.buffer.set_volatility_tradeability(payload)
         payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
         return payload
 
@@ -469,12 +472,16 @@ class AppRuntime:
         side = 'buy' if resolved_direction == 'LONG' else 'sell'
 
         state = build_feature_state(snap)
+        fallback_vol = volatility_tradeability(state.volatility)
+        await self.buffer.set_volatility_tradeability(fallback_vol)
         check = evaluate_execution(
             snap.get('depth', {}),
             snap.get('agg_trades', []),
             resolved_direction,
             order_flow=state.order_flow,
             derivatives=state.derivatives,
+            market_state=snap,
+            fallback_tradeability=str(fallback_vol.get('tradeability', 'ALLOW')),
         )
         max_btc = recommended_max_position_btc(
             depth=snap.get('depth', {}),

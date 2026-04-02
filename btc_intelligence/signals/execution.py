@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 from btc_intelligence.config import settings
 
@@ -24,6 +25,8 @@ def evaluate_execution(
     direction: str,
     order_flow: object | None = None,
     derivatives: object | None = None,
+    market_state: dict[str, Any] | None = None,
+    fallback_tradeability: str = 'ALLOW',
 ) -> ExecutionCheck:
     bids = depth.get('bids', [])
     asks = depth.get('asks', [])
@@ -60,6 +63,22 @@ def evaluate_execution(
             penalty += 20.0
         if now.weekday() == 4 and expiry_hours <= 4:
             return ExecutionCheck(spread_pct, slippage_pct, move_30s, 'poor', False, False, penalty, 'No signals 4h before monthly expiry window')
+
+    tradeability = _resolve_volatility_tradeability(
+        market_state=market_state,
+        fallback_tradeability=fallback_tradeability,
+    )
+    if tradeability == 'NO_TRADE':
+        return ExecutionCheck(
+            spread_pct,
+            slippage_pct,
+            move_30s,
+            quality,
+            False,
+            False,
+            penalty,
+            'Volatility regime too low for execution',
+        )
 
     return ExecutionCheck(spread_pct, slippage_pct, move_30s, quality, True, True, penalty, 'Execution quality acceptable')
 
@@ -165,3 +184,20 @@ def _micro_timing_trigger(agg_trades: list[dict], direction: str, order_flow: ob
     obi_flip = obi > 0.65 if direction == 'LONG' else obi < 0.35
 
     return volume_spike or (not single_div) or obi_flip
+
+
+def _resolve_volatility_tradeability(
+    market_state: dict[str, Any] | None,
+    fallback_tradeability: str,
+) -> str:
+    if isinstance(market_state, dict):
+        vol_payload = market_state.get('volatility_tradeability', {})
+        if isinstance(vol_payload, dict):
+            resolved = str(vol_payload.get('tradeability', '')).upper()
+            if resolved in {'NO_TRADE', 'ALLOW', 'CAUTION'}:
+                return resolved
+
+    fallback = str(fallback_tradeability).upper()
+    if fallback in {'NO_TRADE', 'ALLOW', 'CAUTION'}:
+        return fallback
+    return 'ALLOW'
