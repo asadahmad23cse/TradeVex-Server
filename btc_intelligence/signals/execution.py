@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
 
 from btc_intelligence.config import settings
 
@@ -24,6 +25,8 @@ def evaluate_execution(
     direction: str,
     order_flow: object | None = None,
     derivatives: object | None = None,
+    market_state: dict[str, Any] | None = None,
+    fallback_tradeability: str = 'ALLOW',
 ) -> ExecutionCheck:
     bids = depth.get('bids', [])
     asks = depth.get('asks', [])
@@ -60,6 +63,22 @@ def evaluate_execution(
             penalty += 20.0
         if now.weekday() == 4 and expiry_hours <= 4:
             return ExecutionCheck(spread_pct, slippage_pct, move_30s, 'poor', False, False, penalty, 'No signals 4h before monthly expiry window')
+
+    tradeability = _resolve_volatility_tradeability(
+        market_state=market_state,
+        fallback_tradeability=fallback_tradeability,
+    )
+    if tradeability == 'NO_TRADE':
+        return ExecutionCheck(
+            spread_pct,
+            slippage_pct,
+            move_30s,
+            quality,
+            False,
+            False,
+            penalty,
+            'Volatility regime too low for execution',
+        )
 
     return ExecutionCheck(spread_pct, slippage_pct, move_30s, quality, True, True, penalty, 'Execution quality acceptable')
 
@@ -100,6 +119,36 @@ def estimate_slippage_pct(depth: dict, side: str, qty_btc: float = 0.1) -> float
     return max(0.0, slip)
 
 
+def recommended_max_position_btc(
+    depth: dict,
+    side: str,
+    slippage_limit_pct: float,
+    min_qty_btc: float = 0.01,
+    max_qty_btc: float = 10.0,
+    steps: int = 18,
+) -> float:
+    """
+    Estimate the maximum executable BTC size under a slippage limit.
+
+    Uses a monotonic scan over log-spaced qty buckets for robustness
+    against sparse order books.
+    """
+    if slippage_limit_pct <= 0:
+        return 0.0
+    lo = max(float(min_qty_btc), 1e-4)
+    hi = max(float(max_qty_btc), lo)
+    best = 0.0
+    for i in range(max(int(steps), 2)):
+        w = i / max(steps - 1, 1)
+        qty = lo * ((hi / lo) ** w)
+        slip = estimate_slippage_pct(depth, side=side, qty_btc=qty)
+        if slip <= slippage_limit_pct:
+            best = qty
+        else:
+            break
+    return round(best, 4)
+
+
 def _price_move_30s_pct(agg_trades: list[dict]) -> float:
     if len(agg_trades) < 2:
         return 0.0
@@ -135,3 +184,20 @@ def _micro_timing_trigger(agg_trades: list[dict], direction: str, order_flow: ob
     obi_flip = obi > 0.65 if direction == 'LONG' else obi < 0.35
 
     return volume_spike or (not single_div) or obi_flip
+
+
+def _resolve_volatility_tradeability(
+    market_state: dict[str, Any] | None,
+    fallback_tradeability: str,
+) -> str:
+    if isinstance(market_state, dict):
+        vol_payload = market_state.get('volatility_tradeability', {})
+        if isinstance(vol_payload, dict):
+            resolved = str(vol_payload.get('tradeability', '')).upper()
+            if resolved in {'NO_TRADE', 'ALLOW', 'CAUTION'}:
+                return resolved
+
+    fallback = str(fallback_tradeability).upper()
+    if fallback in {'NO_TRADE', 'ALLOW', 'CAUTION'}:
+        return fallback
+    return 'ALLOW'

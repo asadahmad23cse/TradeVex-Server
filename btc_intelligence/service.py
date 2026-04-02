@@ -32,7 +32,15 @@ from btc_intelligence.monitoring.auto_pause import AutoPauseManager
 from btc_intelligence.monitoring.performance_tracker import PerformanceTracker
 from btc_intelligence.regime.classifier import classify_regime
 from btc_intelligence.signals.engine import SignalEngine
+from btc_intelligence.signals.execution import evaluate_execution, recommended_max_position_btc
+from btc_intelligence.signals.intelligence import (
+    execution_rejection_code,
+    order_flow_decision_state,
+    trade_based_volume_profile,
+    volatility_tradeability,
+)
 from btc_intelligence.signals.probability_stacker import ProbabilityStacker
+from btc_intelligence.state import RedisStateStore
 from btc_intelligence.utils.notifier import TelegramNotifier
 
 
@@ -41,6 +49,10 @@ logger = logging.getLogger(__name__)
 
 class AppRuntime:
     def __init__(self) -> None:
+        self.redis_state = RedisStateStore(
+            redis_url=settings.redis_url,
+            key_prefix=settings.redis_key_prefix,
+        )
         candles_max = {
             '1m': settings.candles_1m_max,
             '5m': settings.candles_5m_max,
@@ -48,7 +60,12 @@ class AppRuntime:
             '1h': settings.candles_1h_max,
             '4h': settings.candles_4h_max,
         }
-        self.buffer = MarketDataBuffer(candles_max, settings.trades_max, settings.signal_history_size)
+        self.buffer = MarketDataBuffer(
+            candles_max,
+            settings.trades_max,
+            settings.signal_history_size,
+            redis_store=(self.redis_state if settings.redis_state_enabled else None),
+        )
 
         self.ws_manager = BinanceWebSocketManager(self.buffer)
         self.rest_poller = BinanceRestPoller(self.buffer)
@@ -84,6 +101,8 @@ class AppRuntime:
         if self._running:
             return
         self._running = True
+        if settings.redis_state_enabled:
+            await self.redis_state.connect()
 
         await self.ws_manager.start()
         await self.rest_poller.start()
@@ -113,6 +132,7 @@ class AppRuntime:
         await self.whale_tracker.stop()
         await self.macro_data.stop()
         await self.cryptopanic.stop()
+        await self.redis_state.close()
         logger.info('Runtime stopped')
 
     async def _signal_loop(self) -> None:
@@ -137,6 +157,8 @@ class AppRuntime:
                     continue
 
                 state = build_feature_state(snapshot)
+                vol_payload = volatility_tradeability(state.volatility)
+                await self.buffer.set_volatility_tradeability(vol_payload)
                 regime = classify_regime(snapshot, state)
                 payload = self.engine.build(
                     snapshot=snapshot,
@@ -300,6 +322,11 @@ class AppRuntime:
             'paper_open': self.paper.open_position is not None,
             'paper_closed_trades': len(self.paper.closed),
             'monitoring': snap.get('monitoring_stats', {}),
+            'redis_state': {
+                'enabled': bool(settings.redis_state_enabled),
+                'connected': bool(self.redis_state.connected),
+                'url': settings.redis_url,
+            },
             'server_time_utc': datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
         }
 
@@ -403,3 +430,82 @@ class AppRuntime:
             for r in rows
         ]
         return {'symbol': 'BTCUSDT', 'timeframe': timeframe, 'rows': parsed}
+
+    async def orderflow_intelligence(self) -> dict[str, Any]:
+        snap = await self.buffer.snapshot()
+        if not self._has_required_candles(snap):
+            return {'status': 'warming_up', 'decision_state': 'NO_TRADE'}
+        state = build_feature_state(snap)
+        payload = order_flow_decision_state(state.order_flow)
+        payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        return payload
+
+    async def volume_profile_intelligence(self, window_minutes: int = 45, bins: int = 24) -> dict[str, Any]:
+        snap = await self.buffer.snapshot()
+        payload = trade_based_volume_profile(
+            agg_trades=snap.get('agg_trades', []),
+            window_minutes=int(max(30, min(window_minutes, 60))),
+            n_bins=int(max(12, min(bins, 48))),
+        )
+        payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        return payload
+
+    async def volatility_intelligence(self) -> dict[str, Any]:
+        snap = await self.buffer.snapshot()
+        if not self._has_required_candles(snap):
+            return {'status': 'warming_up', 'tradeability': 'NO_TRADE'}
+        state = build_feature_state(snap)
+        payload = volatility_tradeability(state.volatility)
+        await self.buffer.set_volatility_tradeability(payload)
+        payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        return payload
+
+    async def execution_intelligence(self, direction: str | None = None) -> dict[str, Any]:
+        snap = await self.buffer.snapshot()
+        if not self._has_required_candles(snap):
+            return {'status': 'warming_up', 'accepted': False, 'decision_state': 'NO_TRADE'}
+
+        latest = snap.get('latest_signal', {}) or {}
+        resolved_direction = str(direction or latest.get('signal', 'LONG')).upper()
+        if resolved_direction not in {'LONG', 'SHORT'}:
+            resolved_direction = 'LONG'
+        side = 'buy' if resolved_direction == 'LONG' else 'sell'
+
+        state = build_feature_state(snap)
+        fallback_vol = volatility_tradeability(state.volatility)
+        await self.buffer.set_volatility_tradeability(fallback_vol)
+        check = evaluate_execution(
+            snap.get('depth', {}),
+            snap.get('agg_trades', []),
+            resolved_direction,
+            order_flow=state.order_flow,
+            derivatives=state.derivatives,
+            market_state=snap,
+            fallback_tradeability=str(fallback_vol.get('tradeability', 'ALLOW')),
+        )
+        max_btc = recommended_max_position_btc(
+            depth=snap.get('depth', {}),
+            side=side,
+            slippage_limit_pct=settings.slippage_reject_pct,
+            min_qty_btc=0.01,
+            max_qty_btc=8.0,
+        )
+        bid, ask, mid = MarketDataBuffer.best_bid_ask(snap.get('depth', {}))
+
+        return {
+            'direction': resolved_direction,
+            'accepted': bool(check.accepted),
+            'trigger_ready': bool(check.trigger_ready),
+            'quality': check.quality,
+            'spread_pct': round(float(check.spread_pct), 6),
+            'slippage_pct': round(float(check.slippage_pct), 6),
+            'price_move_30s_pct': round(float(check.price_move_30s_pct), 6),
+            'recommended_max_btc': float(max_btc),
+            'recommended_max_notional_usdt': round(float(max_btc * mid), 2) if mid > 0 else 0.0,
+            'best_bid': round(float(bid), 2),
+            'best_ask': round(float(ask), 2),
+            'mid_price': round(float(mid), 2),
+            'rejection_reason': check.reason if not check.accepted else '',
+            'rejection_code': execution_rejection_code(check.reason) if not check.accepted else '',
+            'as_of_utc': datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
+        }

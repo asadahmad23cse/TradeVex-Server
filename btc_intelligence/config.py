@@ -75,6 +75,8 @@ class Settings(BaseSettings):
 
     paper_trade: bool = True
     redis_url: str = 'redis://localhost:6379'
+    redis_state_enabled: bool = True
+    redis_key_prefix: str = 'btcintel'
 
     # Buffers.
     candles_1m_max: int = 500

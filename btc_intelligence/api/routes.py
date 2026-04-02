@@ -88,6 +88,33 @@ async def get_market_history(
     return await runtime(request).market_history(timeframe=timeframe, limit=limit)
 
 
+@router.get('/api/orderflow')
+async def get_orderflow_intelligence(request: Request):
+    return await runtime(request).orderflow_intelligence()
+
+
+@router.get('/api/volume-profile')
+async def get_volume_profile_intelligence(
+    request: Request,
+    window_minutes: int = Query(45, ge=30, le=60),
+    bins: int = Query(24, ge=12, le=48),
+):
+    return await runtime(request).volume_profile_intelligence(window_minutes=window_minutes, bins=bins)
+
+
+@router.get('/api/volatility')
+async def get_volatility_intelligence(request: Request):
+    return await runtime(request).volatility_intelligence()
+
+
+@router.get('/api/execution')
+async def get_execution_intelligence(
+    request: Request,
+    direction: str | None = Query(None, pattern='^(LONG|SHORT)?$'),
+):
+    return await runtime(request).execution_intelligence(direction=direction)
+
+
 @router.websocket('/ws/live')
 async def ws_live(websocket: WebSocket):
     rt: AppRuntime = websocket.app.state.runtime  # type: ignore[attr-defined]
