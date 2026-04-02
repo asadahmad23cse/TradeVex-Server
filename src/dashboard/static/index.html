@@ -472,6 +472,95 @@ body{
 /* ── Phase-1: Expanded factor panel ─────────────────────── */
 #factor-panel{max-height:290px;overflow-y:auto;}
 #factor-panel .factor-row{grid-template-columns:30px 110px 1fr 58px;}
+
+</style>
+<style>
+/* ── Under-Chart Intelligence Panel ─────────────────────── */
+.intel-panel{
+  margin:0 12px 10px;
+  background:#0d1117;
+  border:1px solid rgba(148,163,184,.2);
+  border-radius:12px;
+  color:#e2e8f0;
+  box-shadow:0 8px 24px rgba(2,6,23,.35);
+}
+.intel-header{
+  padding:10px 14px;
+  border-bottom:1px solid rgba(148,163,184,.2);
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:8px;
+}
+.intel-title{
+  font-size:13px;
+  font-weight:700;
+  letter-spacing:.02em;
+}
+.intel-status{
+  font-size:11px;
+  color:#94a3b8;
+  font-family:"JetBrains Mono",monospace;
+}
+.intel-tabs{
+  display:flex;
+  gap:12px;
+  padding:0 14px;
+  border-bottom:1px solid rgba(148,163,184,.18);
+}
+.intel-tab{
+  appearance:none;
+  background:transparent;
+  border:none;
+  border-bottom:2px solid transparent;
+  color:#94a3b8;
+  font-size:12px;
+  font-weight:700;
+  padding:10px 0 9px;
+  cursor:pointer;
+}
+.intel-tab.intel-tab-active{
+  color:#e2e8f0;
+  border-bottom-color:#f7931a;
+}
+.intel-body{
+  padding:12px 14px 14px;
+}
+.intel-pane{display:none;}
+.intel-pane.intel-pane-active{display:block;}
+.intel-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  gap:10px;
+  padding:6px 0;
+  border-bottom:1px dashed rgba(148,163,184,.2);
+}
+.intel-row:last-child{border-bottom:none;}
+.intel-key{
+  color:#94a3b8;
+  font-size:11px;
+}
+.intel-val{
+  color:#e2e8f0;
+  font-size:12px;
+  font-weight:700;
+  text-align:right;
+  font-family:"JetBrains Mono",monospace;
+}
+.intel-badge{
+  display:inline-block;
+  border-radius:999px;
+  padding:2px 8px;
+  font-size:11px;
+  font-weight:800;
+  border:1px solid rgba(148,163,184,.35);
+}
+.intel-msg{
+  font-size:12px;
+  color:#94a3b8;
+  padding:10px 0 4px;
+}
 </style>
 </head>
 <body>
@@ -608,6 +697,48 @@ body{
 
           <div class="signal"><div class="sig-row"><span>Algo</span><span id="algo" class="sig-val">--</span></div></div>
           <div class="signal"><div class="sig-row"><span>As Of UTC</span><span id="asof" class="sig-val">--</span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="intel-panel" class="intel-panel">
+      <div class="intel-header">
+        <div class="intel-title">Under-Chart Intelligence</div>
+        <div id="intel-status" class="intel-status">refresh: 15s</div>
+      </div>
+      <div class="intel-tabs">
+        <button id="intel-tab-flow" class="intel-tab intel-tab-active" type="button">Flow</button>
+        <button id="intel-tab-volume" class="intel-tab" type="button">Volume</button>
+        <button id="intel-tab-volatility" class="intel-tab" type="button">Volatility</button>
+      </div>
+      <div class="intel-body">
+        <div id="intel-pane-flow" class="intel-pane intel-pane-active">
+          <div id="intel-msg-flow" class="intel-msg">Connecting to intelligence service...</div>
+          <div id="intel-data-flow" style="display:none;">
+            <div class="intel-row"><span class="intel-key">decision</span><span id="intel-flow-decision" class="intel-val">—</span></div>
+            <div class="intel-row"><span class="intel-key">reason</span><span id="intel-flow-reason" class="intel-val">—</span></div>
+            <div class="intel-row"><span class="intel-key">obi</span><span id="intel-flow-obi" class="intel-val">—</span></div>
+            <div class="intel-row"><span class="intel-key">cvd_slope</span><span id="intel-flow-cvd" class="intel-val">—</span></div>
+          </div>
+        </div>
+        <div id="intel-pane-volume" class="intel-pane">
+          <div id="intel-msg-volume" class="intel-msg">Connecting to intelligence service...</div>
+          <div id="intel-data-volume" style="display:none;">
+            <div class="intel-row"><span class="intel-key">decision</span><span id="intel-volume-decision" class="intel-val">—</span></div>
+            <div class="intel-row"><span class="intel-key">poc_price</span><span id="intel-volume-poc" class="intel-val">—</span></div>
+            <div class="intel-row"><span class="intel-key">hvn</span><span id="intel-volume-hvn" class="intel-val">—</span></div>
+            <div class="intel-row"><span class="intel-key">lvn</span><span id="intel-volume-lvn" class="intel-val">—</span></div>
+            <div class="intel-row"><span class="intel-key">distance_from_poc_pct</span><span id="intel-volume-dist" class="intel-val">—</span></div>
+            <div class="intel-row"><span class="intel-key">window_minutes</span><span id="intel-volume-window" class="intel-val">—</span></div>
+          </div>
+        </div>
+        <div id="intel-pane-volatility" class="intel-pane">
+          <div id="intel-msg-volatility" class="intel-msg">Connecting to intelligence service...</div>
+          <div id="intel-data-volatility" style="display:none;">
+            <div class="intel-row"><span class="intel-key">tradeability</span><span id="intel-vol-tradeability" class="intel-val">—</span></div>
+            <div class="intel-row"><span class="intel-key">regime</span><span id="intel-vol-regime" class="intel-val">—</span></div>
+            <div class="intel-row"><span class="intel-key">atr_pct</span><span id="intel-vol-atr" class="intel-val">—</span></div>
+          </div>
         </div>
       </div>
     </div>
@@ -2262,6 +2393,161 @@ async function init(){
 }
 
 init();
+</script>
+<script>
+(function(){
+  const intel_refresh_ms = 15000;
+  const intel_urls = {
+    flow: "http://127.0.0.1:9000/api/orderflow",
+    volume: "http://127.0.0.1:9000/api/volume-profile",
+    volatility: "http://127.0.0.1:9000/api/volatility",
+  };
+  const intel_tabs = ["flow", "volume", "volatility"];
+  let intel_active_tab = "flow";
+
+  function intel_el(id){
+    return document.getElementById(id);
+  }
+
+  function intel_format_num(value, digits){
+    const n = Number(value);
+    if(!Number.isFinite(n)) return "—";
+    return n.toFixed(digits);
+  }
+
+  function intel_badge_html(label){
+    const value = String(label || "—").toUpperCase();
+    let color = "#94a3b8";
+    if(value === "FAVOR_LONG" || value === "ALLOW") color = "#00ff88";
+    if(value === "FAVOR_SHORT") color = "#ff4444";
+    if(value === "NO_TRADE") color = "#f59e0b";
+    if(value === "CAUTION") color = "#f97316";
+    return '<span class="intel-badge" style="color:' + color + ';border-color:' + color + '33;background:' + color + '1a;">' + value + "</span>";
+  }
+
+  function intel_set_value(id, value){
+    const node = intel_el(id);
+    if(node) node.textContent = value;
+  }
+
+  function intel_set_badge(id, value){
+    const node = intel_el(id);
+    if(node) node.innerHTML = intel_badge_html(value);
+  }
+
+  function intel_show_message(tab, message){
+    const msg = intel_el("intel-msg-" + tab);
+    const data = intel_el("intel-data-" + tab);
+    if(msg) msg.textContent = message;
+    if(msg) msg.style.display = "block";
+    if(data) data.style.display = "none";
+  }
+
+  function intel_show_data(tab){
+    const msg = intel_el("intel-msg-" + tab);
+    const data = intel_el("intel-data-" + tab);
+    if(msg) msg.style.display = "none";
+    if(data) data.style.display = "block";
+  }
+
+  function intel_activate_tab(tab){
+    intel_active_tab = tab;
+    intel_tabs.forEach(function(name){
+      const tabBtn = intel_el("intel-tab-" + name);
+      const pane = intel_el("intel-pane-" + name);
+      if(tabBtn) tabBtn.classList.toggle("intel-tab-active", name === tab);
+      if(pane) pane.classList.toggle("intel-pane-active", name === tab);
+    });
+  }
+
+  async function intel_fetch_json(url){
+    const res = await fetch(url, { cache: "no-store" });
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    return await res.json();
+  }
+
+  function intel_render_flow(payload){
+    intel_set_badge("intel-flow-decision", payload.decision_state || payload.decision || "—");
+    intel_set_value("intel-flow-reason", payload.reason || "—");
+    intel_set_value("intel-flow-obi", intel_format_num(payload.obi, 4));
+    intel_set_value("intel-flow-cvd", intel_format_num(payload.cvd_slope, 6));
+    intel_show_data("flow");
+  }
+
+  function intel_render_volume(payload){
+    const poc = payload.poc_price ?? payload.poc;
+    const hvn = Array.isArray(payload.hvn) ? payload.hvn.join(", ") : "—";
+    const lvn = Array.isArray(payload.lvn) ? payload.lvn.join(", ") : "—";
+    const dist = payload.distance_from_poc_pct ?? payload.price_to_poc_pct;
+    intel_set_badge("intel-volume-decision", payload.decision_state || payload.decision || "—");
+    intel_set_value("intel-volume-poc", intel_format_num(poc, 2));
+    intel_set_value("intel-volume-hvn", hvn || "—");
+    intel_set_value("intel-volume-lvn", lvn || "—");
+    intel_set_value("intel-volume-dist", Number.isFinite(Number(dist)) ? intel_format_num(dist, 4) + "%" : "—");
+    intel_set_value("intel-volume-window", Number.isFinite(Number(payload.window_minutes)) ? String(payload.window_minutes) : "—");
+    intel_show_data("volume");
+  }
+
+  function intel_render_volatility(payload){
+    const regime = payload.regime || payload.volatility_regime || "—";
+    const atrPct = payload.atr_pct ?? payload.atr_multiplier_pct;
+    intel_set_badge("intel-vol-tradeability", payload.tradeability || "—");
+    intel_set_value("intel-vol-regime", regime);
+    intel_set_value("intel-vol-atr", Number.isFinite(Number(atrPct)) ? intel_format_num(atrPct, 4) + "%" : "—");
+    intel_show_data("volatility");
+  }
+
+  function intel_set_all_connecting(){
+    intel_tabs.forEach(function(tab){
+      intel_show_message(tab, "Connecting to intelligence service...");
+    });
+    const status = intel_el("intel-status");
+    if(status) status.textContent = "refresh: waiting for service";
+  }
+
+  async function intel_refresh_all(){
+    try{
+      const results = await Promise.all([
+        intel_fetch_json(intel_urls.flow),
+        intel_fetch_json(intel_urls.volume),
+        intel_fetch_json(intel_urls.volatility),
+      ]);
+      intel_render_flow(results[0] || {});
+      intel_render_volume(results[1] || {});
+      intel_render_volatility(results[2] || {});
+      const status = intel_el("intel-status");
+      if(status) status.textContent = "updated: " + new Date().toLocaleTimeString();
+    }catch(_){
+      intel_set_all_connecting();
+    }
+  }
+
+  function intel_bind_tabs(){
+    intel_tabs.forEach(function(tab){
+      const btn = intel_el("intel-tab-" + tab);
+      if(btn){
+        btn.addEventListener("click", function(){
+          intel_activate_tab(tab);
+        });
+      }
+    });
+  }
+
+  function intel_init_panel(){
+    if(!intel_el("intel-panel")) return;
+    intel_bind_tabs();
+    intel_activate_tab(intel_active_tab);
+    intel_set_all_connecting();
+    intel_refresh_all();
+    setInterval(intel_refresh_all, intel_refresh_ms);
+  }
+
+  if(document.readyState === "loading"){
+    document.addEventListener("DOMContentLoaded", intel_init_panel);
+  }else{
+    intel_init_panel();
+  }
+})();
 </script>
 </body>
 </html>
