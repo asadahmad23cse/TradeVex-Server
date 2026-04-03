@@ -1,3 +1,7 @@
+"""
+Sharpe is computed on raw returns; weight delta determines applied_fraction tier.
+"""
+
 from __future__ import annotations
 
 import math
@@ -82,31 +86,36 @@ class WalkForwardValidator:
                 "reason": "Insufficient test window for Sharpe; apply partial update",
             }
 
-        old_weight = float(old_weights.get(strategy, 0.0))
-        new_weight = float(new_weights.get(strategy, old_weight))
+        returns = [float(t.get("pnl_pct", 0.0)) / 100.0 for t in test_rows]
+        base_sharpe = self._safe_sharpe(returns)
+        old_w = float(old_weights.get(strategy, 0.0))
+        new_w = float(new_weights.get(strategy, old_w))
+        weight_delta = abs(new_w - old_w)
 
-        old_returns = [(float(t.get("pnl_pct", 0.0)) / 100.0) * old_weight for t in test_rows]
-        new_returns = [(float(t.get("pnl_pct", 0.0)) / 100.0) * new_weight for t in test_rows]
+        old_sharpe = float(base_sharpe)
+        new_sharpe = float(base_sharpe)
+        improvement = float(base_sharpe - 0.0)
 
-        old_sharpe = self._safe_sharpe(old_returns)
-        new_sharpe = self._safe_sharpe(new_returns)
-        improvement = float(new_sharpe - old_sharpe)
-
-        if new_sharpe < (old_sharpe - float(self.config.max_degradation)):
+        if base_sharpe < -float(self.config.max_degradation):
             recommendation = "REJECT"
             applied_fraction = 0.0
             approved = False
-            reason = "Walk-forward reject: test Sharpe degraded beyond limit"
-        elif new_sharpe > (old_sharpe + float(self.config.min_improvement)):
-            recommendation = "APPROVE"
-            applied_fraction = 1.0
+            reason = "Walk-forward reject: raw test Sharpe below degradation limit"
+        elif base_sharpe > float(self.config.min_improvement):
             approved = True
-            reason = "Walk-forward approve: test Sharpe improvement exceeds threshold"
+            if weight_delta >= 0.02:
+                recommendation = "APPROVE"
+                applied_fraction = 1.0
+                reason = "Walk-forward approve: raw Sharpe exceeds improvement threshold"
+            else:
+                recommendation = "CONDITIONAL"
+                applied_fraction = 0.5
+                reason = "Marginal weight delta; apply partial update"
         else:
             recommendation = "CONDITIONAL"
             applied_fraction = 0.5
             approved = True
-            reason = "Walk-forward conditional: apply half delta on marginal change"
+            reason = "Walk-forward conditional: raw Sharpe in neutral band"
 
         return {
             "approved": bool(approved),
