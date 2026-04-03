@@ -238,6 +238,9 @@ _response_cache_ttl = {
     "/api/btc/system-report": 10,
     "/api/btc/signal": 10,
     "/api/btc/signal/history": 10,
+    "/api/btc/decision-intelligence": 10,
+    "/api/btc/probability": 10,
+    "/api/btc/execution-plan": 10,
     "/api/btc/news": 120,
     "/api/news": 120,
     "/api/portfolio": 15,
@@ -1162,6 +1165,33 @@ async def btc_execution_proxy():
         name="execution",
         redis_key="btc:execution",
         upstream_url="http://127.0.0.1:9000/api/execution",
+    )
+
+
+@app.get("/api/btc/decision-intelligence")
+async def btc_decision_intelligence_proxy():
+    return await _btc_proxy_payload(
+        name="decision_intelligence",
+        redis_key="btc:intelligence",
+        upstream_url="http://127.0.0.1:9000/api/intelligence",
+    )
+
+
+@app.get("/api/btc/probability")
+async def btc_probability_proxy():
+    return await _btc_proxy_payload(
+        name="probability",
+        redis_key="btc:probability",
+        upstream_url="http://127.0.0.1:9000/api/probability",
+    )
+
+
+@app.get("/api/btc/execution-plan")
+async def btc_execution_plan_proxy():
+    return await _btc_proxy_payload(
+        name="execution_plan",
+        redis_key="btc:execution_plan",
+        upstream_url="http://127.0.0.1:9000/api/execution-plan",
     )
 
 

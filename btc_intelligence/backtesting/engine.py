@@ -17,6 +17,7 @@ def run_walk_forward_backtest(data_csv: str, model_path: str) -> dict:
     df = pd.read_csv(data_csv).dropna(subset=FEATURE_COLUMNS + ['was_profitable'])
     x = df[FEATURE_COLUMNS].astype(float).values
     y = df['was_profitable'].astype(int).values
+    regime_series = df['regime'].astype(str).str.lower() if 'regime' in df.columns else None
 
     model = joblib.load(model_path)
     tscv = TimeSeriesSplit(n_splits=6)
@@ -25,10 +26,24 @@ def run_walk_forward_backtest(data_csv: str, model_path: str) -> dict:
     equity = [1.0]
     maes: list[float] = []
     mfes: list[float] = []
+    regime_stats = {
+        'bullish': {'trades': 0, 'wins': 0, 'pnl': 0.0},
+        'bearish': {'trades': 0, 'wins': 0, 'pnl': 0.0},
+        'sideways': {'trades': 0, 'wins': 0, 'pnl': 0.0},
+    }
+
+    def _regime_bucket(label: str) -> str:
+        l = str(label or '').lower()
+        if any(k in l for k in ['bull', 'breakout_up']):
+            return 'bullish'
+        if any(k in l for k in ['bear', 'breakout_down', 'panic']):
+            return 'bearish'
+        return 'sideways'
+
     for tr, te in tscv.split(x):
         model.fit(x[tr], y[tr])
         p = model.predict_proba(x[te])[:, 1]
-        for prob, label in zip(p, y[te]):
+        for i, (prob, label) in enumerate(zip(p, y[te])):
             # Conservative policy: only trade on high conviction.
             if prob < 0.6:
                 r = 0.0
@@ -43,6 +58,25 @@ def run_walk_forward_backtest(data_csv: str, model_path: str) -> dict:
             if r != 0:
                 maes.append(mae)
                 mfes.append(mfe)
+                if regime_series is not None:
+                    row_idx = int(te[i])
+                    bucket = _regime_bucket(str(regime_series.iloc[row_idx]))
+                else:
+                    bucket = 'sideways'
+                regime_stats[bucket]['trades'] += 1
+                regime_stats[bucket]['pnl'] += float(r)
+                if r > 0:
+                    regime_stats[bucket]['wins'] += 1
+
+    performance_by_regime = {}
+    for bucket, stats in regime_stats.items():
+        trades = int(stats['trades'])
+        wins = int(stats['wins'])
+        pnl = float(stats['pnl']) * 100.0
+        performance_by_regime[bucket] = {
+            'winrate': round((wins / trades * 100.0), 2) if trades > 0 else 0.0,
+            'pnl': round(pnl, 4),
+        }
 
     return {
         'trades': len([r for r in returns if r != 0]),
@@ -52,6 +86,7 @@ def run_walk_forward_backtest(data_csv: str, model_path: str) -> dict:
         'avg_mae_pct': round(float(np.mean(maes) * 100.0), 3) if maes else 0.0,
         'avg_mfe_pct': round(float(np.mean(mfes) * 100.0), 3) if mfes else 0.0,
         'final_equity': round(equity[-1], 4),
+        'performance_by_regime': performance_by_regime,
     }
 
 

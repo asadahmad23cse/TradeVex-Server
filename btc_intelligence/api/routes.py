@@ -115,6 +115,26 @@ async def get_execution_intelligence(
     return await runtime(request).execution_intelligence(direction=direction)
 
 
+@router.get('/api/decision')
+async def get_decision_intelligence(request: Request):
+    return await runtime(request).decision_intelligence()
+
+
+@router.get('/api/probability')
+async def get_probability_intelligence(request: Request):
+    return await runtime(request).probability_intelligence()
+
+
+@router.get('/api/execution-plan')
+async def get_execution_plan_intelligence(request: Request):
+    return await runtime(request).execution_plan_intelligence()
+
+
+@router.get('/api/intelligence')
+async def get_intelligence_bundle(request: Request):
+    return await runtime(request).intelligence_bundle()
+
+
 @router.websocket('/ws/live')
 async def ws_live(websocket: WebSocket):
     rt: AppRuntime = websocket.app.state.runtime  # type: ignore[attr-defined]

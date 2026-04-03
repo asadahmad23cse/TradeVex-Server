@@ -277,16 +277,17 @@ def combined_btc_signal(
     volatility_regime = str(volatility_payload.get("volatility_regime", "NORMAL")).upper()
     tradeability = str(volatility_payload.get("tradeability", "ALLOW")).upper()
     bias_4h = str(mtf_bias or "").upper().strip()
-    obi = float(orderflow_payload.get("obi", 0.0))
+    obi_raw = float(orderflow_payload.get("obi", 0.5))
+    obi_imbalance = float(orderflow_payload.get("obi_imbalance", ((obi_raw - 0.5) * 2.0)))
     entry_price = float(current_price)
     atr_pct = float(volatility_payload.get("atr_pct", volatility_payload.get("atr_multiplier_pct", 0.0)))
 
     if decision == "FAVOR_LONG":
         signal = "LONG"
-        confidence = max(0.0, min(100.0, obi * 100.0))
+        confidence = max(0.0, min(100.0, max(obi_imbalance, 0.0) * 100.0))
     elif decision == "FAVOR_SHORT":
         signal = "SHORT"
-        confidence = max(0.0, min(100.0, abs(obi) * 100.0))
+        confidence = max(0.0, min(100.0, abs(min(obi_imbalance, 0.0)) * 100.0))
     else:
         signal = "HOLD"
         confidence = 0.0
@@ -331,5 +332,7 @@ def combined_btc_signal(
         "volatility_regime": volatility_regime,
         "tradeability": tradeability,
         "mtf_bias_4h": bias_4h if bias_4h in {"BULLISH", "BEARISH"} else "UNKNOWN",
-        "obi": round(obi, 4),
+        "obi": round(obi_raw, 4),
+        "obi_imbalance": round(obi_imbalance, 6),
+        "cvd_slope": round(float(orderflow_payload.get("cvd_slope", 0.0)), 6),
     }

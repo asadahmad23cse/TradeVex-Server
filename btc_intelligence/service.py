@@ -43,6 +43,15 @@ from btc_intelligence.signals.intelligence import (
     volatility_tradeability,
 )
 from btc_intelligence.signals.probability_stacker import ProbabilityStacker
+from btc_intelligence.services import (
+    DecisionEngine,
+    DecisionEngineInput,
+    ExecutionPlanInput,
+    ExecutionPlanner,
+    OrderFlowService,
+    ProbabilityInput,
+    ProbabilityService,
+)
 from btc_intelligence.state import RedisStateStore
 from btc_intelligence.utils.notifier import TelegramNotifier
 
@@ -52,6 +61,7 @@ MIN_CONFIDENCE = 25.0
 MAX_OPEN_SIGNALS = 1
 MIN_HOLD_SECONDS = 300
 MIN_PRICE_MOVE_PCT = 0.05
+MAX_HOLD_SECONDS = 14400
 
 
 class AppRuntime:
@@ -87,6 +97,10 @@ class AppRuntime:
         self.model = ModelInference()
         self.stacker = ProbabilityStacker(settings.edge_store_path)
         self.engine = SignalEngine(self.model, self.stacker)
+        self.order_flow_service = OrderFlowService()
+        self.decision_engine = DecisionEngine()
+        self.probability_service = ProbabilityService()
+        self.execution_planner = ExecutionPlanner()
         self.paper = PaperTradeBook()
         self.hub = LiveWebSocketHub()
         self.notifier = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
@@ -106,10 +120,15 @@ class AppRuntime:
         self._last_open_signal_id: str | None = None
         self._open_signal_state: dict[str, Any] | None = None
         self._last_open_pnl_update_ts: float = 0.0
+        self._last_btc_signal_time: float = 0.0
+        self._last_btc_signal_direction: str | None = None
+        self._latest_intelligence_bundle: dict[str, Any] = {}
 
         self.signal_log_path = Path(settings.signal_log_path)
         self.signal_log_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_shared_db_schema()
+        self._last_btc_signal_time = self._get_last_signal_time_from_db()
+        self._last_btc_signal_direction = self._get_last_signal_direction_from_db()
 
     async def start(self) -> None:
         if self._running:
@@ -168,7 +187,13 @@ class AppRuntime:
                 if last_close <= int(snapshot.get('last_feature_eval_close_time', 0)):
                     self._mark_to_market(snapshot)
                     state = build_feature_state(snapshot)
-                    await self._publish_intelligence_state(snapshot, state)
+                    regime = classify_regime(snapshot, state)
+                    await self._publish_intelligence_state(
+                        snapshot,
+                        state,
+                        regime_name=regime.regime,
+                        signal_payload=snapshot.get('latest_signal', {}),
+                    )
                     await asyncio.sleep(2)
                     continue
 
@@ -193,7 +218,12 @@ class AppRuntime:
                 await self.buffer.mark_feature_eval(last_close)
                 await self._append_signal_log(payload)
                 await self.hub.broadcast(payload)
-                await self._publish_intelligence_state(snapshot, state)
+                await self._publish_intelligence_state(
+                    snapshot,
+                    state,
+                    regime_name=regime.regime,
+                    signal_payload=payload,
+                )
 
                 self._handle_paper_trade(payload, snapshot)
 
@@ -233,6 +263,7 @@ class AppRuntime:
                         ticker TEXT,
                         signal TEXT,
                         confidence REAL,
+                        quality_score REAL,
                         outcome TEXT,
                         pnl_pct REAL,
                         mfe_pct REAL,
@@ -253,6 +284,8 @@ class AppRuntime:
                 )
                 for ddl in (
                     "ALTER TABLE signals ADD COLUMN ticker TEXT",
+                    "ALTER TABLE signals ADD COLUMN confidence REAL",
+                    "ALTER TABLE signals ADD COLUMN quality_score REAL DEFAULT 0",
                     "ALTER TABLE signals ADD COLUMN outcome TEXT",
                     "ALTER TABLE signals ADD COLUMN pnl_pct REAL",
                     "ALTER TABLE signals ADD COLUMN result TEXT",
@@ -313,6 +346,53 @@ class AppRuntime:
         except Exception:
             return 0.0
 
+    def _get_last_signal_direction_from_db(self) -> str | None:
+        try:
+            with sqlite3.connect(self._shared_signals_db) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT signal
+                    FROM signals
+                    WHERE ticker = 'BTCUSDT'
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+                if not row or row[0] is None:
+                    return None
+                side = str(row[0]).upper().strip()
+                return side if side else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _compute_signal_quality(
+        confidence: float,
+        obi: float,
+        cvd_slope: float,
+        vol_regime: str,
+        mtf_bias: str,
+    ) -> float:
+        score = 0.0
+        score += min(float(confidence) * 0.4, 40.0)
+        score += min(abs(float(obi)) * 20.0, 20.0)
+        if float(cvd_slope) > 0:
+            score += 20.0
+
+        regime = str(vol_regime or "").upper()
+        if regime == 'NORMAL':
+            score += 10.0
+        elif regime == 'EXPANSION':
+            score += 5.0
+
+        bias = str(mtf_bias or "").upper().strip()
+        if bias and bias != 'UNKNOWN':
+            score += 10.0
+
+        return round(score, 1)
+
     @staticmethod
     def _extract_current_price(snapshot: dict[str, Any]) -> float:
         candles_1m = snapshot.get('candles', {}).get('1m', [])
@@ -334,6 +414,173 @@ class AppRuntime:
             return ((entry_price - current_price) / entry_price) * 100.0
         return ((current_price - entry_price) / entry_price) * 100.0
 
+    @staticmethod
+    def _normalize_regime_label(regime_name: str) -> str:
+        r = str(regime_name or "").strip().lower()
+        if not r:
+            return "SIDEWAYS"
+        mapping = {
+            "bullish_trend": "BULLISH",
+            "bearish_trend": "BEARISH",
+            "sideways_range": "SIDEWAYS",
+            "breakout_up": "BULLISH_BREAKOUT",
+            "breakout_down": "BEARISH_BREAKOUT",
+            "panic_liquidation": "PANIC",
+        }
+        return mapping.get(r, r.upper())
+
+    @staticmethod
+    def _derive_momentum_score(state) -> float:
+        tf = state.price_action.tf_15m
+        price = max(float(tf.price), 1e-9)
+        ema21_dist = (float(tf.price) - float(tf.ema21)) / price
+        ema50_dist = (float(tf.price) - float(tf.ema50)) / price
+        tf_alignment = (float(state.price_action.alignment_long) - float(state.price_action.alignment_short)) / 3.0
+        raw = (0.45 * np.tanh(ema21_dist * 180.0)) + (0.35 * np.tanh(ema50_dist * 120.0)) + (0.20 * tf_alignment)
+        return float(np.clip(raw, -1.0, 1.0))
+
+    @staticmethod
+    def _derive_cost_score(execution_payload: dict[str, Any]) -> float:
+        spread = max(float(execution_payload.get("spread_pct", 0.0)), 0.0)
+        slippage = max(float(execution_payload.get("slippage_pct", 0.0)), 0.0)
+        spread_ratio = min(spread / max(settings.spread_reject_pct, 1e-6), 3.0)
+        slippage_ratio = min(slippage / max(settings.slippage_reject_pct, 1e-6), 3.0)
+        penalty = (0.55 * spread_ratio) + (0.45 * slippage_ratio)
+        score = 1.0 - penalty
+        if not bool(execution_payload.get("accepted", False)):
+            score -= 0.25
+        return float(np.clip(score, -1.0, 1.0))
+
+    @staticmethod
+    def _derive_liquidity_score(depth: dict[str, Any]) -> float:
+        bids = depth.get("bids", []) if isinstance(depth, dict) else []
+        asks = depth.get("asks", []) if isinstance(depth, dict) else []
+        if not bids or not asks:
+            return 0.0
+        try:
+            best_bid = float(bids[0][0])
+            best_ask = float(asks[0][0])
+            mid = (best_bid + best_ask) / 2.0 if best_bid > 0 and best_ask > 0 else 0.0
+            spread_pct = ((best_ask - best_bid) / mid * 100.0) if mid > 0 else 10.0
+            bid_notional = sum(float(px) * float(qty) for px, qty in bids[:12])
+            ask_notional = sum(float(px) * float(qty) for px, qty in asks[:12])
+            depth_notional = bid_notional + ask_notional
+            spread_score = max(0.0, 1.0 - (spread_pct / max(settings.spread_reject_pct, 1e-6)))
+            depth_score = min(depth_notional / 5_000_000.0, 1.0)
+            return float(np.clip((0.55 * spread_score) + (0.45 * depth_score), 0.0, 1.0))
+        except Exception:
+            return 0.0
+
+    def _compute_intelligence_bundle(
+        self,
+        snapshot: dict[str, Any],
+        state,
+        regime_name: str,
+        signal_payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        current_price = self._extract_current_price(snapshot)
+
+        flow_metrics = self.order_flow_service.analyze(
+            trades=list(snapshot.get("agg_trades", [])),
+            depth=snapshot.get("depth", {}),
+        ).to_dict()
+        orderflow_payload = order_flow_decision_state(state.order_flow)
+        orderflow_payload.update(
+            {
+                "cvd_trend": flow_metrics.get("cvd_trend", "FLAT"),
+                "cvd_value": flow_metrics.get("cvd_value", 0.0),
+                "cvd_slope": flow_metrics.get("cvd_slope", orderflow_payload.get("cvd_slope", 0.0)),
+                "obi_imbalance": flow_metrics.get("obi_imbalance", 0.0),
+                "obi": round(0.5 + (float(flow_metrics.get("obi_imbalance", 0.0)) / 2.0), 4),
+                "aggression_buy_pct": flow_metrics.get("aggression_buy_pct", 50.0),
+                "aggression_sell_pct": flow_metrics.get("aggression_sell_pct", 50.0),
+                "absorption_levels": flow_metrics.get("absorption_levels", []),
+                "flow_score": flow_metrics.get("flow_score", 0.0),
+            }
+        )
+
+        vol_payload = volatility_tradeability(state.volatility)
+        vol_payload["regime"] = vol_payload.get("volatility_regime", "NORMAL")
+
+        preferred_direction = "LONG"
+        if str(orderflow_payload.get("decision_state", "")).upper() == "FAVOR_SHORT":
+            preferred_direction = "SHORT"
+
+        execution_payload = self._build_execution_payload(snapshot=snapshot, state=state, direction=preferred_direction)
+
+        momentum_score = self._derive_momentum_score(state)
+        cost_score = self._derive_cost_score(execution_payload)
+        normalized_regime = self._normalize_regime_label(regime_name)
+
+        decision_output = self.decision_engine.evaluate(
+            DecisionEngineInput(
+                regime=normalized_regime,
+                cvd_slope=float(orderflow_payload.get("cvd_slope", 0.0)),
+                obi_imbalance=float(orderflow_payload.get("obi_imbalance", 0.0)),
+                volatility_regime=str(vol_payload.get("volatility_regime", "NORMAL")),
+                cost_score=cost_score,
+                momentum_score=momentum_score,
+                aggression_buy_pct=float(orderflow_payload.get("aggression_buy_pct", 50.0)),
+                flow_score=float(orderflow_payload.get("flow_score", 0.0)),
+            )
+        )
+        decision_payload = {
+            **decision_output,
+            "regime": normalized_regime,
+            "momentum_score": round(momentum_score, 6),
+            "cost_score": round(cost_score, 6),
+            "as_of_utc": now_iso,
+        }
+
+        probability_payload = self.probability_service.estimate(
+            ProbabilityInput(
+                momentum_score=momentum_score,
+                flow_score=float(orderflow_payload.get("flow_score", 0.0)),
+                volatility_regime=str(vol_payload.get("volatility_regime", "NORMAL")),
+                regime=normalized_regime,
+            )
+        )
+        probability_payload["as_of_utc"] = now_iso
+
+        liquidity_score = self._derive_liquidity_score(snapshot.get("depth", {}))
+        planned_direction = str(decision_payload.get("decision", "HOLD")).upper()
+        if planned_direction not in {"LONG", "SHORT"}:
+            planned_direction = preferred_direction
+        execution_plan_payload = self.execution_planner.plan(
+            ExecutionPlanInput(
+                current_price=float(current_price),
+                atr_pct=float(vol_payload.get("atr_pct", 0.0)),
+                volatility_regime=str(vol_payload.get("volatility_regime", "NORMAL")),
+                liquidity_score=liquidity_score,
+                direction=planned_direction,
+            )
+        )
+        execution_plan_payload["as_of_utc"] = now_iso
+
+        if signal_payload is not None and isinstance(signal_payload, dict):
+            net_alpha = float(signal_payload.get("net_alpha", signal_payload.get("net_alpha_score", 0.0)) or 0.0)
+        else:
+            net_alpha = 0.0
+
+        aggregate_payload = {
+            "decision_engine": decision_payload,
+            "order_flow": orderflow_payload,
+            "decision_breakdown": decision_payload.get("decision_breakdown", {}),
+            "probability": probability_payload,
+            "execution_gate": execution_payload,
+            "execution_plan": execution_plan_payload,
+            "trade_verdict": decision_payload.get("trade_verdict", {}),
+            "factor_contributions": decision_payload.get("factor_contributions", []),
+            "trade_triggers": decision_payload.get("trade_triggers", []),
+            "regime": normalized_regime,
+            "momentum_score": round(momentum_score, 6),
+            "cost_score": round(cost_score, 6),
+            "net_alpha": round(net_alpha, 6),
+            "as_of_utc": now_iso,
+        }
+        return aggregate_payload
+
     def _next_btc_signal_id(self, cur: sqlite3.Cursor) -> str:
         cur.execute("SELECT COUNT(*) FROM signals WHERE ticker = 'BTCUSDT'")
         count = int((cur.fetchone() or [0])[0] or 0)
@@ -343,6 +590,7 @@ class AppRuntime:
         self,
         signal: str,
         confidence: float,
+        quality_score: float,
         size_multiplier: float,
         signal_note: str,
         entry_price: float,
@@ -370,15 +618,16 @@ class AppRuntime:
                     cur.execute(
                         """
                         INSERT INTO signals (
-                            ticker, signal, confidence, outcome, pnl_pct,
+                            ticker, signal, confidence, quality_score, outcome, pnl_pct,
                             entry_price, sl, tp1, tp2, tp3, rr_ratio,
                             size_multiplier, signal_note, timestamp
                         )
-                        VALUES ('BTCUSDT', ?, ?, 'OPEN', 0.0, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+                        VALUES ('BTCUSDT', ?, ?, ?, 'OPEN', 0.0, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                         """,
                         (
                             str(signal).upper(),
                             float(confidence),
+                            float(quality_score),
                             float(entry_price),
                             float(sl),
                             float(tp1),
@@ -402,7 +651,7 @@ class AppRuntime:
                     """
                     INSERT INTO signals (
                         signal_id, ticker, timestamp, asset, asset_class, timeframe,
-                        signal, strength, confidence, alpha_score, regime,
+                        signal, strength, confidence, quality_score, alpha_score, regime,
                         entry_price, stop_loss, take_profit, sl, tp1, tp2, tp3, rr_ratio, position_size_pct,
                         kelly_fraction, hurst_exponent, factor_scores, ic_weights,
                         slippage_cost_pct, cost_pct, net_alpha_score, cs_alpha_score,
@@ -410,7 +659,7 @@ class AppRuntime:
                         outcome, result, pnl_pct, size_multiplier, signal_note
                     )
                     VALUES (?, 'BTCUSDT', ?, 'BTCUSDT', 'crypto', 'intraday',
-                            ?, 'MEDIUM', ?, 0.0, 'SIDEWAYS',
+                            ?, 'MEDIUM', ?, ?, 0.0, 'SIDEWAYS',
                             ?, ?, ?, ?, ?, ?, ?, ?, 0.0,
                             0.0, NULL, '{}', '{}',
                             0.0, 0.0, 0.0, 0.0,
@@ -422,6 +671,7 @@ class AppRuntime:
                         now_iso,
                         str(signal).upper(),
                         float(confidence),
+                        float(quality_score),
                         float(entry_price),
                         float(sl),
                         float(tp1),
@@ -595,6 +845,13 @@ class AppRuntime:
                     if 'result' in cols:
                         set_parts.append("result = ?")
                         params.append(out)
+                    if 'exit_price' in cols:
+                        set_parts.append("exit_price = ?")
+                        params.append(float(current_price))
+                    if 'duration_seconds' in cols:
+                        set_parts.append(
+                            "duration_seconds = CAST((strftime('%s','now') - strftime('%s', COALESCE(timestamp, datetime('now')))) AS INTEGER)"
+                        )
                     params.append(int(rowid))
                     cur.execute(
                         f"UPDATE signals SET {', '.join(set_parts)} WHERE rowid = ?",
@@ -612,6 +869,97 @@ class AppRuntime:
         except Exception as exc:
             logger.error('Failed to close BTC open signals: %s', exc, exc_info=True)
             return 0
+
+    @staticmethod
+    def _parse_signal_timestamp(raw_ts: Any) -> datetime | None:
+        if raw_ts is None:
+            return None
+        raw = str(raw_ts).strip()
+        if not raw:
+            return None
+        try:
+            if raw.endswith('Z'):
+                dt = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+            else:
+                dt = datetime.fromisoformat(raw)
+        except Exception:
+            try:
+                dt = datetime.strptime(raw, '%Y-%m-%d %H:%M:%S')
+            except Exception:
+                return None
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+
+    def _close_signal(
+        self,
+        signal_id: str,
+        outcome: str,
+        current_price: float,
+        entry_price: float,
+        direction: str,
+        hold_secs: float,
+    ) -> None:
+        side = str(direction).upper()
+        if side == 'LONG':
+            pnl = ((float(current_price) - float(entry_price)) / float(entry_price)) * 100.0
+        else:
+            pnl = ((float(entry_price) - float(current_price)) / float(entry_price)) * 100.0
+
+        out_val = str(outcome).upper()
+        try:
+            with sqlite3.connect(self._shared_signals_db) as conn:
+                cur = conn.cursor()
+                cols = self._read_signal_columns(cur)
+                set_parts: list[str] = []
+                params: list[Any] = []
+                if 'outcome' in cols:
+                    set_parts.append("outcome = ?")
+                    params.append(out_val)
+                if 'result' in cols:
+                    set_parts.append("result = ?")
+                    params.append(out_val)
+                if 'pnl_pct' in cols:
+                    set_parts.append("pnl_pct = ?")
+                    params.append(round(float(pnl), 4))
+                if 'exit_price' in cols:
+                    set_parts.append("exit_price = ?")
+                    params.append(float(current_price))
+                if 'duration_seconds' in cols:
+                    set_parts.append("duration_seconds = ?")
+                    params.append(int(max(0.0, float(hold_secs))))
+
+                if not set_parts:
+                    return
+
+                if 'signal_id' in cols:
+                    cur.execute(
+                        f"UPDATE signals SET {', '.join(set_parts)} WHERE signal_id = ?",
+                        [*params, str(signal_id)],
+                    )
+                else:
+                    cur.execute(
+                        f"UPDATE signals SET {', '.join(set_parts)} WHERE rowid = ?",
+                        [*params, int(float(signal_id))],
+                    )
+                conn.commit()
+
+            if self._open_signal_state is not None:
+                state_ref = str(self._open_signal_state.get('signal_ref', ''))
+                if state_ref and state_ref == str(signal_id):
+                    self._open_signal_state = None
+                    self._last_open_signal_id = None
+                    self._last_saved_btc_signal = 'HOLD'
+
+            logger.info(
+                "Signal closed: %s outcome=%s pnl=%.3f%% duration=%.0fs",
+                signal_id,
+                out_val,
+                pnl,
+                float(hold_secs),
+            )
+        except Exception as exc:
+            logger.error('Failed to close signal %s: %s', signal_id, exc, exc_info=True)
 
     def _refresh_btc_open_signals(self, current_price: float) -> None:
         if current_price <= 0:
@@ -655,6 +1003,7 @@ class AppRuntime:
                     tp1_expr = "COALESCE(take_profit, 0.0)"
                 else:
                     tp1_expr = "0.0"
+                ts_expr = "COALESCE(timestamp, datetime('now'))"
 
                 cur.execute(
                     f"""
@@ -665,7 +1014,7 @@ class AppRuntime:
                         {entry_expr} AS entry_price,
                         {sl_expr} AS sl,
                         {tp1_expr} AS tp1,
-                        CAST((strftime('%s','now') - strftime('%s', COALESCE(timestamp, datetime('now')))) AS INTEGER) AS hold_seconds
+                        {ts_expr} AS opened_ts
                     FROM signals
                     WHERE {ticker_expr} AND {open_expr}
                     """
@@ -674,65 +1023,98 @@ class AppRuntime:
                 if not rows:
                     return
 
-                for rowid, signal_ref, signal, entry_price, sl, tp1, hold_seconds in rows:
+                now_utc = datetime.now(timezone.utc)
+                for rowid, signal_ref, signal, entry_price, sl, tp1, opened_ts in rows:
+                    sid = str(signal_ref if signal_ref is not None else rowid)
                     side = str(signal or 'HOLD').upper()
                     if side not in {'LONG', 'SHORT'}:
                         continue
                     entry = float(entry_price or 0.0)
                     if entry <= 0:
                         continue
+
+                    open_dt = self._parse_signal_timestamp(opened_ts)
+                    if open_dt is None:
+                        continue
+                    hold_secs = max(0.0, (now_utc - open_dt).total_seconds())
+
                     self._update_mfe_mae(
-                        signal_id=str(signal_ref),
+                        signal_id=sid,
                         current_price=float(current_price),
                         entry_price=float(entry),
                         signal_direction=side,
                     )
+
+                    if hold_secs > MAX_HOLD_SECONDS:
+                        logger.info(
+                            "%s: Max hold %ss exceeded, closing at market",
+                            sid,
+                            MAX_HOLD_SECONDS,
+                        )
+                        self._close_signal(sid, 'TIMEOUT', float(current_price), float(entry), side, hold_secs)
+                        continue
+
+                    if hold_secs < MIN_HOLD_SECONDS:
+                        logger.debug(
+                            "%s: hold=%.0fs < %ss minimum, skip SL/TP check",
+                            sid,
+                            hold_secs,
+                            MIN_HOLD_SECONDS,
+                        )
+                        continue
+
+                    move_pct = abs((float(current_price) - float(entry)) / float(entry)) * 100.0
+                    if move_pct < MIN_PRICE_MOVE_PCT:
+                        logger.debug(
+                            "%s: move=%.3f%% < %.2f%% minimum, skip",
+                            sid,
+                            move_pct,
+                            MIN_PRICE_MOVE_PCT,
+                        )
+                        continue
+
                     sl_val = float(sl or 0.0)
                     tp1_val = float(tp1 or 0.0)
-                    hold_secs = int(max(0, float(hold_seconds or 0)))
-                    price_move_pct = abs(((float(current_price) - float(entry)) / float(entry)) * 100.0)
-                    can_check_exit = hold_secs >= MIN_HOLD_SECONDS and price_move_pct > MIN_PRICE_MOVE_PCT
-
                     outcome: str | None = None
-                    if can_check_exit:
-                        if side == 'LONG':
-                            if sl_val > 0 and current_price <= sl_val:
-                                outcome = 'SL'
-                                logger.info("BTC SL hit: %s entry=%s sl=%s", side, format(entry, "g"), format(sl_val, "g"))
-                            elif tp1_val > 0 and current_price >= tp1_val:
-                                outcome = 'TP1'
-                                logger.info("BTC TP1 hit: %s entry=%s tp1=%s", side, format(entry, "g"), format(tp1_val, "g"))
-                        else:
-                            if sl_val > 0 and current_price >= sl_val:
-                                outcome = 'SL'
-                                logger.info("BTC SL hit: %s entry=%s sl=%s", side, format(entry, "g"), format(sl_val, "g"))
-                            elif tp1_val > 0 and current_price <= tp1_val:
-                                outcome = 'TP1'
-                                logger.info("BTC TP1 hit: %s entry=%s tp1=%s", side, format(entry, "g"), format(tp1_val, "g"))
+                    if side == 'LONG':
+                        if sl_val > 0 and current_price <= sl_val:
+                            outcome = 'SL'
+                        elif tp1_val > 0 and current_price >= tp1_val:
+                            outcome = 'TP1'
+                    else:
+                        if sl_val > 0 and current_price >= sl_val:
+                            outcome = 'SL'
+                        elif tp1_val > 0 and current_price <= tp1_val:
+                            outcome = 'TP1'
 
-                    pnl_pct = self._calc_signal_pnl_pct(side, entry, current_price)
-
-                    set_parts = ["pnl_pct = ?"]
-                    params: list[Any] = [float(pnl_pct)]
                     if outcome is not None:
-                        if 'outcome' in cols:
-                            set_parts.append("outcome = ?")
-                            params.append(outcome)
-                        if 'result' in cols:
-                            set_parts.append("result = ?")
-                            params.append(outcome)
-                    params.append(int(rowid))
-                    cur.execute(
-                        f"UPDATE signals SET {', '.join(set_parts)} WHERE rowid = ?",
-                        params,
-                    )
+                        self._close_signal(sid, outcome, float(current_price), float(entry), side, hold_secs)
+                        continue
 
-                    if outcome is not None and self._open_signal_state is not None:
-                        state_ref = str(self._open_signal_state.get('signal_ref', ''))
-                        if state_ref and state_ref == str(signal_ref):
-                            self._open_signal_state = None
-                            self._last_open_signal_id = None
-                            self._last_saved_btc_signal = 'HOLD'
+                    pnl = self._calc_signal_pnl_pct(side, float(entry), float(current_price))
+                    set_parts: list[str] = []
+                    params: list[Any] = []
+                    if 'pnl_pct' in cols:
+                        set_parts.append("pnl_pct = ?")
+                        params.append(round(float(pnl), 4))
+                    if 'exit_price' in cols:
+                        set_parts.append("exit_price = ?")
+                        params.append(float(current_price))
+                    if 'duration_seconds' in cols:
+                        set_parts.append("duration_seconds = ?")
+                        params.append(int(hold_secs))
+                    if 'mfe_pct' in cols:
+                        set_parts.append("mfe_pct = MAX(COALESCE(mfe_pct, 0), ?)")
+                        params.append(max(float(pnl), 0.0))
+                    if 'mae_pct' in cols:
+                        set_parts.append("mae_pct = MAX(COALESCE(mae_pct, 0), ?)")
+                        params.append(max(-float(pnl), 0.0))
+
+                    if set_parts:
+                        cur.execute(
+                            f"UPDATE signals SET {', '.join(set_parts)} WHERE rowid = ?",
+                            [*params, int(rowid)],
+                        )
 
                 conn.commit()
         except Exception as exc:
@@ -811,10 +1193,28 @@ class AppRuntime:
         if confidence < MIN_CONFIDENCE:
             return
 
+        obi = float(data.get('obi', 0.0))
+        cvd_slope = float(data.get('cvd_slope', 0.0))
+        vol_regime = str(data.get('volatility_regime', data.get('regime', ''))).upper()
+        mtf_bias = str(data.get('mtf_bias_4h', data.get('mtf_bias', ''))).upper()
+        quality_score = self._compute_signal_quality(
+            confidence=confidence,
+            obi=obi,
+            cvd_slope=cvd_slope,
+            vol_regime=vol_regime,
+            mtf_bias=mtf_bias,
+        )
+        if quality_score < 30.0:
+            logger.debug('Low quality signal skipped: score=%.1f', quality_score)
+            return
+
         # Gate 3/4: DB-backed last-signal timestamp and 300s minimum throttle
-        last_time = await asyncio.to_thread(self._get_last_signal_time_from_db)
+        db_last_time = await asyncio.to_thread(self._get_last_signal_time_from_db)
+        if db_last_time > self._last_btc_signal_time:
+            self._last_btc_signal_time = float(db_last_time)
+        last_time = float(self._last_btc_signal_time)
         now_ts = float(time_module.time())
-        elapsed = now_ts - float(last_time) if float(last_time) > 0 else float('inf')
+        elapsed = now_ts - last_time if last_time > 0 else float('inf')
         if elapsed < MIN_HOLD_SECONDS:
             logger.debug(
                 'Throttled: only %.0fs since last signal. Need %ss.',
@@ -824,10 +1224,11 @@ class AppRuntime:
             return
 
         logger.info(
-            'Signal allowed: %s conf=%.1f%% elapsed=%.0fs',
+            'Signal allowed: %s conf=%.1f%% q=%.1f elapsed=%.0fs',
             signal,
             confidence,
-            elapsed if math.isfinite(elapsed) else 0.0,
+            quality_score,
+            0.0 if elapsed == float('inf') else elapsed,
         )
 
         size_multiplier = float(data.get('size_multiplier', 1.0))
@@ -854,6 +1255,7 @@ class AppRuntime:
             self._insert_btc_signal_row,
             signal,
             confidence,
+            quality_score,
             size_multiplier,
             signal_note,
             entry_price,
@@ -876,7 +1278,10 @@ class AppRuntime:
             }
             self._last_open_signal_id = str(insert_meta.get('signal_ref', ''))
             self._last_saved_btc_signal = signal
+            self._last_btc_signal_time = now_ts
+            self._last_btc_signal_direction = signal
             logger.info('Saved: %s %s', str(insert_meta.get('signal_ref', '')), signal)
+
     async def _maybe_update_open_signal_pnl(self, current_price: float) -> None:
         if self._open_signal_state is None:
             return
@@ -894,26 +1299,51 @@ class AppRuntime:
         )
         self._last_open_pnl_update_ts = now_ts
 
-    async def _publish_intelligence_state(self, snapshot: dict[str, Any], state) -> None:
-        if not (settings.redis_state_enabled and self.redis_state.connected):
-            return
-        orderflow_payload = order_flow_decision_state(state.order_flow)
+    async def _publish_intelligence_state(
+        self,
+        snapshot: dict[str, Any],
+        state,
+        regime_name: str = "",
+        signal_payload: dict[str, Any] | None = None,
+    ) -> None:
+        intelligence_bundle = self._compute_intelligence_bundle(
+            snapshot=snapshot,
+            state=state,
+            regime_name=regime_name,
+            signal_payload=signal_payload,
+        )
+        self._latest_intelligence_bundle = intelligence_bundle
+
+        orderflow_payload = dict(intelligence_bundle.get("order_flow", {}))
         orderflow_payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+
         vol_payload = volatility_tradeability(state.volatility)
-        vol_payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        vol_payload.update(
+            {
+                "regime": vol_payload.get("volatility_regime", "NORMAL"),
+                "as_of_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
+            }
+        )
+
         volume_payload = trade_based_volume_profile(
             agg_trades=snapshot.get('agg_trades', []),
             window_minutes=45,
             n_bins=24,
         )
         volume_payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
-        preferred_direction = 'LONG' if str(orderflow_payload.get('decision_state', '')).upper() != 'FAVOR_SHORT' else 'SHORT'
-        execution_payload = self._build_execution_payload(snapshot=snapshot, state=state, direction=preferred_direction)
 
-        await self.redis_state.set_json('orderflow', orderflow_payload, ttl_seconds=10)
-        await self.redis_state.set_json('volatility', vol_payload, ttl_seconds=10)
-        await self.redis_state.set_json('volprofile', volume_payload, ttl_seconds=10)
-        await self.redis_state.set_json('execution', execution_payload, ttl_seconds=10)
+        execution_payload = dict(intelligence_bundle.get("execution_gate", {}))
+
+        if settings.redis_state_enabled and self.redis_state.connected:
+            await self.redis_state.set_json('orderflow', orderflow_payload, ttl_seconds=10)
+            await self.redis_state.set_json('volatility', vol_payload, ttl_seconds=10)
+            await self.redis_state.set_json('volprofile', volume_payload, ttl_seconds=10)
+            await self.redis_state.set_json('execution', execution_payload, ttl_seconds=10)
+            await self.redis_state.set_json('decision', intelligence_bundle.get("decision_engine", {}), ttl_seconds=10)
+            await self.redis_state.set_json('probability', intelligence_bundle.get("probability", {}), ttl_seconds=10)
+            await self.redis_state.set_json('execution_plan', intelligence_bundle.get("execution_plan", {}), ttl_seconds=10)
+            await self.redis_state.set_json('intelligence', intelligence_bundle, ttl_seconds=10)
+
         current_price = self._extract_current_price(snapshot)
         mtf_bias = await self._read_mtf_bias()
         combined_payload = combined_btc_signal(
@@ -922,8 +1352,14 @@ class AppRuntime:
             current_price=current_price,
             mtf_bias=mtf_bias,
         )
+        combined_payload["decision_engine"] = intelligence_bundle.get("decision_engine", {})
+        combined_payload["trade_verdict"] = intelligence_bundle.get("trade_verdict", {})
+        combined_payload["probability"] = intelligence_bundle.get("probability", {})
+        combined_payload["execution_plan"] = intelligence_bundle.get("execution_plan", {})
+        combined_payload["trade_triggers"] = intelligence_bundle.get("trade_triggers", [])
         combined_payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
-        await self.redis_state.set_json('signal', combined_payload, ttl_seconds=10)
+        if settings.redis_state_enabled and self.redis_state.connected:
+            await self.redis_state.set_json('signal', combined_payload, ttl_seconds=10)
         await self._persist_btc_signal_from_redis(current_price=current_price)
         await asyncio.to_thread(self._refresh_btc_open_signals, current_price)
 
@@ -1201,42 +1637,79 @@ class AppRuntime:
         ]
         return {'symbol': 'BTCUSDT', 'timeframe': timeframe, 'rows': parsed}
 
-    async def orderflow_intelligence(self) -> dict[str, Any]:
+    async def _live_intelligence_bundle(self) -> dict[str, Any]:
         snap = await self.buffer.snapshot()
         if not self._has_required_candles(snap):
-            return {'status': 'warming_up', 'decision_state': 'NO_TRADE'}
-        state = build_feature_state(snap)
-        payload = order_flow_decision_state(state.order_flow)
-        vol_payload = volatility_tradeability(state.volatility)
-        current_price = self._extract_current_price(snap)
-        mtf_bias = await self._read_mtf_bias()
-        combined = combined_btc_signal(
-            payload,
-            vol_payload,
-            current_price=current_price,
-            mtf_bias=mtf_bias,
-        )
-        payload.update(
-            {
-                "signal": combined.get("signal", "HOLD"),
-                "confidence": combined.get("confidence", 0.0),
-                "entry_price": combined.get("entry_price", 0.0),
-                "sl": combined.get("sl", 0.0),
-                "tp1": combined.get("tp1", 0.0),
-                "tp2": combined.get("tp2", 0.0),
-                "tp3": combined.get("tp3", 0.0),
-                "rr_ratio": combined.get("rr_ratio", 1.0),
-                "size_multiplier": combined.get("size_multiplier", 1.0),
-                "signal_note": combined.get("signal_note", "normal"),
-                "volatility_regime": combined.get("volatility_regime", vol_payload.get("volatility_regime", "NORMAL")),
-                "tradeability": combined.get("tradeability", vol_payload.get("tradeability", "ALLOW")),
-                "mtf_bias_4h": combined.get("mtf_bias_4h", "UNKNOWN"),
+            return {
+                "status": "warming_up",
+                "as_of_utc": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             }
+        state = build_feature_state(snap)
+        regime = classify_regime(snap, state)
+        latest_signal = snap.get("latest_signal", {})
+        bundle = self._compute_intelligence_bundle(
+            snapshot=snap,
+            state=state,
+            regime_name=str(regime.regime),
+            signal_payload=latest_signal if isinstance(latest_signal, dict) else None,
         )
-        payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        self._latest_intelligence_bundle = bundle
+        return bundle
+
+    async def orderflow_intelligence(self) -> dict[str, Any]:
+        bundle = await self._live_intelligence_bundle()
+        if bundle.get("status") == "warming_up":
+            return {"status": "warming_up", "decision_state": "NO_TRADE"}
+        payload = dict(bundle.get("order_flow", {}))
+        decision_block = bundle.get("decision_engine", {})
+        payload["decision"] = decision_block.get("decision", "HOLD")
+        payload["confidence"] = decision_block.get("confidence", 0.0)
+        payload["reason"] = decision_block.get("reason", payload.get("reason", ""))
+        payload["trade_triggers"] = decision_block.get("trade_triggers", [])
+        payload["blockers"] = decision_block.get("blockers", [])
+        payload["as_of_utc"] = bundle.get("as_of_utc") or datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         if settings.redis_state_enabled and self.redis_state.connected:
             await self.redis_state.set_json('orderflow', payload, ttl_seconds=10)
         return payload
+
+    async def decision_intelligence(self) -> dict[str, Any]:
+        bundle = await self._live_intelligence_bundle()
+        if bundle.get("status") == "warming_up":
+            return {"status": "warming_up", "decision": "HOLD"}
+        payload = dict(bundle.get("decision_engine", {}))
+        payload["decision_breakdown"] = bundle.get("decision_breakdown", {})
+        payload["factor_contributions"] = bundle.get("factor_contributions", [])
+        payload["trade_verdict"] = bundle.get("trade_verdict", {})
+        payload["as_of_utc"] = bundle.get("as_of_utc")
+        if settings.redis_state_enabled and self.redis_state.connected:
+            await self.redis_state.set_json('decision', payload, ttl_seconds=10)
+        return payload
+
+    async def probability_intelligence(self) -> dict[str, Any]:
+        bundle = await self._live_intelligence_bundle()
+        if bundle.get("status") == "warming_up":
+            return {"status": "warming_up", "up_prob": 0.0, "down_prob": 0.0, "sideways_prob": 100.0}
+        payload = dict(bundle.get("probability", {}))
+        if settings.redis_state_enabled and self.redis_state.connected:
+            await self.redis_state.set_json('probability', payload, ttl_seconds=10)
+        return payload
+
+    async def execution_plan_intelligence(self) -> dict[str, Any]:
+        bundle = await self._live_intelligence_bundle()
+        if bundle.get("status") == "warming_up":
+            return {"status": "warming_up", "slippage_risk": "HIGH"}
+        payload = dict(bundle.get("execution_plan", {}))
+        if settings.redis_state_enabled and self.redis_state.connected:
+            await self.redis_state.set_json('execution_plan', payload, ttl_seconds=10)
+        return payload
+
+    async def intelligence_bundle(self) -> dict[str, Any]:
+        bundle = await self._live_intelligence_bundle()
+        if bundle.get("status") == "warming_up":
+            return bundle
+        if settings.redis_state_enabled and self.redis_state.connected:
+            await self.redis_state.set_json('intelligence', bundle, ttl_seconds=10)
+        return bundle
 
     async def volume_profile_intelligence(self, window_minutes: int = 45, bins: int = 24) -> dict[str, Any]:
         snap = await self.buffer.snapshot()

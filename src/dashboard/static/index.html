@@ -409,6 +409,7 @@ body{
 .history-row-tp{border-left:3px solid #00c853;background:rgba(0,200,83,0.04);}
 .history-row-sl{border-left:3px solid #ff4d4d;background:rgba(255,23,68,0.05);}
 .history-row-open{border-left:3px solid #58a6ff;background:rgba(88,166,255,0.05);animation:openPulse 1.8s ease-in-out infinite;}
+.history-row-timeout{border-left:3px solid #94a3b8;background:rgba(148,163,184,0.05);}
 .history-row-closed{border-left:3px solid #6b7280;background:rgba(148,163,184,0.03);}
 @keyframes openPulse{
   0%{box-shadow:inset 0 0 0 rgba(88,166,255,0.00);}
@@ -536,6 +537,36 @@ body{
 .sqs-comp-bar{flex:1;height:5px;margin:0 8px;border-radius:999px;background:rgba(148,163,184,.15);overflow:hidden;}
 .sqs-comp-fill{height:100%;border-radius:999px;transition:width .3s ease;}
 .sqs-comp-val{font-family:"JetBrains Mono",monospace;font-weight:700;color:#e6edf3;min-width:42px;text-align:right;}
+.mini-bar{
+  height:8px;
+  border-radius:999px;
+  background:rgba(148,163,184,.15);
+  border:1px solid rgba(148,163,184,.2);
+  overflow:hidden;
+}
+.mini-bar-fill{
+  height:100%;
+  width:0%;
+  transition:width .25s ease;
+}
+.trigger-list{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  margin-top:8px;
+}
+.trigger-item{
+  font-size:11px;
+  color:#d0d9e6;
+  border:1px solid rgba(148,163,184,.2);
+  border-radius:8px;
+  background:rgba(9,14,24,.55);
+  padding:6px 8px;
+}
+.trigger-item.blocker{
+  border-color:rgba(255,77,77,.35);
+  color:#ff9a9a;
+}
 
 /* ── Phase-1: Constraint Flags ───────────────────────────── */
 .constraint-flags{
@@ -916,14 +947,65 @@ body{
         <div class="panel-row"><span class="panel-label">Session</span><span id="mo-session" class="panel-value">—</span></div>
       </div>
 
-      <!-- Phase-1: On-chain Signal Quality Score panel -->
       <div class="info-panel" id="sqs-panel">
-        <div class="panel-title">Signal Quality Score</div>
-        <div class="panel-subtitle">On-chain · sentiment · regime · momentum</div>
-        <div id="sqs-grade" class="sqs-grade">—</div>
-        <div style="text-align:center;font-size:11px;color:#8f9db3;margin-bottom:4px;" id="sqs-score-val">— / 100</div>
+        <div class="panel-title">Trade Verdict</div>
+        <div class="panel-subtitle">Execution permission with explainable gate states</div>
+        <div id="sqs-grade" class="sqs-grade">AVOID</div>
+        <div style="text-align:center;font-size:11px;color:#8f9db3;margin-bottom:4px;" id="sqs-score-val">Decision confidence —</div>
         <div class="sqs-score-bar"><div id="sqs-score-fill" class="sqs-score-fill" style="width:0%"></div></div>
         <div id="sqs-components"></div>
+      </div>
+
+      <div class="info-panel" id="trigger-panel">
+        <div class="panel-title">Trade Trigger Box</div>
+        <div class="panel-subtitle">What must happen before a validated entry</div>
+        <div class="panel-row"><span class="panel-label">Decision</span><span id="trigger-decision" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Primary Blocker</span><span id="trigger-blocker" class="panel-value">—</span></div>
+        <div id="trigger-list" class="trigger-list">
+          <div class="trigger-item">Awaiting intelligence feed...</div>
+        </div>
+      </div>
+
+      <div class="info-panel" id="breakdown-panel">
+        <div class="panel-title">Decision Breakdown</div>
+        <div class="panel-subtitle">Weighted contribution trace by decision engine</div>
+        <div class="panel-row"><span class="panel-label">Regime Score</span><span id="db-regime" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Momentum Score</span><span id="db-momentum" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Flow Score</span><span id="db-flow" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Cost Score</span><span id="db-cost" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Final Score</span><span id="db-final" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Explanation</span><span id="db-explain" class="panel-value">—</span></div>
+      </div>
+
+      <div class="info-panel" id="probability-panel">
+        <div class="panel-title">Probability Panel</div>
+        <div class="panel-subtitle">Normalized directional state probabilities</div>
+        <div style="display:grid; gap:8px;">
+          <div>
+            <div class="panel-row" style="padding:0 0 4px;border-bottom:none;"><span class="panel-label">UP</span><span id="prob-up-val" class="panel-value">—</span></div>
+            <div class="mini-bar"><div id="prob-up-bar" class="mini-bar-fill" style="background:#00c853;"></div></div>
+          </div>
+          <div>
+            <div class="panel-row" style="padding:0 0 4px;border-bottom:none;"><span class="panel-label">DOWN</span><span id="prob-down-val" class="panel-value">—</span></div>
+            <div class="mini-bar"><div id="prob-down-bar" class="mini-bar-fill" style="background:#ff1744;"></div></div>
+          </div>
+          <div>
+            <div class="panel-row" style="padding:0 0 4px;border-bottom:none;"><span class="panel-label">SIDEWAYS</span><span id="prob-side-val" class="panel-value">—</span></div>
+            <div class="mini-bar"><div id="prob-side-bar" class="mini-bar-fill" style="background:#2979ff;"></div></div>
+          </div>
+          <div class="panel-row"><span class="panel-label">Dominant</span><span id="prob-dominant" class="panel-value">—</span></div>
+        </div>
+      </div>
+
+      <div class="info-panel" id="execution-plan-panel">
+        <div class="panel-title">Execution Plan</div>
+        <div class="panel-subtitle">Entry/exit geometry + slippage scenario</div>
+        <div class="panel-row"><span class="panel-label">Entry Zone</span><span id="ep-entry" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Stop Loss</span><span id="ep-sl" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Take Profit</span><span id="ep-tp1" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Take Profit 2</span><span id="ep-tp2" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Expected R:R</span><span id="ep-rr" class="panel-value">—</span></div>
+        <div class="panel-row"><span class="panel-label">Slippage Risk</span><span id="ep-slip" class="panel-value">—</span></div>
       </div>
     </div>
 
@@ -985,7 +1067,25 @@ body{
         <span>| Sharpe: <b id="eq-sharpe">0.00</b></span>
         <span>| Trades: <b id="eq-trades">0</b></span>
       </div>
-      <canvas id="intel_equity_canvas" style="width:100%;height:180px;"></canvas>
+      <div style="
+    width: 100%;
+    height: 200px;
+    max-height: 200px;
+    overflow: hidden;
+    position: relative;
+    background: #0d1117;
+    border-radius: 8px;
+    border: 1px solid #1e293b;
+">
+    <canvas id="intel_equity_canvas" 
+            style="
+                width: 100% !important;
+                height: 200px !important;
+                max-height: 200px !important;
+                display: block;
+            ">
+    </canvas>
+</div>
       <div class="session-grid">
         <div class="session-card">
           <div class="session-title">Asia Session</div>
@@ -1061,6 +1161,7 @@ let sessionDayKey = null;
 let sessionHigh = null;
 let sessionLow = null;
 let latestHistorySignals = [];
+let latestDecisionIntel = null;
 const API_CACHE = new Map();
 const API_INFLIGHT = new Map();
 const sparkPrices = [];
@@ -1070,6 +1171,7 @@ const sparkCtx = sparkCanvas ? sparkCanvas.getContext("2d") : null;
 function apiTtl(url){
   if(url.includes("/api/btc/signal/history")) return 7000;
   if(url.includes("/api/btc/signal?")) return 5000;
+  if(url.includes("/api/btc/decision-intelligence")) return 9000;
   if(url.includes("/api/btc/candles")) return 15000;
   if(url.includes("/api/btc/markers")) return 60000;
   if(url.includes("/api/btc/news")) return 120000;
@@ -1433,48 +1535,111 @@ function updateOnChainSqsPanel(s){
   const fillEl = document.getElementById("sqs-score-fill");
   const compsEl = document.getElementById("sqs-components");
   if(!gradeEl || !scoreEl || !fillEl || !compsEl) return;
+  const intel = latestDecisionIntel || {};
+  const decision = intel.decision_engine || {};
+  const verdict = intel.trade_verdict || {};
+  const confidence = Number(decision.confidence ?? 0);
+  const safeConfidence = Number.isFinite(confidence) ? Math.max(0, Math.min(100, confidence)) : 0;
 
-  const sqs = (s && typeof s.on_chain_sqs === "object" && s.on_chain_sqs) ? s.on_chain_sqs : null;
-  if(!sqs){
-    gradeEl.className = "sqs-grade NA";
-    gradeEl.textContent = "NA";
-    scoreEl.textContent = "Data unavailable";
-    fillEl.style.width = "0%";
-    fillEl.style.background = "#64748b";
-    compsEl.innerHTML = `<div class="sqs-component-row"><span class="sqs-comp-label">On-chain data unavailable</span><span class="sqs-comp-val" style="color:#94a3b8">N/A</span></div>`;
-    return;
+  const finalVerdict = String(verdict.final_verdict || "AVOID").toUpperCase();
+  const verdictColor = finalVerdict === "TRADE" ? "#00c853" : "#ff4d4d";
+  gradeEl.className = "sqs-grade";
+  gradeEl.textContent = finalVerdict;
+  gradeEl.style.color = verdictColor;
+  scoreEl.textContent = `Decision confidence ${safeConfidence.toFixed(1)} / 100`;
+  fillEl.style.width = `${safeConfidence}%`;
+  fillEl.style.background = sqsColor(safeConfidence);
+
+  const regimeAlign = String(verdict.regime_alignment || "LOW").toUpperCase();
+  const liqQuality = String(verdict.liquidity_quality || "WEAK").toUpperCase();
+  const volState = String(verdict.volatility_state || "NOT_TRADEABLE").toUpperCase();
+  const decisionLabel = String(decision.decision || "HOLD").toUpperCase();
+  const reason = String(decision.reason || (s && s.reason) || "No decision reason");
+
+  compsEl.innerHTML = [
+    `<div class="sqs-component-row"><span class="sqs-comp-label">Decision</span><span class="sqs-comp-val">${escapeHtml(decisionLabel)}</span></div>`,
+    `<div class="sqs-component-row"><span class="sqs-comp-label">Regime Alignment</span><span class="sqs-comp-val">${escapeHtml(regimeAlign)}</span></div>`,
+    `<div class="sqs-component-row"><span class="sqs-comp-label">Liquidity</span><span class="sqs-comp-val">${escapeHtml(liqQuality)}</span></div>`,
+    `<div class="sqs-component-row"><span class="sqs-comp-label">Volatility</span><span class="sqs-comp-val">${escapeHtml(volState)}</span></div>`,
+    `<div class="sqs-component-row"><span class="sqs-comp-label">Reason</span><span class="sqs-comp-val" style="max-width:180px;white-space:normal;text-align:right;">${escapeHtml(reason)}</span></div>`,
+  ].join("");
+}
+
+function setSimpleText(id, text, color){
+  const el = document.getElementById(id);
+  if(!el) return;
+  el.textContent = text;
+  if(color) el.style.color = color;
+}
+
+function setMiniBar(id, value, color){
+  const el = document.getElementById(id);
+  if(!el) return;
+  const safe = Math.max(0, Math.min(100, Number(value) || 0));
+  el.style.width = `${safe}%`;
+  el.style.background = color;
+}
+
+function updateDecisionIntelPanels(intel, fallbackSignal){
+  const data = intel && typeof intel === "object" ? intel : {};
+  const decision = data.decision_engine || {};
+  const breakdown = data.decision_breakdown || {};
+  const prob = data.probability || {};
+  const plan = data.execution_plan || {};
+  const blockers = Array.isArray(decision.blockers) ? decision.blockers : [];
+  const triggers = Array.isArray(decision.trade_triggers) ? decision.trade_triggers : [];
+
+  const decisionTxt = String(decision.decision || fallbackSignal?.signal || "HOLD").toUpperCase();
+  const decisionColor = decisionTxt === "LONG" ? "#00c853" : decisionTxt === "SHORT" ? "#ff1744" : "#2979ff";
+  setSimpleText("trigger-decision", decisionTxt, decisionColor);
+  setSimpleText("trigger-blocker", blockers.length ? blockers[0] : "None", blockers.length ? "#ff6b6b" : "#00c853");
+
+  const triggerList = document.getElementById("trigger-list");
+  if(triggerList){
+    const combined = [
+      ...blockers.map((x)=>({ text: x, blocker: true })),
+      ...triggers.map((x)=>({ text: x, blocker: false })),
+    ];
+    if(!combined.length){
+      triggerList.innerHTML = '<div class="trigger-item">Execution window open</div>';
+    }else{
+      triggerList.innerHTML = combined.slice(0,6).map((item)=>(
+        `<div class="trigger-item ${item.blocker ? "blocker" : ""}">${escapeHtml(String(item.text || "—"))}</div>`
+      )).join("");
+    }
   }
 
-  const score = Number(sqs.score);
-  const safeScore = Number.isFinite(score) ? Math.max(0, Math.min(100, score)) : 0;
-  let grade = String(sqs.grade || "").toUpperCase();
-  if(!["A","B","C","D","F"].includes(grade)){
-    grade = safeScore >= 75 ? "A" : safeScore >= 55 ? "B" : safeScore >= 35 ? "C" : "D";
-  }
+  const pctText = (v) => `${Number(v || 0).toFixed(1)}`;
+  setSimpleText("db-regime", pctText(breakdown.regime_score), "#e6edf3");
+  setSimpleText("db-momentum", pctText(breakdown.momentum_score), "#e6edf3");
+  setSimpleText("db-flow", pctText(breakdown.flow_score), "#e6edf3");
+  setSimpleText("db-cost", pctText(breakdown.cost_score), "#e6edf3");
+  const finalScore = Number(breakdown.final_score || 0);
+  setSimpleText("db-final", pctText(finalScore), finalScore >= 0 ? "#00c853" : "#ff4d4d");
+  setSimpleText("db-explain", String(breakdown.explanation || "Awaiting decision breakdown"), "#9fb0c7");
 
-  gradeEl.className = `sqs-grade ${grade}`;
-  gradeEl.textContent = grade;
-  scoreEl.textContent = `${safeScore.toFixed(0)} / 100`;
-  fillEl.style.width = `${safeScore}%`;
-  fillEl.style.background = sqsColor(safeScore);
+  const up = Number(prob.up_prob || 0);
+  const down = Number(prob.down_prob || 0);
+  const side = Number(prob.sideways_prob || 0);
+  setSimpleText("prob-up-val", `${up.toFixed(1)}%`, "#00c853");
+  setSimpleText("prob-down-val", `${down.toFixed(1)}%`, "#ff1744");
+  setSimpleText("prob-side-val", `${side.toFixed(1)}%`, "#58a6ff");
+  setMiniBar("prob-up-bar", up, "#00c853");
+  setMiniBar("prob-down-bar", down, "#ff1744");
+  setMiniBar("prob-side-bar", side, "#2979ff");
+  setSimpleText("prob-dominant", String(prob.dominant_state || "SIDEWAYS"), "#e6edf3");
 
-  const detail = (typeof sqs.detail === "object" && sqs.detail) ? sqs.detail : {};
-  const components = [
-    { key: "onchain_pts", label: "On-chain", max: 35 },
-    { key: "sentiment_pts", label: "Sentiment", max: 25 },
-    { key: "regime_pts", label: "Regime/MTF", max: 25 },
-    { key: "momentum_pts", label: "Momentum", max: 15 },
-  ];
-  compsEl.innerHTML = components.map((c) => {
-    const valRaw = Number(detail[c.key]);
-    const val = Number.isFinite(valRaw) ? Math.max(0, Math.min(c.max, valRaw)) : 0;
-    const width = (val / c.max) * 100;
-    return `<div class="sqs-component-row">
-      <span class="sqs-comp-label">${escapeHtml(c.label)}</span>
-      <span class="sqs-comp-bar"><span class="sqs-comp-fill" style="width:${width.toFixed(1)}%;background:${sqsColor((val / c.max) * 100)}"></span></span>
-      <span class="sqs-comp-val">${val.toFixed(1)}</span>
-    </div>`;
-  }).join("");
+  const entryZone = Array.isArray(plan.entry_zone) && plan.entry_zone.length >= 2
+    ? `${fmtPx(plan.entry_zone[0])} - ${fmtPx(plan.entry_zone[1])}`
+    : "—";
+  setSimpleText("ep-entry", entryZone, "#e6edf3");
+  setSimpleText("ep-sl", fmtPx(plan.stop_loss), "#ff6b6b");
+  setSimpleText("ep-tp1", fmtPx(plan.take_profit), "#00c853");
+  setSimpleText("ep-tp2", fmtPx(plan.take_profit_2), "#69f0ae");
+  setSimpleText("ep-rr", Number.isFinite(Number(plan.expected_rr)) ? `${Number(plan.expected_rr).toFixed(2)}x` : "—", "#e6edf3");
+  const slip = String(plan.slippage_risk || "—").toUpperCase();
+  const slipColor = slip === "LOW" ? "#00c853" : slip === "MEDIUM" ? "#ff9800" : "#ff4d4d";
+  setSimpleText("ep-slip", slip, slipColor);
 }
 function updateChartRegimeVisual(s){
   const panel = document.getElementById("chart-panel");
@@ -2194,9 +2359,10 @@ async function loadSignal(){
   try{
     hasOpenTrade = false;
     openTradeSignal = "LONG";
-    const [s, histJson] = await Promise.all([
+    const [s, histJson, intelJson] = await Promise.all([
       fetchJSON(`/api/btc/signal?interval=${encodeURIComponent(activeTF)}`, { ttlMs: 5000, timeoutMs: 15000 }),
       fetchJSON('/api/btc/signal/history?limit=20', { ttlMs: 7000, timeoutMs: 8000 }),
+      fetchJSON('/api/btc/decision-intelligence', { ttlMs: 9000, timeoutMs: 10000 }),
     ]);
     if(histJson){
       const signals = Array.isArray(histJson?.signals) ? histJson.signals : [];
@@ -2207,11 +2373,15 @@ async function loadSignal(){
       }
     }
     if(!s) throw new Error("signal fetch failed");
+    latestDecisionIntel = (intelJson && typeof intelJson === "object" && !intelJson.error) ? intelJson : null;
     applySignalPayload(s, "btc_service");
+    updateDecisionIntelPanels(latestDecisionIntel, s);
     setPill("sig-pill","Signal API: /api/btc/signal",true);
   }catch(err){
     setPill("sig-pill","Signal API: offline",false);
     document.getElementById("sig-source").textContent=`source: unavailable (${err.message})`;
+    latestDecisionIntel = null;
+    updateDecisionIntelPanels(null, null);
     updatePipelineTrace(null);
     updateConstraintFlags(null);
     updateOnChainSqsPanel(null);
@@ -2263,6 +2433,7 @@ function historyRowClass(sig){
   if(outcome === "OPEN") return "history-row-open";
   if(outcome.startsWith("TP")) return "history-row-tp";
   if(outcome === "SL") return "history-row-sl";
+  if(outcome === "TIMEOUT") return "history-row-timeout";
   return "history-row-closed";
 }
 
@@ -2353,7 +2524,7 @@ function renderSignalHistoryTable(){
     const pnlColor = Number.isNaN(pnlNum) ? '#8b949e' : pnlNum > 0 ? '#00c853' : pnlNum < 0 ? '#ff1744' : '#8b949e';
     const timeRaw = String(sig.entry_time || sig.time || "");
     const timeLabel = timeRaw ? timeRaw.replace("T"," ").replace("Z","") : "—";
-    const resultColor = outcome.startsWith("TP") ? "#00c853" : outcome === "SL" ? "#ff4444" : outcome === "OPEN" ? "#58a6ff" : "#9ca3af";
+    const resultColor = outcome.startsWith("TP") ? "#00c853" : outcome === "SL" ? "#ff4444" : outcome === "OPEN" ? "#58a6ff" : outcome === "TIMEOUT" ? "#94a3b8" : "#9ca3af";
     const directionColor = direction === "LONG" ? "#00e676" : direction === "SHORT" ? "#ff6b7a" : "#ffd60a";
 
     return `<tr class="history-row-prof ${rowClass}">
