@@ -20,7 +20,21 @@ class PaperTradeBook:
         self.open_position: PaperPosition | None = None
         self.closed: list[dict[str, Any]] = []
 
-    def open(self, direction: str, entry: float, stop: float, tp1: float, tp2: float, tp3: float, size_btc: float) -> bool:
+    def open(
+        self,
+        direction: str,
+        entry: float,
+        stop: float,
+        tp1: float,
+        tp2: float,
+        tp3: float,
+        size_btc: float,
+        confidence: float = 0.0,
+    ) -> bool:
+        PAPER_MIN_CONFIDENCE = 55.0
+        conf = float(confidence if confidence is not None else 0.0)
+        if conf < PAPER_MIN_CONFIDENCE:
+            return False
         if self.open_position is not None:
             return False
         self.open_position = PaperPosition(direction, entry, stop, tp1, tp2, tp3, size_btc)
