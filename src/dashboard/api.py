@@ -2277,7 +2277,9 @@ def get_equity_curve(limit: int = 5000):
     if total_trades > 1:
         var = sum((x - mean_ret) ** 2 for x in pnl_values) / (total_trades - 1)
         std_ret = math.sqrt(max(var, 0.0))
-    sharpe = (mean_ret / std_ret) * math.sqrt(365 * 24) if std_ret > 0 else 0.0
+    # Trade-count Sharpe (not time-annualized) for irregular high-frequency trade durations.
+    sharpe_raw = (mean_ret / std_ret) * math.sqrt(total_trades) if (std_ret > 0 and total_trades > 0) else 0.0
+    sharpe = max(-5.0, min(5.0, sharpe_raw))
 
     sum_wins = sum(wins)
     sum_losses_abs = abs(sum(losses))

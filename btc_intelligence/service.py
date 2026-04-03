@@ -50,6 +50,8 @@ from btc_intelligence.utils.notifier import TelegramNotifier
 logger = logging.getLogger(__name__)
 MIN_CONFIDENCE = 25.0
 MAX_OPEN_SIGNALS = 1
+MIN_HOLD_SECONDS = 300
+MIN_PRICE_MOVE_PCT = 0.05
 
 
 class AppRuntime:
@@ -630,7 +632,8 @@ class AppRuntime:
                         COALESCE(signal, 'HOLD') AS signal,
                         {entry_expr} AS entry_price,
                         {sl_expr} AS sl,
-                        {tp1_expr} AS tp1
+                        {tp1_expr} AS tp1,
+                        CAST((strftime('%s','now') - strftime('%s', COALESCE(timestamp, datetime('now')))) AS INTEGER) AS hold_seconds
                     FROM signals
                     WHERE {ticker_expr} AND {open_expr}
                     """
@@ -639,7 +642,7 @@ class AppRuntime:
                 if not rows:
                     return
 
-                for rowid, signal_ref, signal, entry_price, sl, tp1 in rows:
+                for rowid, signal_ref, signal, entry_price, sl, tp1, hold_seconds in rows:
                     side = str(signal or 'HOLD').upper()
                     if side not in {'LONG', 'SHORT'}:
                         continue
@@ -654,22 +657,26 @@ class AppRuntime:
                     )
                     sl_val = float(sl or 0.0)
                     tp1_val = float(tp1 or 0.0)
+                    hold_secs = int(max(0, float(hold_seconds or 0)))
+                    price_move_pct = abs(((float(current_price) - float(entry)) / float(entry)) * 100.0)
+                    can_check_exit = hold_secs >= MIN_HOLD_SECONDS and price_move_pct > MIN_PRICE_MOVE_PCT
 
                     outcome: str | None = None
-                    if side == 'LONG':
-                        if sl_val > 0 and current_price <= sl_val:
-                            outcome = 'SL'
-                            logger.info("BTC SL hit: %s entry=%s sl=%s", side, format(entry, "g"), format(sl_val, "g"))
-                        elif tp1_val > 0 and current_price >= tp1_val:
-                            outcome = 'TP1'
-                            logger.info("BTC TP1 hit: %s entry=%s tp1=%s", side, format(entry, "g"), format(tp1_val, "g"))
-                    else:
-                        if sl_val > 0 and current_price >= sl_val:
-                            outcome = 'SL'
-                            logger.info("BTC SL hit: %s entry=%s sl=%s", side, format(entry, "g"), format(sl_val, "g"))
-                        elif tp1_val > 0 and current_price <= tp1_val:
-                            outcome = 'TP1'
-                            logger.info("BTC TP1 hit: %s entry=%s tp1=%s", side, format(entry, "g"), format(tp1_val, "g"))
+                    if can_check_exit:
+                        if side == 'LONG':
+                            if sl_val > 0 and current_price <= sl_val:
+                                outcome = 'SL'
+                                logger.info("BTC SL hit: %s entry=%s sl=%s", side, format(entry, "g"), format(sl_val, "g"))
+                            elif tp1_val > 0 and current_price >= tp1_val:
+                                outcome = 'TP1'
+                                logger.info("BTC TP1 hit: %s entry=%s tp1=%s", side, format(entry, "g"), format(tp1_val, "g"))
+                        else:
+                            if sl_val > 0 and current_price >= sl_val:
+                                outcome = 'SL'
+                                logger.info("BTC SL hit: %s entry=%s sl=%s", side, format(entry, "g"), format(sl_val, "g"))
+                            elif tp1_val > 0 and current_price <= tp1_val:
+                                outcome = 'TP1'
+                                logger.info("BTC TP1 hit: %s entry=%s tp1=%s", side, format(entry, "g"), format(tp1_val, "g"))
 
                     pnl_pct = self._calc_signal_pnl_pct(side, entry, current_price)
 
