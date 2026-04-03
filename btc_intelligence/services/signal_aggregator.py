@@ -32,6 +32,9 @@ class SignalAggregator:
 
     def aggregate(self, signals: dict[str, dict[str, Any]]) -> dict[str, Any]:
         signal_rows = dict(signals or {})
+        known_sources = set(self.config.source_weights.keys())
+        provided_sources = set(signal_rows.keys())
+        missing_sources = sorted(known_sources - provided_sources)
         available_rows = {
             key: row for key, row in signal_rows.items() if bool((row or {}).get("available", False))
         }
@@ -47,6 +50,7 @@ class SignalAggregator:
                 "source_contributions": {},
                 "rejected": True,
                 "reject_reason": "insufficient_sources",
+                "missing_sources": missing_sources,
             }
 
         weighted_sum = 0.0
@@ -78,6 +82,7 @@ class SignalAggregator:
                 "source_contributions": {},
                 "rejected": True,
                 "reject_reason": "insufficient_sources",
+                "missing_sources": missing_sources,
             }
 
         raw_score = self._clamp(weighted_sum / available_weight_sum, -1.0, 1.0)
@@ -109,4 +114,5 @@ class SignalAggregator:
             "source_contributions": source_contributions,
             "rejected": False,
             "reject_reason": None,
+            "missing_sources": missing_sources,
         }
