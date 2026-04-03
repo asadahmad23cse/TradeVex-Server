@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import sqlite3
+import time as time_module
 import uuid
 from collections import deque
 from datetime import datetime, timezone
@@ -100,6 +101,8 @@ class AppRuntime:
         self._shared_signals_db.parent.mkdir(parents=True, exist_ok=True)
         self._last_saved_btc_signal = 'HOLD'
         self._last_open_signal_id: str | None = None
+        self._open_signal_state: dict[str, Any] | None = None
+        self._last_open_pnl_update_ts: float = 0.0
 
         self.signal_log_path = Path(settings.signal_log_path)
         self.signal_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -221,12 +224,29 @@ class AppRuntime:
         try:
             with sqlite3.connect(self._shared_signals_db) as conn:
                 cur = conn.cursor()
-                cur.execute("CREATE TABLE IF NOT EXISTS signals (ticker TEXT, signal TEXT, confidence REAL, outcome TEXT, pnl_pct REAL, timestamp TEXT)")
+                cur.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS signals (
+                        ticker TEXT,
+                        signal TEXT,
+                        confidence REAL,
+                        outcome TEXT,
+                        pnl_pct REAL,
+                        size_multiplier REAL,
+                        signal_note TEXT,
+                        entry_price REAL,
+                        timestamp TEXT
+                    )
+                    """
+                )
                 for ddl in (
                     "ALTER TABLE signals ADD COLUMN ticker TEXT",
                     "ALTER TABLE signals ADD COLUMN outcome TEXT",
                     "ALTER TABLE signals ADD COLUMN pnl_pct REAL",
                     "ALTER TABLE signals ADD COLUMN result TEXT",
+                    "ALTER TABLE signals ADD COLUMN size_multiplier REAL",
+                    "ALTER TABLE signals ADD COLUMN signal_note TEXT",
+                    "ALTER TABLE signals ADD COLUMN entry_price REAL",
                 ):
                     try:
                         cur.execute(ddl)
@@ -240,11 +260,38 @@ class AppRuntime:
         cur.execute("PRAGMA table_info(signals)")
         return {str(row[1]) for row in cur.fetchall()}
 
-    def _insert_btc_signal_row(self, signal: str, confidence: float) -> str | None:
+    @staticmethod
+    def _extract_current_price(snapshot: dict[str, Any]) -> float:
+        candles_1m = snapshot.get('candles', {}).get('1m', [])
+        if candles_1m:
+            try:
+                return float(candles_1m[-1].get('close', 0.0))
+            except Exception:
+                pass
+        try:
+            return float(snapshot.get('binance_rest', {}).get('mark_price', 0.0))
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _calc_signal_pnl_pct(signal: str, entry_price: float, current_price: float) -> float:
+        if entry_price <= 0 or current_price <= 0:
+            return 0.0
+        if str(signal).upper() == 'SHORT':
+            return ((entry_price - current_price) / entry_price) * 100.0
+        return ((current_price - entry_price) / entry_price) * 100.0
+
+    def _insert_btc_signal_row(
+        self,
+        signal: str,
+        confidence: float,
+        size_multiplier: float,
+        signal_note: str,
+        entry_price: float,
+    ) -> dict[str, Any] | None:
         """
         Insert BTC signal into shared data/signals.db.
-        Uses requested minimal schema when available, otherwise falls back to
-        the terminal's richer signals schema.
+        Uses minimal schema if present, otherwise terminal rich schema.
         """
         try:
             with sqlite3.connect(self._shared_signals_db) as conn:
@@ -259,105 +306,186 @@ class AppRuntime:
                 if is_minimal_schema:
                     cur.execute(
                         """
-                        INSERT INTO signals (ticker, signal, confidence, outcome, pnl_pct, timestamp)
-                        VALUES ('BTCUSDT', ?, ?, 'OPEN', 0.0, datetime('now'))
+                        INSERT INTO signals (
+                            ticker, signal, confidence, outcome, pnl_pct,
+                            size_multiplier, signal_note, entry_price, timestamp
+                        )
+                        VALUES ('BTCUSDT', ?, ?, 'OPEN', 0.0, ?, ?, ?, datetime('now'))
                         """,
-                        (signal, float(confidence)),
+                        (
+                            str(signal).upper(),
+                            float(confidence),
+                            float(size_multiplier),
+                            str(signal_note),
+                            float(entry_price),
+                        ),
                     )
                     conn.commit()
                     row_id = cur.lastrowid
-                    return str(row_id) if row_id is not None else None
+                    return {
+                        "signal_ref": str(row_id) if row_id is not None else "",
+                        "is_minimal_schema": True,
+                    }
 
                 signal_id = f"btc_{int(datetime.now(timezone.utc).timestamp())}_{uuid.uuid4().hex[:8]}"
                 now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
                 cur.execute(
                     """
                     INSERT INTO signals (
-                        signal_id, timestamp, asset, asset_class, timeframe,
+                        signal_id, ticker, timestamp, asset, asset_class, timeframe,
                         signal, strength, confidence, alpha_score, regime,
                         entry_price, stop_loss, take_profit, position_size_pct,
                         kelly_fraction, hurst_exponent, factor_scores, ic_weights,
                         slippage_cost_pct, cost_pct, net_alpha_score, cs_alpha_score,
-                        execution_price, implementation_shortfall_pct, outcome, pnl_pct
+                        execution_price, implementation_shortfall_pct,
+                        outcome, result, pnl_pct, size_multiplier, signal_note
                     )
-                    VALUES (?, ?, 'BTCUSDT', 'crypto', 'intraday',
+                    VALUES (?, 'BTCUSDT', ?, 'BTCUSDT', 'crypto', 'intraday',
                             ?, 'MEDIUM', ?, 0.0, 'SIDEWAYS',
-                            0.0, 0.0, 0.0, 0.0,
+                            ?, 0.0, 0.0, 0.0,
                             0.0, NULL, '{}', '{}',
                             0.0, 0.0, 0.0, 0.0,
-                            0.0, 0.0, 'OPEN', 0.0)
+                            ?, 0.0,
+                            'OPEN', 'OPEN', 0.0, ?, ?)
                     """,
-                    (signal_id, now_iso, signal, float(confidence)),
+                    (
+                        signal_id,
+                        now_iso,
+                        str(signal).upper(),
+                        float(confidence),
+                        float(entry_price),
+                        float(entry_price),
+                        float(size_multiplier),
+                        str(signal_note),
+                    ),
                 )
                 conn.commit()
-                return signal_id
+                return {"signal_ref": signal_id, "is_minimal_schema": False}
         except Exception as exc:
             logger.error('Failed to insert BTC signal row: %s', exc, exc_info=True)
             return None
 
-    def _update_btc_signal_row(self, signal_ref: str | None, outcome: str, pnl_pct: float) -> None:
+    def _close_btc_signal_row(self, signal_ref: str | None, is_minimal_schema: bool, pnl_pct: float, outcome: str) -> None:
+        if not signal_ref:
+            return
+        try:
+            out_val = str(outcome).upper()
+            with sqlite3.connect(self._shared_signals_db) as conn:
+                cur = conn.cursor()
+                if is_minimal_schema:
+                    cur.execute(
+                        "UPDATE signals SET outcome = ?, pnl_pct = ? WHERE rowid = ?",
+                        (out_val, float(pnl_pct), int(signal_ref)),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE signals
+                        SET outcome = ?, result = ?, pnl_pct = ?
+                        WHERE signal_id = ?
+                        """,
+                        (out_val, out_val, float(pnl_pct), str(signal_ref)),
+                    )
+                conn.commit()
+        except Exception as exc:
+            logger.error('Failed to close BTC signal row: %s', exc, exc_info=True)
+
+    def _update_open_btc_signal_pnl(self, signal_ref: str | None, is_minimal_schema: bool, pnl_pct: float) -> None:
         if not signal_ref:
             return
         try:
             with sqlite3.connect(self._shared_signals_db) as conn:
                 cur = conn.cursor()
-                cols = self._read_signal_columns(cur)
-                out_val = str(outcome).upper()
-                pnl_val = float(pnl_pct)
-
-                is_minimal_schema = (
-                    {'ticker', 'signal', 'confidence', 'outcome', 'pnl_pct', 'timestamp'}.issubset(cols)
-                    and 'signal_id' not in cols
-                    and 'asset' not in cols
-                )
                 if is_minimal_schema:
                     cur.execute(
-                        """
-                        UPDATE signals
-                        SET outcome = ?, pnl_pct = ?
-                        WHERE rowid = (
-                            SELECT rowid FROM signals
-                            WHERE ticker = 'BTCUSDT' AND outcome = 'OPEN'
-                            ORDER BY rowid DESC LIMIT 1
-                        )
-                        """,
-                        (out_val, pnl_val),
+                        "UPDATE signals SET pnl_pct = ? WHERE rowid = ?",
+                        (float(pnl_pct), int(signal_ref)),
                     )
-                    conn.commit()
-                    return
-
-                cur.execute(
-                    """
-                    UPDATE signals
-                    SET outcome = ?, pnl_pct = ?, result = ?
-                    WHERE signal_id = ?
-                    """,
-                    (out_val, pnl_val, out_val, str(signal_ref)),
-                )
+                else:
+                    cur.execute(
+                        "UPDATE signals SET pnl_pct = ? WHERE signal_id = ?",
+                        (float(pnl_pct), str(signal_ref)),
+                    )
                 conn.commit()
         except Exception as exc:
-            logger.error('Failed to update BTC signal row: %s', exc, exc_info=True)
+            logger.error('Failed to update BTC open signal pnl: %s', exc, exc_info=True)
 
-    async def _persist_btc_signal_from_redis(self) -> None:
+    async def _persist_btc_signal_from_redis(self, current_price: float) -> None:
         if not settings.redis_state_enabled:
             return
         signal_payload = await self.redis_state.get_json('signal', default={})
         if not isinstance(signal_payload, dict):
             return
+
         signal = str(signal_payload.get('signal', 'HOLD')).upper()
+        if signal not in {'LONG', 'SHORT'}:
+            return
+
         confidence = float(signal_payload.get('confidence', 0.0))
-        if signal == 'HOLD':
-            return
-        if signal == self._last_saved_btc_signal:
-            return
-        if self._last_open_signal_id is not None:
-            await asyncio.to_thread(self._update_btc_signal_row, self._last_open_signal_id, 'TIMEOUT', 0.0)
+        size_multiplier = float(signal_payload.get('size_multiplier', 1.0))
+        signal_note = str(signal_payload.get('signal_note', 'normal'))
+
+        open_state = self._open_signal_state
+        if open_state is not None:
+            open_signal = str(open_state.get('signal', 'HOLD')).upper()
+            if open_signal == signal:
+                # Same-direction refresh; keep one open row.
+                return
+
+            prev_entry = float(open_state.get('entry_price', 0.0))
+            prev_pnl_pct = self._calc_signal_pnl_pct(open_signal, prev_entry, current_price)
+            await asyncio.to_thread(
+                self._close_btc_signal_row,
+                str(open_state.get('signal_ref', '')),
+                bool(open_state.get('is_minimal_schema', False)),
+                prev_pnl_pct,
+                'CLOSED',
+            )
+            self._open_signal_state = None
             self._last_open_signal_id = None
-        signal_ref = await asyncio.to_thread(self._insert_btc_signal_row, signal, confidence)
-        if signal_ref:
-            self._last_open_signal_id = signal_ref
+
+        insert_meta = await asyncio.to_thread(
+            self._insert_btc_signal_row,
+            signal,
+            confidence,
+            size_multiplier,
+            signal_note,
+            current_price,
+        )
+        if insert_meta:
+            self._open_signal_state = {
+                "signal_ref": str(insert_meta.get("signal_ref", "")),
+                "is_minimal_schema": bool(insert_meta.get("is_minimal_schema", False)),
+                "signal": signal,
+                "entry_price": float(current_price),
+                "opened_at_ts": float(time_module.time()),
+            }
+            self._last_open_signal_id = str(insert_meta.get("signal_ref", ""))
             self._last_saved_btc_signal = signal
-            logger.info('BTC signal saved: %s', signal)
+            logger.info(
+                "BTC signal saved: %s conf=%.1f%% size=%sx note=%s",
+                signal,
+                confidence,
+                format(size_multiplier, "g"),
+                signal_note,
+            )
+
+    async def _maybe_update_open_signal_pnl(self, current_price: float) -> None:
+        if self._open_signal_state is None:
+            return
+        now_ts = float(time_module.time())
+        if (now_ts - self._last_open_pnl_update_ts) < 300.0:
+            return
+        open_signal = str(self._open_signal_state.get('signal', 'HOLD')).upper()
+        entry_price = float(self._open_signal_state.get('entry_price', 0.0))
+        pnl_pct = self._calc_signal_pnl_pct(open_signal, entry_price, current_price)
+        await asyncio.to_thread(
+            self._update_open_btc_signal_pnl,
+            str(self._open_signal_state.get('signal_ref', '')),
+            bool(self._open_signal_state.get('is_minimal_schema', False)),
+            pnl_pct,
+        )
+        self._last_open_pnl_update_ts = now_ts
 
     async def _publish_intelligence_state(self, snapshot: dict[str, Any], state) -> None:
         if not (settings.redis_state_enabled and self.redis_state.connected):
@@ -382,7 +510,9 @@ class AppRuntime:
         combined_payload = combined_btc_signal(orderflow_payload, vol_payload)
         combined_payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
         await self.redis_state.set_json('signal', combined_payload, ttl_seconds=10)
-        await self._persist_btc_signal_from_redis()
+        current_price = self._extract_current_price(snapshot)
+        await self._persist_btc_signal_from_redis(current_price=current_price)
+        await self._maybe_update_open_signal_pnl(current_price=current_price)
 
     def _handle_paper_trade(self, payload: dict[str, Any], snapshot: dict[str, Any]) -> None:
         if not settings.paper_trade:
@@ -429,7 +559,14 @@ class AppRuntime:
                 outcome = 'SL'
             else:
                 outcome = 'TIMEOUT'
-            self._update_btc_signal_row(self._last_open_signal_id, outcome, pnl_pct)
+            if self._open_signal_state is not None:
+                self._close_btc_signal_row(
+                    signal_ref=str(self._open_signal_state.get('signal_ref', '')),
+                    is_minimal_schema=bool(self._open_signal_state.get('is_minimal_schema', False)),
+                    pnl_pct=pnl_pct,
+                    outcome=outcome,
+                )
+            self._open_signal_state = None
             self._last_open_signal_id = None
             self._last_saved_btc_signal = 'HOLD'
 
@@ -612,7 +749,14 @@ class AppRuntime:
                 pnl_pct = 0.0
             reason = str(closed.get('reason', 'timeout')).lower()
             outcome = 'TP' if reason.startswith('tp') else 'SL' if reason in {'stop', 'sl'} else 'TIMEOUT'
-            self._update_btc_signal_row(self._last_open_signal_id, outcome, pnl_pct)
+            if self._open_signal_state is not None:
+                self._close_btc_signal_row(
+                    signal_ref=str(self._open_signal_state.get('signal_ref', '')),
+                    is_minimal_schema=bool(self._open_signal_state.get('is_minimal_schema', False)),
+                    pnl_pct=pnl_pct,
+                    outcome=outcome,
+                )
+            self._open_signal_state = None
             self._last_open_signal_id = None
             self._last_saved_btc_signal = 'HOLD'
         return {'closed': closed}
@@ -650,6 +794,18 @@ class AppRuntime:
             return {'status': 'warming_up', 'decision_state': 'NO_TRADE'}
         state = build_feature_state(snap)
         payload = order_flow_decision_state(state.order_flow)
+        vol_payload = volatility_tradeability(state.volatility)
+        combined = combined_btc_signal(payload, vol_payload)
+        payload.update(
+            {
+                "signal": combined.get("signal", "HOLD"),
+                "confidence": combined.get("confidence", 0.0),
+                "size_multiplier": combined.get("size_multiplier", 1.0),
+                "signal_note": combined.get("signal_note", "normal"),
+                "volatility_regime": combined.get("volatility_regime", vol_payload.get("volatility_regime", "NORMAL")),
+                "tradeability": combined.get("tradeability", vol_payload.get("tradeability", "ALLOW")),
+            }
+        )
         payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
         if settings.redis_state_enabled and self.redis_state.connected:
             await self.redis_state.set_json('orderflow', payload, ttl_seconds=10)

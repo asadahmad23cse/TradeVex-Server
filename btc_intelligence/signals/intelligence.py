@@ -179,26 +179,36 @@ def trade_based_volume_profile(
 
 
 def volatility_tradeability(volatility: Any) -> dict[str, Any]:
-    regime = str(getattr(volatility, "vol_regime", "normal")).lower()
-    if regime == "compression":
+    atr_pct = float(getattr(volatility, "atr_multiplier_pct", 0.0))
+    if atr_pct < 0.10:
         mapped_regime = "LOW"
-        tradeability = "NO_TRADE"
-        reason = "Compressed range; poor payoff asymmetry"
-    elif regime == "normal":
+        tradeability = "REDUCE_SIZE"
+        reason = "Low BTC volatility; reduce position size"
+        size_multiplier = 0.5
+    elif atr_pct < 0.80:
         mapped_regime = "NORMAL"
         tradeability = "ALLOW"
         reason = "Volatility in tradable regime"
-    else:
+        size_multiplier = 1.0
+    elif atr_pct < 1.50:
         mapped_regime = "EXPANSION"
         tradeability = "CAUTION"
-        reason = "Elevated volatility; reduce size and demand cleaner entries"
+        reason = "Elevated volatility; trade with caution"
+        size_multiplier = 0.7
+    else:
+        mapped_regime = "HIGH_VOL"
+        tradeability = "NO_TRADE"
+        reason = "Extreme BTC volatility; avoid new trades"
+        size_multiplier = 0.0
 
     return {
         "volatility_regime": mapped_regime,
         "tradeability": tradeability,
         "reason": reason,
         "atr14": round(float(getattr(volatility, "atr14", 0.0)), 6),
-        "atr_multiplier_pct": round(float(getattr(volatility, "atr_multiplier_pct", 0.0)), 6),
+        "atr_multiplier_pct": round(atr_pct, 6),
+        "atr_pct": round(atr_pct, 6),
+        "size_multiplier": float(size_multiplier),
         "bb_squeeze": bool(getattr(volatility, "bb_squeeze", False)),
         "bb_expansion": bool(getattr(volatility, "bb_expansion", False)),
         "raw_regime": str(getattr(volatility, "vol_regime", "normal")),
@@ -229,27 +239,44 @@ def combined_btc_signal(
     volatility_payload: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    Build a compact executable BTC signal from flow + volatility gate.
+    Build executable BTC signal from order flow, with volatility as size adjuster.
     """
     decision = str(orderflow_payload.get("decision_state", "NO_TRADE")).upper()
-    tradeability = str(volatility_payload.get("tradeability", "NO_TRADE")).upper()
+    volatility_regime = str(volatility_payload.get("volatility_regime", "NORMAL")).upper()
+    tradeability = str(volatility_payload.get("tradeability", "ALLOW")).upper()
     obi = float(orderflow_payload.get("obi", 0.0))
 
-    if decision == "FAVOR_LONG" and tradeability == "ALLOW":
+    if decision == "FAVOR_LONG":
         signal = "LONG"
         confidence = max(0.0, min(100.0, obi * 100.0))
-    elif decision == "FAVOR_SHORT" and tradeability == "ALLOW":
+    elif decision == "FAVOR_SHORT":
         signal = "SHORT"
         confidence = max(0.0, min(100.0, abs(obi) * 100.0))
     else:
         signal = "HOLD"
         confidence = 0.0
 
+    if volatility_regime == "LOW":
+        size_multiplier = 0.5
+        signal_note = "low_vol_reduced_size"
+    elif volatility_regime == "EXPANSION":
+        size_multiplier = 0.7
+        signal_note = "expansion_caution"
+    elif volatility_regime == "HIGH_VOL" or tradeability == "NO_TRADE":
+        size_multiplier = 0.0
+        signal_note = "high_vol_no_trade"
+    else:
+        size_multiplier = 1.0
+        signal_note = "normal"
+
     return {
         "ticker": "BTCUSDT",
         "signal": signal,
         "confidence": round(confidence, 2),
+        "size_multiplier": float(size_multiplier),
+        "signal_note": signal_note,
         "orderflow_decision": decision,
+        "volatility_regime": volatility_regime,
         "tradeability": tradeability,
         "obi": round(obi, 4),
     }

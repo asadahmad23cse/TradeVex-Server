@@ -738,6 +738,7 @@ body{
             <div class="intel-row"><span class="intel-key">tradeability</span><span id="intel-vol-tradeability" class="intel-val">—</span></div>
             <div class="intel-row"><span class="intel-key">regime</span><span id="intel-vol-regime" class="intel-val">—</span></div>
             <div class="intel-row"><span class="intel-key">atr_pct</span><span id="intel-vol-atr" class="intel-val">—</span></div>
+            <div class="intel-row"><span class="intel-key">Position Size Adjustment</span><span id="intel-vol-size-adj" class="intel-val">—</span></div>
           </div>
         </div>
       </div>
@@ -2445,13 +2446,20 @@ init();
     return n.toFixed(digits);
   }
 
-  function intel_badge_html(label){
+  function intel_badge_html(label, mode){
     const value = String(label || "—").toUpperCase();
     let color = "#94a3b8";
-    if(value === "FAVOR_LONG" || value === "ALLOW") color = "#00ff88";
-    if(value === "FAVOR_SHORT") color = "#ff4444";
-    if(value === "NO_TRADE") color = "#f59e0b";
-    if(value === "CAUTION") color = "#f97316";
+    if(mode === "volatility"){
+      if(value === "REDUCE_SIZE") color = "#f59e0b";
+      else if(value === "ALLOW") color = "#00ff88";
+      else if(value === "CAUTION") color = "#f97316";
+      else if(value === "NO_TRADE") color = "#ff4444";
+    }else{
+      if(value === "FAVOR_LONG" || value === "ALLOW") color = "#00ff88";
+      if(value === "FAVOR_SHORT") color = "#ff4444";
+      if(value === "NO_TRADE") color = "#f59e0b";
+      if(value === "CAUTION") color = "#f97316";
+    }
     return '<span class="intel-badge" style="color:' + color + ';border-color:' + color + '33;background:' + color + '1a;">' + value + "</span>";
   }
 
@@ -2460,9 +2468,9 @@ init();
     if(node) node.textContent = value;
   }
 
-  function intel_set_badge(id, value){
+  function intel_set_badge(id, value, mode){
     const node = intel_el(id);
-    if(node) node.innerHTML = intel_badge_html(value);
+    if(node) node.innerHTML = intel_badge_html(value, mode);
   }
 
   function intel_show_message(tab, message){
@@ -2521,9 +2529,23 @@ init();
   function intel_render_volatility(payload){
     const regime = payload.regime || payload.volatility_regime || "—";
     const atrPct = payload.atr_pct ?? payload.atr_multiplier_pct;
-    intel_set_badge("intel-vol-tradeability", payload.tradeability || "—");
+    const sizeMultiplier = Number(payload.size_multiplier);
+    let sizeLabel = "—";
+    if(Number.isFinite(sizeMultiplier)){
+      if(String(regime).toUpperCase() === "LOW"){
+        sizeLabel = sizeMultiplier.toFixed(1) + "x (Low Vol)";
+      }else if(String(regime).toUpperCase() === "EXPANSION"){
+        sizeLabel = sizeMultiplier.toFixed(1) + "x (Expansion)";
+      }else if(String(regime).toUpperCase() === "HIGH_VOL"){
+        sizeLabel = sizeMultiplier.toFixed(1) + "x (High Vol)";
+      }else{
+        sizeLabel = sizeMultiplier.toFixed(1) + "x (Normal)";
+      }
+    }
+    intel_set_badge("intel-vol-tradeability", payload.tradeability || "—", "volatility");
     intel_set_value("intel-vol-regime", regime);
     intel_set_value("intel-vol-atr", Number.isFinite(Number(atrPct)) ? intel_format_num(atrPct, 4) + "%" : "—");
+    intel_set_value("intel-vol-size-adj", sizeLabel);
     intel_show_data("volatility");
   }
 
