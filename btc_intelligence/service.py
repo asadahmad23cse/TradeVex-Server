@@ -44,6 +44,8 @@ from btc_intelligence.signals.intelligence import (
 )
 from btc_intelligence.signals.probability_stacker import ProbabilityStacker
 from btc_intelligence.services import (
+    AdaptiveLearningConfig,
+    AdaptiveLearningEngine,
     DecisionEngine,
     DecisionEngineInput,
     ExecutionPlanInput,
@@ -101,6 +103,14 @@ class AppRuntime:
         self.decision_engine = DecisionEngine()
         self.probability_service = ProbabilityService()
         self.execution_planner = ExecutionPlanner()
+        self.adaptive_learning = AdaptiveLearningEngine(
+            state_path="btc_intelligence/logs/adaptive_learning_state.json",
+            config=AdaptiveLearningConfig(
+                learning_rate=0.01,
+                min_trades_required=30,
+                update_frequency=20,
+            ),
+        )
         self.paper = PaperTradeBook()
         self.hub = LiveWebSocketHub()
         self.notifier = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
@@ -430,6 +440,15 @@ class AppRuntime:
         return mapping.get(r, r.upper())
 
     @staticmethod
+    def _regime_bucket(regime_name: str) -> str:
+        r = str(regime_name or "").upper()
+        if "BEAR" in r or "PANIC" in r:
+            return "bearish"
+        if "BULL" in r:
+            return "bullish"
+        return "sideways"
+
+    @staticmethod
     def _derive_momentum_score(state) -> float:
         tf = state.price_action.tf_15m
         price = max(float(tf.price), 1e-9)
@@ -525,6 +544,27 @@ class AppRuntime:
                 flow_score=float(orderflow_payload.get("flow_score", 0.0)),
             )
         )
+        decision_breakdown = dict(decision_output.get("decision_breakdown", {}))
+        vol_for_factor = str(vol_payload.get("volatility_regime", "NORMAL")).upper()
+        if vol_for_factor == "NORMAL":
+            vol_factor_score = 0.45
+        elif vol_for_factor == "EXPANSION":
+            vol_factor_score = 0.10
+        elif vol_for_factor in {"LOW", "COMPRESSION"}:
+            vol_factor_score = -0.35
+        elif vol_for_factor in {"HIGH_VOL", "PANIC"}:
+            vol_factor_score = -0.45
+        else:
+            vol_factor_score = 0.0
+
+        factor_values = {
+            "regime": float(decision_breakdown.get("regime_score", 0.0)) / 100.0,
+            "momentum": float(decision_breakdown.get("momentum_score", 0.0)) / 100.0,
+            "flow": float(decision_breakdown.get("flow_score", 0.0)) / 100.0,
+            "cost": float(decision_breakdown.get("cost_score", 0.0)) / 100.0,
+            "volatility": vol_factor_score,
+        }
+
         decision_payload = {
             **decision_output,
             "regime": normalized_regime,
@@ -542,6 +582,34 @@ class AppRuntime:
             )
         )
         probability_payload["as_of_utc"] = now_iso
+
+        base_decision = str(decision_payload.get("decision", "HOLD")).upper()
+        up_prob = float(probability_payload.get("up_prob", 0.0)) / 100.0
+        down_prob = float(probability_payload.get("down_prob", 0.0)) / 100.0
+        raw_prob = up_prob if base_decision == "LONG" else down_prob if base_decision == "SHORT" else max(up_prob, down_prob)
+
+        adaptive_meta = self.adaptive_learning.meta_decision(
+            regime=normalized_regime,
+            volatility_state=str(vol_payload.get("volatility_regime", "NORMAL")),
+            flow_state=str(orderflow_payload.get("cvd_trend", orderflow_payload.get("decision_state", "FLAT"))),
+            base_decision=base_decision,
+            base_confidence=float(decision_payload.get("confidence", 0.0)),
+            factor_values=factor_values,
+            raw_prob=raw_prob,
+            blockers=list(decision_payload.get("blockers", [])),
+        )
+
+        decision_payload["base_decision"] = base_decision
+        decision_payload["decision"] = str(adaptive_meta.get("final_decision", base_decision))
+        decision_payload["confidence"] = float(adaptive_meta.get("adjusted_confidence", decision_payload.get("confidence", 0.0)))
+        decision_payload["adaptive_reasons"] = list(adaptive_meta.get("reasons", []))
+        decision_payload["calibrated_probability"] = round(float(adaptive_meta.get("calibration", {}).get("calibrated_prob", raw_prob)) * 100.0, 2)
+        decision_payload["adaptive_score"] = float(adaptive_meta.get("adaptive_score", 0.0))
+        decision_payload["edge_decay"] = adaptive_meta.get("edge_decay", {})
+
+        verdict_payload = dict(decision_payload.get("trade_verdict", {}))
+        verdict_payload["final_verdict"] = "TRADE" if decision_payload["decision"] in {"LONG", "SHORT"} else "AVOID"
+        decision_payload["trade_verdict"] = verdict_payload
 
         liquidity_score = self._derive_liquidity_score(snapshot.get("depth", {}))
         planned_direction = str(decision_payload.get("decision", "HOLD")).upper()
@@ -573,6 +641,14 @@ class AppRuntime:
             "trade_verdict": decision_payload.get("trade_verdict", {}),
             "factor_contributions": decision_payload.get("factor_contributions", []),
             "trade_triggers": decision_payload.get("trade_triggers", []),
+            "meta_decision": adaptive_meta,
+            "adaptive_learning": {
+                "regime_bucket": self._regime_bucket(normalized_regime),
+                "weights": adaptive_meta.get("weights", {}),
+                "validation": adaptive_meta.get("validation", {}),
+                "calibration": adaptive_meta.get("calibration", {}),
+                "edge_decay": adaptive_meta.get("edge_decay", {}),
+            },
             "regime": normalized_regime,
             "momentum_score": round(momentum_score, 6),
             "cost_score": round(cost_score, 6),
@@ -860,6 +936,21 @@ class AppRuntime:
 
                     state_ref = str(self._open_signal_state.get('signal_ref', '')) if self._open_signal_state else ''
                     if state_ref and state_ref in {str(rowid), str(signal_ref)}:
+                        learn_state = dict(self._open_signal_state or {})
+                        try:
+                            self.adaptive_learning.record_trade(
+                                regime=str(learn_state.get('regime', 'sideways')),
+                                volatility_state=str(learn_state.get('volatility_state', 'NORMAL')),
+                                flow_state=str(learn_state.get('flow_state', 'FLAT')),
+                                direction=str(learn_state.get('signal', signal)),
+                                pnl_pct=float(pnl_pct),
+                                raw_prob=float(learn_state.get('raw_prob', 0.5)),
+                                calibrated_prob=float(learn_state.get('calibrated_prob', learn_state.get('raw_prob', 0.5))),
+                                factor_values=learn_state.get('factor_values', {}),
+                                timestamp_utc=str(datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')),
+                            )
+                        except Exception as exc:
+                            logger.debug('Adaptive learning trade record skipped: %s', exc)
                         self._open_signal_state = None
                         self._last_open_signal_id = None
                         self._last_saved_btc_signal = 'HOLD'
@@ -947,6 +1038,21 @@ class AppRuntime:
             if self._open_signal_state is not None:
                 state_ref = str(self._open_signal_state.get('signal_ref', ''))
                 if state_ref and state_ref == str(signal_id):
+                    learn_state = dict(self._open_signal_state)
+                    try:
+                        self.adaptive_learning.record_trade(
+                            regime=str(learn_state.get('regime', 'sideways')),
+                            volatility_state=str(learn_state.get('volatility_state', 'NORMAL')),
+                            flow_state=str(learn_state.get('flow_state', 'FLAT')),
+                            direction=str(learn_state.get('signal', side)),
+                            pnl_pct=float(pnl),
+                            raw_prob=float(learn_state.get('raw_prob', 0.5)),
+                            calibrated_prob=float(learn_state.get('calibrated_prob', learn_state.get('raw_prob', 0.5))),
+                            factor_values=learn_state.get('factor_values', {}),
+                            timestamp_utc=str(datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')),
+                        )
+                    except Exception as exc:
+                        logger.debug('Adaptive learning trade record skipped: %s', exc)
                     self._open_signal_state = None
                     self._last_open_signal_id = None
                     self._last_saved_btc_signal = 'HOLD'
@@ -1266,6 +1372,18 @@ class AppRuntime:
             rr_ratio,
         )
         if insert_meta:
+            decision_block = data.get('decision_engine', {}) if isinstance(data.get('decision_engine', {}), dict) else {}
+            prob_block = data.get('probability', {}) if isinstance(data.get('probability', {}), dict) else {}
+            meta_block = data.get('meta_decision', {}) if isinstance(data.get('meta_decision', {}), dict) else {}
+            breakdown_block = decision_block.get('decision_breakdown', {}) if isinstance(decision_block.get('decision_breakdown', {}), dict) else {}
+            raw_prob = float(prob_block.get('up_prob', 0.0)) / 100.0 if signal == 'LONG' else float(prob_block.get('down_prob', 0.0)) / 100.0
+            factor_values = {
+                "regime": float(breakdown_block.get("regime_score", 0.0)) / 100.0,
+                "momentum": float(breakdown_block.get("momentum_score", 0.0)) / 100.0,
+                "flow": float(breakdown_block.get("flow_score", 0.0)) / 100.0,
+                "cost": float(breakdown_block.get("cost_score", 0.0)) / 100.0,
+                "volatility": 0.0,
+            }
             self._open_signal_state = {
                 'signal_ref': str(insert_meta.get('signal_ref', '')),
                 'is_minimal_schema': bool(insert_meta.get('is_minimal_schema', False)),
@@ -1275,6 +1393,13 @@ class AppRuntime:
                 'tp1': float(tp1),
                 'tp2': float(tp2),
                 'opened_at_ts': float(time_module.time()),
+                'opened_at_iso': datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
+                'regime': str(decision_block.get('regime', data.get('volatility_regime', 'SIDEWAYS'))),
+                'volatility_state': str(data.get('volatility_regime', 'NORMAL')),
+                'flow_state': str(data.get('orderflow_decision', data.get('decision_state', 'FLAT'))),
+                'raw_prob': float(max(0.0, min(1.0, raw_prob))),
+                'calibrated_prob': float(max(0.0, min(1.0, meta_block.get('calibration', {}).get('calibrated_prob', raw_prob) if isinstance(meta_block.get('calibration', {}), dict) else raw_prob))),
+                'factor_values': factor_values,
             }
             self._last_open_signal_id = str(insert_meta.get('signal_ref', ''))
             self._last_saved_btc_signal = signal
@@ -1357,6 +1482,19 @@ class AppRuntime:
         combined_payload["probability"] = intelligence_bundle.get("probability", {})
         combined_payload["execution_plan"] = intelligence_bundle.get("execution_plan", {})
         combined_payload["trade_triggers"] = intelligence_bundle.get("trade_triggers", [])
+        combined_payload["meta_decision"] = intelligence_bundle.get("meta_decision", {})
+        combined_payload["adaptive_learning"] = intelligence_bundle.get("adaptive_learning", {})
+
+        meta_final = str(combined_payload.get("meta_decision", {}).get("final_decision", "")).upper()
+        if meta_final == "HOLD":
+            combined_payload["signal"] = "HOLD"
+            combined_payload["confidence"] = min(float(combined_payload.get("confidence", 0.0)), 49.0)
+            meta_reasons = combined_payload.get("meta_decision", {}).get("reasons", [])
+            if isinstance(meta_reasons, list) and meta_reasons:
+                combined_payload["signal_note"] = f"meta_hold:{str(meta_reasons[0])[:80]}"
+            else:
+                combined_payload["signal_note"] = "meta_hold:stability_gate"
+
         combined_payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
         if settings.redis_state_enabled and self.redis_state.connected:
             await self.redis_state.set_json('signal', combined_payload, ttl_seconds=10)
@@ -1680,6 +1818,8 @@ class AppRuntime:
         payload["decision_breakdown"] = bundle.get("decision_breakdown", {})
         payload["factor_contributions"] = bundle.get("factor_contributions", [])
         payload["trade_verdict"] = bundle.get("trade_verdict", {})
+        payload["meta_decision"] = bundle.get("meta_decision", {})
+        payload["adaptive_learning"] = bundle.get("adaptive_learning", {})
         payload["as_of_utc"] = bundle.get("as_of_utc")
         if settings.redis_state_enabled and self.redis_state.connected:
             await self.redis_state.set_json('decision', payload, ttl_seconds=10)

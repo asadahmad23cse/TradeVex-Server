@@ -1583,13 +1583,17 @@ function setMiniBar(id, value, color){
 function updateDecisionIntelPanels(intel, fallbackSignal){
   const data = intel && typeof intel === "object" ? intel : {};
   const decision = data.decision_engine || {};
+  const meta = data.meta_decision || decision.meta_decision || {};
   const breakdown = data.decision_breakdown || {};
   const prob = data.probability || {};
   const plan = data.execution_plan || {};
-  const blockers = Array.isArray(decision.blockers) ? decision.blockers : [];
+  const blockers = [
+    ...(Array.isArray(decision.blockers) ? decision.blockers : []),
+    ...(Array.isArray(meta.reasons) ? meta.reasons : []),
+  ];
   const triggers = Array.isArray(decision.trade_triggers) ? decision.trade_triggers : [];
 
-  const decisionTxt = String(decision.decision || fallbackSignal?.signal || "HOLD").toUpperCase();
+  const decisionTxt = String(meta.final_decision || decision.decision || fallbackSignal?.signal || "HOLD").toUpperCase();
   const decisionColor = decisionTxt === "LONG" ? "#00c853" : decisionTxt === "SHORT" ? "#ff1744" : "#2979ff";
   setSimpleText("trigger-decision", decisionTxt, decisionColor);
   setSimpleText("trigger-blocker", blockers.length ? blockers[0] : "None", blockers.length ? "#ff6b6b" : "#00c853");
@@ -1627,7 +1631,10 @@ function updateDecisionIntelPanels(intel, fallbackSignal){
   setMiniBar("prob-up-bar", up, "#00c853");
   setMiniBar("prob-down-bar", down, "#ff1744");
   setMiniBar("prob-side-bar", side, "#2979ff");
-  setSimpleText("prob-dominant", String(prob.dominant_state || "SIDEWAYS"), "#e6edf3");
+  const cal = meta.calibration || {};
+  const calProb = Number(cal.calibrated_prob);
+  const dominantText = `${String(prob.dominant_state || "SIDEWAYS")} · Cal ${Number.isFinite(calProb) ? (calProb * 100).toFixed(1) + "%" : "—"}`;
+  setSimpleText("prob-dominant", dominantText, "#e6edf3");
 
   const entryZone = Array.isArray(plan.entry_zone) && plan.entry_zone.length >= 2
     ? `${fmtPx(plan.entry_zone[0])} - ${fmtPx(plan.entry_zone[1])}`
