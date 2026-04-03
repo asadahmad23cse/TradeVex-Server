@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import json
@@ -52,7 +52,6 @@ MIN_CONFIDENCE = 25.0
 MAX_OPEN_SIGNALS = 1
 MIN_HOLD_SECONDS = 300
 MIN_PRICE_MOVE_PCT = 0.05
-MIN_CONFIDENCE_CHANGE = 10.0
 
 
 class AppRuntime:
@@ -107,9 +106,6 @@ class AppRuntime:
         self._last_open_signal_id: str | None = None
         self._open_signal_state: dict[str, Any] | None = None
         self._last_open_pnl_update_ts: float = 0.0
-        self._last_signal_time: float | None = None
-        self._last_signal_direction: str | None = None
-        self._last_signal_confidence: float | None = None
 
         self.signal_log_path = Path(settings.signal_log_path)
         self.signal_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -284,6 +280,38 @@ class AppRuntime:
     def _read_signal_columns(self, cur: sqlite3.Cursor) -> set[str]:
         cur.execute("PRAGMA table_info(signals)")
         return {str(row[1]) for row in cur.fetchall()}
+
+    def _get_last_signal_time_from_db(self) -> float:
+        """Read last BTC signal timestamp from DB."""
+        try:
+            with sqlite3.connect(self._shared_signals_db) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT timestamp
+                    FROM signals
+                    WHERE ticker = 'BTCUSDT'
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+                if not row or not row[0]:
+                    return 0.0
+                raw_ts = str(row[0]).strip()
+                try:
+                    if raw_ts.endswith("Z"):
+                        dt = datetime.fromisoformat(raw_ts.replace("Z", "+00:00"))
+                    else:
+                        dt = datetime.fromisoformat(raw_ts)
+                except Exception:
+                    try:
+                        dt = datetime.strptime(raw_ts, "%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        return 0.0
+                return float(dt.timestamp())
+        except Exception:
+            return 0.0
 
     @staticmethod
     def _extract_current_price(snapshot: dict[str, Any]) -> float:
@@ -755,72 +783,72 @@ class AppRuntime:
         return ""
 
     async def _persist_btc_signal_from_redis(self, current_price: float) -> None:
-        if not settings.redis_state_enabled:
-            return
-        signal_payload = await self.redis_state.get_json('signal', default={})
-        if not isinstance(signal_payload, dict):
+        if not (settings.redis_state_enabled and self.redis_state.connected and self.redis_state._client is not None):
             return
 
-        signal = str(signal_payload.get('signal', 'HOLD')).upper()
+        try:
+            raw = await self.redis_state._client.get(self.redis_state._key('signal'))
+        except Exception:
+            raw = None
+        if not raw:
+            return
+
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return
+        if not isinstance(data, dict):
+            return
+
+        signal = str(data.get('signal', 'HOLD')).upper()
+        confidence = float(data.get('confidence', 0.0))
+
+        # Gate 1: Only LONG/SHORT
         if signal not in {'LONG', 'SHORT'}:
             return
 
-        confidence = float(signal_payload.get('confidence', 0.0))
+        # Gate 2: Min confidence
         if confidence < MIN_CONFIDENCE:
             return
+
+        # Gate 3/4: DB-backed last-signal timestamp and 300s minimum throttle
+        last_time = await asyncio.to_thread(self._get_last_signal_time_from_db)
         now_ts = float(time_module.time())
-        if self._last_signal_time is not None:
-            elapsed = now_ts - float(self._last_signal_time)
-            direction_flipped = (
-                self._last_signal_direction is not None
-                and signal != str(self._last_signal_direction).upper()
+        elapsed = now_ts - float(last_time) if float(last_time) > 0 else float('inf')
+        if elapsed < MIN_HOLD_SECONDS:
+            logger.debug(
+                'Throttled: only %.0fs since last signal. Need %ss.',
+                elapsed,
+                MIN_HOLD_SECONDS,
             )
-            confidence_changed = (
-                self._last_signal_confidence is None
-                or abs(float(confidence) - float(self._last_signal_confidence)) > MIN_CONFIDENCE_CHANGE
-            )
-            hold_elapsed = elapsed >= MIN_HOLD_SECONDS
-            if not (direction_flipped or confidence_changed or hold_elapsed):
-                logger.debug(
-                    "Skipping signal — %.0fs since last, no flip, confidence delta <= %.1f",
-                    elapsed,
-                    MIN_CONFIDENCE_CHANGE,
-                )
-                return
-            if signal == str(self._last_signal_direction).upper() and not (confidence_changed or hold_elapsed):
-                logger.debug("Skipping — same direction %s repeated", signal)
-                return
-        size_multiplier = float(signal_payload.get('size_multiplier', 1.0))
-        signal_note = str(signal_payload.get('signal_note', 'normal'))
-        entry_price = float(signal_payload.get('entry_price', current_price))
-        sl = float(signal_payload.get('sl', entry_price))
-        tp1 = float(signal_payload.get('tp1', entry_price))
-        tp2 = float(signal_payload.get('tp2', entry_price))
-        tp3 = float(signal_payload.get('tp3', entry_price))
-        rr_ratio = float(signal_payload.get('rr_ratio', 1.0))
+            return
+
+        logger.info(
+            'Signal allowed: %s conf=%.1f%% elapsed=%.0fs',
+            signal,
+            confidence,
+            elapsed if math.isfinite(elapsed) else 0.0,
+        )
+
+        size_multiplier = float(data.get('size_multiplier', 1.0))
+        signal_note = str(data.get('signal_note', ''))
+        entry_price = float(data.get('entry_price', 0.0))
         if entry_price <= 0:
             entry_price = float(current_price)
+        sl = float(data.get('sl', 0.0))
+        tp1 = float(data.get('tp1', 0.0))
+        tp2 = float(data.get('tp2', 0.0))
+        tp3 = float(data.get('tp3', 0.0))
+        rr_ratio = float(data.get('rr_ratio', 1.0))
 
-        open_count = await asyncio.to_thread(self._count_open_btc_signals)
-        if open_count >= MAX_OPEN_SIGNALS:
-            await asyncio.to_thread(self._close_all_open_btc_signals, float(current_price), 'CLOSED')
-
-        open_state = self._open_signal_state
-        if open_state is not None:
-            open_signal = str(open_state.get('signal', 'HOLD')).upper()
-
-            # Safety close for stale in-memory state that may not be in DB open set anymore.
-            prev_entry = float(open_state.get('entry_price', 0.0))
-            prev_pnl_pct = self._calc_signal_pnl_pct(open_signal, prev_entry, current_price)
-            await asyncio.to_thread(
-                self._close_btc_signal_row,
-                str(open_state.get('signal_ref', '')),
-                bool(open_state.get('is_minimal_schema', False)),
-                prev_pnl_pct,
-                'CLOSED',
-            )
-            self._open_signal_state = None
-            self._last_open_signal_id = None
+        # Close existing open signals first (single-position policy).
+        await asyncio.to_thread(
+            self._close_all_open_btc_signals,
+            float(entry_price if entry_price > 0 else current_price),
+            'CLOSED',
+        )
+        self._open_signal_state = None
+        self._last_open_signal_id = None
 
         insert_meta = await asyncio.to_thread(
             self._insert_btc_signal_row,
@@ -837,28 +865,18 @@ class AppRuntime:
         )
         if insert_meta:
             self._open_signal_state = {
-                "signal_ref": str(insert_meta.get("signal_ref", "")),
-                "is_minimal_schema": bool(insert_meta.get("is_minimal_schema", False)),
-                "signal": signal,
-                "entry_price": float(entry_price),
-                "sl": float(sl),
-                "tp1": float(tp1),
-                "tp2": float(tp2),
-                "opened_at_ts": float(time_module.time()),
+                'signal_ref': str(insert_meta.get('signal_ref', '')),
+                'is_minimal_schema': bool(insert_meta.get('is_minimal_schema', False)),
+                'signal': signal,
+                'entry_price': float(entry_price),
+                'sl': float(sl),
+                'tp1': float(tp1),
+                'tp2': float(tp2),
+                'opened_at_ts': float(time_module.time()),
             }
-            self._last_open_signal_id = str(insert_meta.get("signal_ref", ""))
+            self._last_open_signal_id = str(insert_meta.get('signal_ref', ''))
             self._last_saved_btc_signal = signal
-            self._last_signal_time = now_ts
-            self._last_signal_direction = signal
-            self._last_signal_confidence = float(confidence)
-            logger.info(
-                "BTC signal saved: %s conf=%.1f%% size=%sx note=%s",
-                signal,
-                confidence,
-                format(size_multiplier, "g"),
-                signal_note,
-            )
-
+            logger.info('Saved: %s %s', str(insert_meta.get('signal_ref', '')), signal)
     async def _maybe_update_open_signal_pnl(self, current_price: float) -> None:
         if self._open_signal_state is None:
             return
@@ -1296,3 +1314,4 @@ class AppRuntime:
         if settings.redis_state_enabled and self.redis_state.connected:
             await self.redis_state.set_json('execution', payload, ttl_seconds=10)
         return payload
+
