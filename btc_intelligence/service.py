@@ -733,6 +733,27 @@ class AppRuntime:
                 regime=normalized_regime,
             )
         )
+        dominant_state = str(
+            probability_payload.get("dominant_state")
+            or probability_payload.get("dominant")
+            or "SIDEWAYS"
+        ).upper()
+        probability_payload["dominant_state"] = dominant_state
+        probability_payload["dominant"] = dominant_state
+        calibration_score = probability_payload.get("calibration_score")
+        if calibration_score is None:
+            platt_probability = probability_payload.get("platt_probability")
+            if platt_probability is not None:
+                calibration_score = float(platt_probability) * 100.0
+            else:
+                calibration_score = float(
+                    max(
+                        probability_payload.get("up_prob", 0.0),
+                        probability_payload.get("down_prob", 0.0),
+                        probability_payload.get("sideways_prob", 0.0),
+                    )
+                )
+        probability_payload["calibration_score"] = round(float(calibration_score), 2)
         probability_payload["as_of_utc"] = now_iso
 
         base_decision = str(decision_payload.get("decision", "HOLD")).upper()
