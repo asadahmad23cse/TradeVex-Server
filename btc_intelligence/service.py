@@ -46,13 +46,22 @@ from btc_intelligence.signals.probability_stacker import ProbabilityStacker
 from btc_intelligence.services import (
     AdaptiveLearningConfig,
     AdaptiveLearningEngine,
+    DataDriftEngine,
     DecisionEngine,
     DecisionEngineInput,
     ExecutionPlanInput,
     ExecutionPlanner,
+    MetaDecisionEngine,
+    MetaDecisionInput,
+    MetaLabelingConfig,
+    MetaLabelingEngine,
     OrderFlowService,
     ProbabilityInput,
     ProbabilityService,
+    StrategyEngine,
+    StrategyEngineConfig,
+    ValidationConfig,
+    ValidationEngine,
 )
 from btc_intelligence.state import RedisStateStore
 from btc_intelligence.utils.notifier import TelegramNotifier
@@ -103,6 +112,22 @@ class AppRuntime:
         self.decision_engine = DecisionEngine()
         self.probability_service = ProbabilityService()
         self.execution_planner = ExecutionPlanner()
+        self.validation_engine = ValidationEngine(ValidationConfig())
+        self.meta_labeling_engine = MetaLabelingEngine(MetaLabelingConfig())
+        self.strategy_engine = StrategyEngine(
+            state_path="btc_intelligence/logs/strategy_engine_state.json",
+            config=StrategyEngineConfig(
+                min_trades_required=30,
+                update_frequency=20,
+                learning_rate=0.01,
+            ),
+        )
+        self.data_drift_engine = DataDriftEngine(
+            baseline_window=240,
+            recent_window=60,
+            state_path="btc_intelligence/logs/data_drift_baseline.json",
+        )
+        self.meta_decision_engine = MetaDecisionEngine()
         self.adaptive_learning = AdaptiveLearningEngine(
             state_path="btc_intelligence/logs/adaptive_learning_state.json",
             config=AdaptiveLearningConfig(
@@ -599,20 +624,26 @@ class AppRuntime:
             blockers=list(decision_payload.get("blockers", [])),
         )
 
-        decision_payload["base_decision"] = base_decision
-        decision_payload["decision"] = str(adaptive_meta.get("final_decision", base_decision))
-        decision_payload["confidence"] = float(adaptive_meta.get("adjusted_confidence", decision_payload.get("confidence", 0.0)))
-        decision_payload["adaptive_reasons"] = list(adaptive_meta.get("reasons", []))
-        decision_payload["calibrated_probability"] = round(float(adaptive_meta.get("calibration", {}).get("calibrated_prob", raw_prob)) * 100.0, 2)
-        decision_payload["adaptive_score"] = float(adaptive_meta.get("adaptive_score", 0.0))
-        decision_payload["edge_decay"] = adaptive_meta.get("edge_decay", {})
-
-        verdict_payload = dict(decision_payload.get("trade_verdict", {}))
-        verdict_payload["final_verdict"] = "TRADE" if decision_payload["decision"] in {"LONG", "SHORT"} else "AVOID"
-        decision_payload["trade_verdict"] = verdict_payload
+        calibrated_prob = float(adaptive_meta.get("calibration", {}).get("calibrated_prob", raw_prob))
+        strategy_payload = self.strategy_engine.select_strategy(
+            regime=normalized_regime,
+            volatility_regime=str(vol_payload.get("volatility_regime", "NORMAL")),
+            momentum_score=momentum_score,
+            flow_score=float(orderflow_payload.get("flow_score", 0.0)),
+            cost_score=cost_score,
+        )
+        drift_payload = self.data_drift_engine.update_and_detect(
+            {
+                "momentum": momentum_score,
+                "flow": float(orderflow_payload.get("flow_score", 0.0)),
+                "cost": cost_score,
+                "volatility": float(vol_payload.get("atr_pct", 0.0)),
+                "probability": calibrated_prob,
+            }
+        )
 
         liquidity_score = self._derive_liquidity_score(snapshot.get("depth", {}))
-        planned_direction = str(decision_payload.get("decision", "HOLD")).upper()
+        planned_direction = str(adaptive_meta.get("final_decision", base_decision)).upper()
         if planned_direction not in {"LONG", "SHORT"}:
             planned_direction = preferred_direction
         execution_plan_payload = self.execution_planner.plan(
@@ -625,6 +656,65 @@ class AppRuntime:
             )
         )
         execution_plan_payload["as_of_utc"] = now_iso
+
+        validation_meta = adaptive_meta.get("validation", {}) if isinstance(adaptive_meta.get("validation", {}), dict) else {}
+        val_samples = validation_meta.get("samples", {}) if isinstance(validation_meta.get("samples", {}), dict) else {}
+        baseline_metric = float(validation_meta.get("baseline", {}).get("metric", 0.0)) if isinstance(validation_meta.get("baseline", {}), dict) else 0.0
+        candidate_metric = float(validation_meta.get("candidate", {}).get("metric", baseline_metric)) if isinstance(validation_meta.get("candidate", {}), dict) else baseline_metric
+        expected_edge = abs(float(decision_breakdown.get("final_score", 0.0))) / 100.0
+        validation_payload = self.validation_engine.validate_step(
+            "meta_decision",
+            {
+                "sample_size": int(val_samples.get("train", 0)) + int(val_samples.get("test", 0)),
+                "expected_edge": expected_edge,
+                "robustness_gain": candidate_metric - baseline_metric,
+                "drawdown_delta": 0.05 if bool(adaptive_meta.get("edge_decay", {}).get("decay_detected", False)) else -0.01,
+                "overfit_risk": float(adaptive_meta.get("calibration", {}).get("calibration_error", 0.0)) * 1.4,
+                "brier_score": float(adaptive_meta.get("calibration", {}).get("brier_score", 0.25)),
+                "calibration_error": float(adaptive_meta.get("calibration", {}).get("calibration_error", 0.15)),
+            },
+        )
+        meta_label_payload = self.meta_labeling_engine.label_trade(
+            base_decision=str(adaptive_meta.get("final_decision", base_decision)),
+            confidence=float(adaptive_meta.get("adjusted_confidence", decision_payload.get("confidence", 0.0))),
+            calibrated_prob=calibrated_prob,
+            blockers=list(decision_payload.get("blockers", [])),
+            calibration_error=float(adaptive_meta.get("calibration", {}).get("calibration_error", 0.0)),
+            drift_level=str(drift_payload.get("drift_level", "LOW")),
+            edge_decay=bool(adaptive_meta.get("edge_decay", {}).get("decay_detected", False)),
+        )
+        meta_output = self.meta_decision_engine.evaluate(
+            MetaDecisionInput(
+                base_decision=str(adaptive_meta.get("final_decision", base_decision)),
+                base_confidence=float(adaptive_meta.get("adjusted_confidence", decision_payload.get("confidence", 0.0))),
+                calibrated_probability=calibrated_prob,
+                strategy_used=str(strategy_payload.get("strategy_used", "trend_following")),
+                blockers=list(decision_payload.get("blockers", [])),
+                validation=validation_payload,
+                meta_label=meta_label_payload,
+                drift=drift_payload,
+                edge_decay=adaptive_meta.get("edge_decay", {}),
+                execution_plan=execution_plan_payload,
+                adaptive_meta=adaptive_meta,
+            )
+        )
+
+        decision_payload["base_decision"] = base_decision
+        decision_payload["decision"] = str(meta_output.get("decision", adaptive_meta.get("final_decision", base_decision)))
+        decision_payload["confidence"] = float(meta_output.get("confidence", adaptive_meta.get("adjusted_confidence", 0.0)))
+        decision_payload["probability"] = float(meta_output.get("probability", calibrated_prob * 100.0))
+        decision_payload["strategy_used"] = str(meta_output.get("strategy_used", strategy_payload.get("strategy_used", "trend_following")))
+        decision_payload["risk_score"] = float(meta_output.get("risk_score", 0.0))
+        decision_payload["validation_status"] = str(meta_output.get("validation_status", "REJECTED"))
+        decision_payload["adaptive_adjustments"] = list(meta_output.get("adaptive_adjustments", []))
+        decision_payload["adaptive_reasons"] = list(adaptive_meta.get("reasons", []))
+        decision_payload["calibrated_probability"] = round(calibrated_prob * 100.0, 2)
+        decision_payload["adaptive_score"] = float(adaptive_meta.get("adaptive_score", 0.0))
+        decision_payload["edge_decay"] = adaptive_meta.get("edge_decay", {})
+
+        verdict_payload = dict(decision_payload.get("trade_verdict", {}))
+        verdict_payload["final_verdict"] = "TRADE" if decision_payload["decision"] in {"LONG", "SHORT"} else "AVOID"
+        decision_payload["trade_verdict"] = verdict_payload
 
         if signal_payload is not None and isinstance(signal_payload, dict):
             net_alpha = float(signal_payload.get("net_alpha", signal_payload.get("net_alpha_score", 0.0)) or 0.0)
@@ -642,6 +732,20 @@ class AppRuntime:
             "factor_contributions": decision_payload.get("factor_contributions", []),
             "trade_triggers": decision_payload.get("trade_triggers", []),
             "meta_decision": adaptive_meta,
+            "meta_labeling": meta_label_payload,
+            "validation_engine": validation_payload,
+            "strategy_selection": strategy_payload,
+            "data_drift": drift_payload,
+            "meta_output": {
+                "decision": meta_output.get("decision", "HOLD"),
+                "confidence": meta_output.get("confidence", 0.0),
+                "probability": meta_output.get("probability", 0.0),
+                "strategy_used": meta_output.get("strategy_used", strategy_payload.get("strategy_used", "trend_following")),
+                "execution_plan": execution_plan_payload,
+                "risk_score": meta_output.get("risk_score", 100.0),
+                "validation_status": meta_output.get("validation_status", "REJECTED"),
+                "adaptive_adjustments": meta_output.get("adaptive_adjustments", []),
+            },
             "adaptive_learning": {
                 "regime_bucket": self._regime_bucket(normalized_regime),
                 "weights": adaptive_meta.get("weights", {}),
@@ -951,6 +1055,15 @@ class AppRuntime:
                             )
                         except Exception as exc:
                             logger.debug('Adaptive learning trade record skipped: %s', exc)
+                        try:
+                            self.strategy_engine.record_trade(
+                                strategy=str(learn_state.get('strategy_used', 'trend_following')),
+                                pnl_pct=float(pnl_pct),
+                                regime=str(learn_state.get('regime', 'SIDEWAYS')),
+                                timestamp_utc=str(datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')),
+                            )
+                        except Exception as exc:
+                            logger.debug('Strategy performance record skipped: %s', exc)
                         self._open_signal_state = None
                         self._last_open_signal_id = None
                         self._last_saved_btc_signal = 'HOLD'
@@ -1053,6 +1166,15 @@ class AppRuntime:
                         )
                     except Exception as exc:
                         logger.debug('Adaptive learning trade record skipped: %s', exc)
+                    try:
+                        self.strategy_engine.record_trade(
+                            strategy=str(learn_state.get('strategy_used', 'trend_following')),
+                            pnl_pct=float(pnl),
+                            regime=str(learn_state.get('regime', 'SIDEWAYS')),
+                            timestamp_utc=str(datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')),
+                        )
+                    except Exception as exc:
+                        logger.debug('Strategy performance record skipped: %s', exc)
                     self._open_signal_state = None
                     self._last_open_signal_id = None
                     self._last_saved_btc_signal = 'HOLD'
@@ -1375,6 +1497,8 @@ class AppRuntime:
             decision_block = data.get('decision_engine', {}) if isinstance(data.get('decision_engine', {}), dict) else {}
             prob_block = data.get('probability', {}) if isinstance(data.get('probability', {}), dict) else {}
             meta_block = data.get('meta_decision', {}) if isinstance(data.get('meta_decision', {}), dict) else {}
+            meta_output = data.get('meta_output', {}) if isinstance(data.get('meta_output', {}), dict) else {}
+            strategy_block = data.get('strategy_selection', {}) if isinstance(data.get('strategy_selection', {}), dict) else {}
             breakdown_block = decision_block.get('decision_breakdown', {}) if isinstance(decision_block.get('decision_breakdown', {}), dict) else {}
             raw_prob = float(prob_block.get('up_prob', 0.0)) / 100.0 if signal == 'LONG' else float(prob_block.get('down_prob', 0.0)) / 100.0
             factor_values = {
@@ -1400,6 +1524,7 @@ class AppRuntime:
                 'raw_prob': float(max(0.0, min(1.0, raw_prob))),
                 'calibrated_prob': float(max(0.0, min(1.0, meta_block.get('calibration', {}).get('calibrated_prob', raw_prob) if isinstance(meta_block.get('calibration', {}), dict) else raw_prob))),
                 'factor_values': factor_values,
+                'strategy_used': str(meta_output.get('strategy_used', strategy_block.get('strategy_used', 'trend_following'))),
             }
             self._last_open_signal_id = str(insert_meta.get('signal_ref', ''))
             self._last_saved_btc_signal = signal
@@ -1483,13 +1608,22 @@ class AppRuntime:
         combined_payload["execution_plan"] = intelligence_bundle.get("execution_plan", {})
         combined_payload["trade_triggers"] = intelligence_bundle.get("trade_triggers", [])
         combined_payload["meta_decision"] = intelligence_bundle.get("meta_decision", {})
+        combined_payload["meta_labeling"] = intelligence_bundle.get("meta_labeling", {})
+        combined_payload["validation_engine"] = intelligence_bundle.get("validation_engine", {})
+        combined_payload["strategy_selection"] = intelligence_bundle.get("strategy_selection", {})
+        combined_payload["data_drift"] = intelligence_bundle.get("data_drift", {})
+        combined_payload["meta_output"] = intelligence_bundle.get("meta_output", {})
         combined_payload["adaptive_learning"] = intelligence_bundle.get("adaptive_learning", {})
 
-        meta_final = str(combined_payload.get("meta_decision", {}).get("final_decision", "")).upper()
+        meta_final = str(combined_payload.get("meta_output", {}).get("decision", "")).upper()
+        if not meta_final:
+            meta_final = str(combined_payload.get("meta_decision", {}).get("final_decision", "")).upper()
         if meta_final == "HOLD":
             combined_payload["signal"] = "HOLD"
             combined_payload["confidence"] = min(float(combined_payload.get("confidence", 0.0)), 49.0)
-            meta_reasons = combined_payload.get("meta_decision", {}).get("reasons", [])
+            meta_reasons = combined_payload.get("meta_output", {}).get("adaptive_adjustments", [])
+            if not meta_reasons:
+                meta_reasons = combined_payload.get("meta_decision", {}).get("reasons", [])
             if isinstance(meta_reasons, list) and meta_reasons:
                 combined_payload["signal_note"] = f"meta_hold:{str(meta_reasons[0])[:80]}"
             else:
@@ -1819,6 +1953,11 @@ class AppRuntime:
         payload["factor_contributions"] = bundle.get("factor_contributions", [])
         payload["trade_verdict"] = bundle.get("trade_verdict", {})
         payload["meta_decision"] = bundle.get("meta_decision", {})
+        payload["meta_labeling"] = bundle.get("meta_labeling", {})
+        payload["validation_engine"] = bundle.get("validation_engine", {})
+        payload["strategy_selection"] = bundle.get("strategy_selection", {})
+        payload["data_drift"] = bundle.get("data_drift", {})
+        payload["meta_output"] = bundle.get("meta_output", {})
         payload["adaptive_learning"] = bundle.get("adaptive_learning", {})
         payload["as_of_utc"] = bundle.get("as_of_utc")
         if settings.redis_state_enabled and self.redis_state.connected:
