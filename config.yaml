@@ -107,6 +107,8 @@ signal:
   dedup_hours: 4
   min_holding_candles: 2
 
+force_signals_outside_hours: true
+
 risk:
   max_daily_drawdown_pct: 5.0
   max_open_positions: 8

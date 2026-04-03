@@ -496,8 +496,17 @@ class LiveRunner:
         if ensemble is None or not ensemble.is_trained:
             return df
         try:
+            values = ensemble.predict_series(df)
+            try:
+                values_len = len(values)
+            except TypeError:
+                logger.warning("Shape mismatch for %s, skipping", symbol)
+                return df
+            if values_len != len(df):
+                logger.warning("Shape mismatch for %s, skipping", symbol)
+                return df
             enriched = df.copy()
-            enriched["Ensemble_Score"] = ensemble.predict_series(df)
+            enriched["Ensemble_Score"] = values
             return enriched
         except Exception as exc:
             logger.warning("Ensemble score injection failed for %s: %s", symbol, exc)
@@ -625,13 +634,14 @@ class LiveRunner:
             signal.signal(signal.SIGTERM, _sigterm_handler)
 
         # Intraday: every 5 minutes
-        self._scheduler.add_job(
+        job = self._scheduler.add_job(
             self._intraday_cycle,
             IntervalTrigger(minutes=5),
             id="intraday",
             max_instances=1,
             misfire_grace_time=60,
         )
+        logger.info(f"Intraday job scheduled: {job}")
 
         nse_close = _plus_minutes(_parse_hhmm(self.cfg["market_hours"]["nse"]["close"]), 5)
         self._scheduler.add_job(
@@ -708,6 +718,7 @@ class LiveRunner:
     # ------------------------------------------------------------------
 
     def _intraday_cycle(self) -> None:
+        logger.info("INTRADAY JOB TRIGGERED")
         logger.info("=== Intraday cycle: %s UTC ===", datetime.utcnow().strftime("%H:%M:%S"))
         self._intraday_cycles += 1
         cycle_start_ms = time_module.perf_counter() * 1000.0
@@ -757,7 +768,11 @@ class LiveRunner:
         portfolio_metrics = self.portfolio.get_metrics()
 
         for asset_info, asset_class in all_assets:
-            if not _is_market_open(asset_class):
+            ticker = asset_info.get("symbol") or asset_info.get("yf_ticker") or "UNKNOWN"
+            logger.info(f"Processing ticker: {ticker}")
+            force_signals_outside_hours = bool(self.cfg.get("force_signals_outside_hours", False))
+            if not force_signals_outside_hours and not _is_market_open(asset_class):
+                logger.info(f"SKIP {ticker}: market closed for {asset_class}")
                 continue
 
             symbol = asset_info["symbol"]
@@ -765,13 +780,19 @@ class LiveRunner:
 
             try:
                 fetch_start_ms = time_module.perf_counter() * 1000.0
+                intraday_period = "5d" if asset_class == "forex" else self.cfg["data"]["intraday_lookback"]
                 df = self.connector.get_intraday(
                     yf_ticker,
                     interval=self.cfg["data"]["intraday_interval"],
-                    period=self.cfg["data"]["intraday_lookback"],
+                    period=intraday_period,
                 )
                 timing_totals["data_fetch_ms"] += (time_module.perf_counter() * 1000.0 - fetch_start_ms)
-                if df.empty or len(df) < 30:
+                rows = len(df)
+                if asset_class == "forex":
+                    logger.info(f"Forex data rows: {rows} for {ticker}")
+                min_rows = 20 if asset_class == "forex" else 30
+                if df.empty or rows < min_rows:
+                    logger.info(f"SKIP {ticker}: insufficient intraday data (rows={len(df)})")
                     continue
 
                 feature_start_ms = time_module.perf_counter() * 1000.0
@@ -781,6 +802,7 @@ class LiveRunner:
                 self._save_data_quality(dq_report)
                 if dq_report.severe:
                     logger.warning("Suppressing %s due to severe intraday data anomaly", symbol)
+                    logger.info(f"SKIP {ticker}: severe intraday data anomaly")
                     continue
 
                 # Feature engineering (skip Hurst; use cached value)
@@ -791,6 +813,7 @@ class LiveRunner:
                 )
                 timing_totals["feature_compute_ms"] += (time_module.perf_counter() * 1000.0 - feature_start_ms)
                 if df.empty:
+                    logger.info(f"SKIP {ticker}: feature engineering returned empty frame")
                     continue
                 n_assets_timed += 1
 
@@ -803,8 +826,8 @@ class LiveRunner:
                 atr_14 = float(df["ATR_14"].iloc[-1])
                 with self._hurst_cache_lock:
                     hurst = self._hurst_cache.get(symbol, 0.5)
-                daily_vol = float(df.get("Volatility_20", pd.Series([0.2], index=df.index)).iloc[-1] or 0.2)
-                volume_ratio = float(df.get("Volume_Ratio", pd.Series([1.0], index=df.index)).iloc[-1] or 1.0)
+                daily_vol = float(df["Volatility_20"].iloc[-1] if "Volatility_20" in df.columns else 0.2)
+                volume_ratio = float(df["Volume_Ratio"].iloc[-1] if "Volume_Ratio" in df.columns else 1.0)
 
                 with self._regime_cache_lock:
                     regime_det = self._regime_cache.get(asset_class)
@@ -822,7 +845,7 @@ class LiveRunner:
                     regime=regime,
                 )
                 alpha_result["atr_percentile"] = float(
-                    df.get("ATR_Percentile", pd.Series([50.0], index=df.index)).iloc[-1]
+                    df["ATR_Percentile"].iloc[-1] if "ATR_Percentile" in df.columns else 50.0
                 )
                 try:
                     _rp = regime_probs if isinstance(regime_probs, dict) else {}
@@ -838,6 +861,7 @@ class LiveRunner:
                 timing_totals["alpha_score_ms"] += (time_module.perf_counter() * 1000.0 - alpha_start_ms)
 
                 if alpha_result["signal"] == "HOLD":
+                    logger.info(f"SKIP {ticker}: alpha signal HOLD")
                     continue
 
                 risk_start_ms = time_module.perf_counter() * 1000.0
@@ -864,23 +888,35 @@ class LiveRunner:
                     bucket,
                 )
 
-                sig = self.signal_engine.generate(
-                    asset=symbol,
-                    asset_class=asset_class,
-                    timeframe="intraday",
-                    alpha_result=alpha_result,
-                    regime=regime,
-                    regime_allows=allows,
-                    hurst=hurst,
-                    entry_price=entry_price,
-                    atr_14=atr_14,
-                    kelly_fraction=kelly_result["kelly_fraction"],
-                    position_size_pct=kelly_result["position_size_pct"],
-                    regime_size_mult=size_mult,
-                    daily_vol=daily_vol,
-                    volume_ratio=volume_ratio,
-                )
+                if ticker == "XAUUSD":
+                    alpha_score = alpha_result.get("score", alpha_result.get("strength"))
+                    logger.info(f"XAUUSD features shape: {df.shape}")
+                    logger.info(f"XAUUSD alpha score: {alpha_score}")
+                    logger.info(f"XAUUSD regime: {regime}")
+                try:
+                    sig = self.signal_engine.generate(
+                        asset=symbol,
+                        asset_class=asset_class,
+                        timeframe="intraday",
+                        alpha_result=alpha_result,
+                        regime=regime,
+                        regime_allows=allows,
+                        hurst=hurst,
+                        entry_price=entry_price,
+                        atr_14=atr_14,
+                        kelly_fraction=kelly_result["kelly_fraction"],
+                        position_size_pct=kelly_result["position_size_pct"],
+                        regime_size_mult=size_mult,
+                        daily_vol=daily_vol,
+                        volume_ratio=volume_ratio,
+                    )
+                except Exception as exc:
+                    logger.error("Signal generation error for %s: %s", ticker, exc, exc_info=True)
+                    logger.info(f"SKIP {ticker}: signal generation exception ({exc})")
+                    continue
+                logger.info(f"Signal generated: {sig} for {ticker}")
                 if sig is None:
+                    logger.info(f"SKIP {ticker}: signal engine returned None")
                     continue
 
                 open_pos = self.store.get_open_signals()
@@ -897,6 +933,7 @@ class LiveRunner:
                 )
                 if not allowed:
                     logger.info("Signal blocked for %s: %s", symbol, reason)
+                    logger.info(f"SKIP {ticker}: risk guard blocked ({reason})")
                     continue
 
                 timing_totals["risk_check_ms"] += (time_module.perf_counter() * 1000.0 - risk_start_ms)
@@ -1077,8 +1114,8 @@ class LiveRunner:
                 atr_14 = float(df["ATR_14"].iloc[-1])
                 with self._hurst_cache_lock:
                     hurst = self._hurst_cache.get(symbol, 0.5)
-                daily_vol = float(df.get("Volatility_20", pd.Series([0.2], index=df.index)).iloc[-1] or 0.2)
-                volume_ratio = float(df.get("Volume_Ratio", pd.Series([1.0], index=df.index)).iloc[-1] or 1.0)
+                daily_vol = float(df["Volatility_20"].iloc[-1] if "Volatility_20" in df.columns else 0.2)
+                volume_ratio = float(df["Volume_Ratio"].iloc[-1] if "Volume_Ratio" in df.columns else 1.0)
 
                 _lstm = self.lstm_model
                 if _lstm is not None and len(df) >= max(_lstm.sequence_length + 30, 80) and _lstm.needs_retrain(
@@ -1103,7 +1140,7 @@ class LiveRunner:
                     regime=regime,
                 )
                 alpha_result["atr_percentile"] = float(
-                    df.get("ATR_Percentile", pd.Series([50.0], index=df.index)).iloc[-1]
+                    df["ATR_Percentile"].iloc[-1] if "ATR_Percentile" in df.columns else 50.0
                 )
                 _eod_probs: dict = {}
                 try:
