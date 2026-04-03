@@ -78,12 +78,14 @@ class KellyPositionSizer:
             reduction *= 0.75
             reasons.append("low_confidence")
 
-        if dd > 0.04:
+        # Drawdown tiers are mutually exclusive.
+        # Hard halt at drawdown_halt_pct is handled separately below.
+        if dd > 0.06:
+            reduction *= 0.50
+            reasons.append("drawdown_gt_6pct")
+        elif dd > 0.04:
             reduction *= 0.80
             reasons.append("drawdown_gt_4pct")
-        if dd > 0.06:
-            reduction *= 0.60
-            reasons.append("drawdown_gt_6pct")
 
         halted = dd > float(self.config.drawdown_halt_pct)
         halt_reason = "drawdown_halt_triggered" if halted else None
