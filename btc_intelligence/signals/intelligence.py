@@ -222,3 +222,34 @@ def execution_rejection_code(reason: str) -> str:
     if "expiry" in r:
         return "EXPIRY_WINDOW_REJECT"
     return "UNKNOWN_REJECT"
+
+
+def combined_btc_signal(
+    orderflow_payload: dict[str, Any],
+    volatility_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Build a compact executable BTC signal from flow + volatility gate.
+    """
+    decision = str(orderflow_payload.get("decision_state", "NO_TRADE")).upper()
+    tradeability = str(volatility_payload.get("tradeability", "NO_TRADE")).upper()
+    obi = float(orderflow_payload.get("obi", 0.0))
+
+    if decision == "FAVOR_LONG" and tradeability == "ALLOW":
+        signal = "LONG"
+        confidence = max(0.0, min(100.0, obi * 100.0))
+    elif decision == "FAVOR_SHORT" and tradeability == "ALLOW":
+        signal = "SHORT"
+        confidence = max(0.0, min(100.0, abs(obi) * 100.0))
+    else:
+        signal = "HOLD"
+        confidence = 0.0
+
+    return {
+        "ticker": "BTCUSDT",
+        "signal": signal,
+        "confidence": round(confidence, 2),
+        "orderflow_decision": decision,
+        "tradeability": tradeability,
+        "obi": round(obi, 4),
+    }

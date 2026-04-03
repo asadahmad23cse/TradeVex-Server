@@ -11,10 +11,13 @@ import asyncio
 import json
 import logging
 import math
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
+import httpx
+import redis
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect  # type: ignore[import]
 from fastapi.responses import HTMLResponse, JSONResponse, Response  # type: ignore[import]
 from fastapi.staticfiles import StaticFiles  # type: ignore[import]
@@ -61,6 +64,8 @@ _webhook_receiver: WebhookReceiver | None = None
 _webhook_enabled: bool = False
 _webhook_request_counts: dict[str, list[float]] = {}
 _options_provider: Optional[object] = None
+r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
+_btc_proxy_cache: dict[str, dict[str, Any]] = {}
 
 
 def init_webhook(
@@ -244,6 +249,178 @@ def _cache_ttl_for_path(path: str) -> int:
         if path.startswith(prefix):
             return ttl
     return 0
+
+
+def _db_sqlite_path() -> Path:
+    db_url = ((_dashboard_cfg.get("database") or {}).get("url") or "data/signals.db")
+    if "://" in str(db_url):
+        # Keep local-dashboard fallback simple: only local sqlite file supported here.
+        return Path("data/signals.db")
+    return Path(str(db_url))
+
+
+def _normalize_signal_row(row: dict[str, Any], idx_hint: int = 0) -> dict[str, Any]:
+    signal_raw = str(row.get("signal", row.get("requested_signal", "HOLD"))).upper()
+    if signal_raw == "BUY":
+        signal_norm = "LONG"
+    elif signal_raw == "SELL":
+        signal_norm = "SHORT"
+    else:
+        signal_norm = signal_raw
+
+    ticker = (
+        row.get("ticker")
+        or row.get("asset")
+        or row.get("symbol")
+        or "BTCUSDT"
+    )
+    timestamp = row.get("timestamp") or row.get("time") or row.get("as_of_utc") or ""
+    outcome = row.get("outcome") or row.get("result") or ("OPEN" if row.get("close_price") is None else "CLOSED")
+    status = str(outcome or "OPEN").upper()
+    pnl_val = row.get("pnl_pct")
+    return {
+        "id": row.get("id") or row.get("signal_id") or idx_hint,
+        "time": timestamp,
+        "ticker": str(ticker).upper(),
+        "type": row.get("type") or signal_norm,
+        "signal": signal_norm,
+        "requested_signal": row.get("requested_signal") or signal_norm,
+        "confidence": float(row.get("confidence") or 0.0),
+        "entry": row.get("entry") if row.get("entry") is not None else row.get("entry_price"),
+        "stop_loss": row.get("stop_loss"),
+        "tp1": row.get("tp1") if row.get("tp1") is not None else row.get("take_profit"),
+        "risk_reward": row.get("risk_reward"),
+        "result": status,
+        "status": status,
+        "reason": row.get("reason", ""),
+        "pnl_pct": pnl_val,
+    }
+
+
+def _fetch_sqlite_signal_rows(limit: int = 200) -> list[dict[str, Any]]:
+    db_path = _db_sqlite_path()
+    if not db_path.exists():
+        return []
+    out: list[dict[str, Any]] = []
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            cols = {str(r[1]) for r in cur.execute("PRAGMA table_info(signals)").fetchall()}
+            if "signals" not in {str(r[0]) for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}:
+                return []
+            is_minimal_schema = (
+                {"ticker", "signal", "confidence", "outcome", "pnl_pct", "timestamp"}.issubset(cols)
+                and "signal_id" not in cols
+                and "asset" not in cols
+            )
+            if is_minimal_schema:
+                cur.execute(
+                    """
+                    SELECT rowid AS id, ticker, signal, confidence, outcome, pnl_pct, timestamp
+                    FROM signals
+                    ORDER BY datetime(timestamp) DESC, rowid DESC
+                    LIMIT ?
+                    """,
+                    (int(limit),),
+                )
+            else:
+                # Main terminal schema.
+                select_cols = [
+                    "signal_id",
+                    "timestamp",
+                    "asset",
+                    "signal",
+                    "confidence",
+                    "entry_price",
+                    "stop_loss",
+                    "take_profit",
+                    "outcome",
+                    "pnl_pct",
+                ]
+                if "result" in cols:
+                    select_cols.append("result")
+                cur.execute(
+                    f"""
+                    SELECT {", ".join(select_cols)}
+                    FROM signals
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (int(limit),),
+                )
+            for i, row in enumerate(cur.fetchall(), start=1):
+                out.append(_normalize_signal_row(dict(row), idx_hint=i))
+    except Exception as exc:
+        logger.warning("Failed to read combined signals from sqlite: %s", exc)
+    return out
+
+
+def _combined_signal_rows(limit: int = 200) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if _store is not None:
+        try:
+            store_rows = _store.get_recent_signals(limit=max(limit, 50))
+            rows.extend(_normalize_signal_row(x, idx_hint=i + 1) for i, x in enumerate(store_rows))
+        except Exception as exc:
+            logger.warning("Store signals fetch failed: %s", exc)
+    sqlite_rows = _fetch_sqlite_signal_rows(limit=max(limit, 50))
+    rows.extend(sqlite_rows)
+
+    # Deduplicate by strong id if present, else by (ticker,time,signal).
+    dedup: dict[str, dict[str, Any]] = {}
+    for i, row in enumerate(rows, start=1):
+        key = str(row.get("id") or f"{row.get('ticker')}|{row.get('time')}|{row.get('signal')}|{i}")
+        if key not in dedup:
+            dedup[key] = row
+    merged = list(dedup.values())
+    merged.sort(key=lambda x: str(x.get("time") or ""), reverse=True)
+    return merged[:limit]
+
+
+def _proxy_cache_get(name: str) -> dict[str, Any] | None:
+    cached = _btc_proxy_cache.get(name)
+    if not cached:
+        return None
+    payload = dict(cached)
+    payload["stale"] = True
+    return payload
+
+
+async def _btc_proxy_payload(name: str, redis_key: str, upstream_url: str) -> dict[str, Any]:
+    # 1) Redis fast-path
+    try:
+        raw = r.get(redis_key)
+        if raw:
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                payload["stale"] = False
+                _btc_proxy_cache[name] = dict(payload)
+                return payload
+    except Exception:
+        pass
+
+    # 2) Upstream fallback
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(upstream_url)
+            resp.raise_for_status()
+            payload = resp.json()
+            if isinstance(payload, dict):
+                payload["stale"] = False
+                _btc_proxy_cache[name] = dict(payload)
+                return payload
+            wrapped = {"data": payload, "stale": False}
+            _btc_proxy_cache[name] = dict(wrapped)
+            return wrapped
+    except Exception:
+        pass
+
+    # 3) Last cached stale payload
+    cached = _proxy_cache_get(name)
+    if cached is not None:
+        return cached
+    return {"error": "upstream_unavailable", "stale": True}
 
 
 @app.middleware("http")
@@ -767,6 +944,42 @@ def get_btc_markers(interval: str = "1d", limit: int = 1000):
 @app.get("/api/btc/news")
 def btc_news(limit: int = 8):
     return {"news": get_btc_news(limit)}
+
+
+@app.get("/api/btc/orderflow")
+async def btc_orderflow_proxy():
+    return await _btc_proxy_payload(
+        name="orderflow",
+        redis_key="btc:orderflow",
+        upstream_url="http://127.0.0.1:9000/api/orderflow",
+    )
+
+
+@app.get("/api/btc/volume")
+async def btc_volume_proxy():
+    return await _btc_proxy_payload(
+        name="volume",
+        redis_key="btc:volprofile",
+        upstream_url="http://127.0.0.1:9000/api/volume-profile",
+    )
+
+
+@app.get("/api/btc/volatility")
+async def btc_volatility_proxy():
+    return await _btc_proxy_payload(
+        name="volatility",
+        redis_key="btc:volatility",
+        upstream_url="http://127.0.0.1:9000/api/volatility",
+    )
+
+
+@app.get("/api/btc/execution")
+async def btc_execution_proxy():
+    return await _btc_proxy_payload(
+        name="execution",
+        redis_key="btc:execution",
+        upstream_url="http://127.0.0.1:9000/api/execution",
+    )
 
 
 @app.get("/api/news")
@@ -1641,9 +1854,8 @@ async def get_batch_prices(tickers: str):
 
 @app.get("/api/signals")
 def get_signals(limit: int = 50):
-    if _store is None:
-        return []
-    return _store.get_recent_signals(limit=limit)
+    lim = max(1, min(int(limit), 1000))
+    return _combined_signal_rows(limit=lim)
 
 
 @app.get("/api/portfolio")
@@ -1854,9 +2066,8 @@ async def paper_reject(payload: dict):
 
 @app.get("/api/history")
 def get_history(limit: int = 100):
-    if _store is None:
-        return []
-    return _store.get_recent_signals(limit=limit)
+    lim = max(1, min(int(limit), 1000))
+    return _combined_signal_rows(limit=lim)
 
 
 @app.get("/api/snapshot")

@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import sqlite3
+import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,6 +36,7 @@ from btc_intelligence.regime.classifier import classify_regime
 from btc_intelligence.signals.engine import SignalEngine
 from btc_intelligence.signals.execution import evaluate_execution, recommended_max_position_btc
 from btc_intelligence.signals.intelligence import (
+    combined_btc_signal,
     execution_rejection_code,
     order_flow_decision_state,
     trade_based_volume_profile,
@@ -93,9 +96,14 @@ class AppRuntime:
         self._running = False
         self.feature_seq: deque[np.ndarray] = deque(maxlen=200)
         self._open_trade_context: dict[str, Any] = {}
+        self._shared_signals_db = Path('data/signals.db')
+        self._shared_signals_db.parent.mkdir(parents=True, exist_ok=True)
+        self._last_saved_btc_signal = 'HOLD'
+        self._last_open_signal_id: str | None = None
 
         self.signal_log_path = Path(settings.signal_log_path)
         self.signal_log_path.parent.mkdir(parents=True, exist_ok=True)
+        self._ensure_shared_db_schema()
 
     async def start(self) -> None:
         if self._running:
@@ -153,12 +161,15 @@ class AppRuntime:
                 last_close = int(snapshot.get('last_15m_close_time', 0))
                 if last_close <= int(snapshot.get('last_feature_eval_close_time', 0)):
                     self._mark_to_market(snapshot)
+                    state = build_feature_state(snapshot)
+                    await self._publish_intelligence_state(snapshot, state)
                     await asyncio.sleep(2)
                     continue
 
                 state = build_feature_state(snapshot)
                 vol_payload = volatility_tradeability(state.volatility)
                 await self.buffer.set_volatility_tradeability(vol_payload)
+
                 regime = classify_regime(snapshot, state)
                 payload = self.engine.build(
                     snapshot=snapshot,
@@ -176,6 +187,7 @@ class AppRuntime:
                 await self.buffer.mark_feature_eval(last_close)
                 await self._append_signal_log(payload)
                 await self.hub.broadcast(payload)
+                await self._publish_intelligence_state(snapshot, state)
 
                 self._handle_paper_trade(payload, snapshot)
 
@@ -205,6 +217,173 @@ class AppRuntime:
         with self.signal_log_path.open('a', encoding='utf-8') as f:
             f.write(line + '\n')
 
+    def _ensure_shared_db_schema(self) -> None:
+        try:
+            with sqlite3.connect(self._shared_signals_db) as conn:
+                cur = conn.cursor()
+                cur.execute("CREATE TABLE IF NOT EXISTS signals (ticker TEXT, signal TEXT, confidence REAL, outcome TEXT, pnl_pct REAL, timestamp TEXT)")
+                for ddl in (
+                    "ALTER TABLE signals ADD COLUMN ticker TEXT",
+                    "ALTER TABLE signals ADD COLUMN outcome TEXT",
+                    "ALTER TABLE signals ADD COLUMN pnl_pct REAL",
+                    "ALTER TABLE signals ADD COLUMN result TEXT",
+                ):
+                    try:
+                        cur.execute(ddl)
+                    except Exception:
+                        pass
+                conn.commit()
+        except Exception as exc:
+            logger.warning('Shared signals DB schema init failed: %s', exc)
+
+    def _read_signal_columns(self, cur: sqlite3.Cursor) -> set[str]:
+        cur.execute("PRAGMA table_info(signals)")
+        return {str(row[1]) for row in cur.fetchall()}
+
+    def _insert_btc_signal_row(self, signal: str, confidence: float) -> str | None:
+        """
+        Insert BTC signal into shared data/signals.db.
+        Uses requested minimal schema when available, otherwise falls back to
+        the terminal's richer signals schema.
+        """
+        try:
+            with sqlite3.connect(self._shared_signals_db) as conn:
+                cur = conn.cursor()
+                cols = self._read_signal_columns(cur)
+
+                is_minimal_schema = (
+                    {'ticker', 'signal', 'confidence', 'outcome', 'pnl_pct', 'timestamp'}.issubset(cols)
+                    and 'signal_id' not in cols
+                    and 'asset' not in cols
+                )
+                if is_minimal_schema:
+                    cur.execute(
+                        """
+                        INSERT INTO signals (ticker, signal, confidence, outcome, pnl_pct, timestamp)
+                        VALUES ('BTCUSDT', ?, ?, 'OPEN', 0.0, datetime('now'))
+                        """,
+                        (signal, float(confidence)),
+                    )
+                    conn.commit()
+                    row_id = cur.lastrowid
+                    return str(row_id) if row_id is not None else None
+
+                signal_id = f"btc_{int(datetime.now(timezone.utc).timestamp())}_{uuid.uuid4().hex[:8]}"
+                now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+                cur.execute(
+                    """
+                    INSERT INTO signals (
+                        signal_id, timestamp, asset, asset_class, timeframe,
+                        signal, strength, confidence, alpha_score, regime,
+                        entry_price, stop_loss, take_profit, position_size_pct,
+                        kelly_fraction, hurst_exponent, factor_scores, ic_weights,
+                        slippage_cost_pct, cost_pct, net_alpha_score, cs_alpha_score,
+                        execution_price, implementation_shortfall_pct, outcome, pnl_pct
+                    )
+                    VALUES (?, ?, 'BTCUSDT', 'crypto', 'intraday',
+                            ?, 'MEDIUM', ?, 0.0, 'SIDEWAYS',
+                            0.0, 0.0, 0.0, 0.0,
+                            0.0, NULL, '{}', '{}',
+                            0.0, 0.0, 0.0, 0.0,
+                            0.0, 0.0, 'OPEN', 0.0)
+                    """,
+                    (signal_id, now_iso, signal, float(confidence)),
+                )
+                conn.commit()
+                return signal_id
+        except Exception as exc:
+            logger.error('Failed to insert BTC signal row: %s', exc, exc_info=True)
+            return None
+
+    def _update_btc_signal_row(self, signal_ref: str | None, outcome: str, pnl_pct: float) -> None:
+        if not signal_ref:
+            return
+        try:
+            with sqlite3.connect(self._shared_signals_db) as conn:
+                cur = conn.cursor()
+                cols = self._read_signal_columns(cur)
+                out_val = str(outcome).upper()
+                pnl_val = float(pnl_pct)
+
+                is_minimal_schema = (
+                    {'ticker', 'signal', 'confidence', 'outcome', 'pnl_pct', 'timestamp'}.issubset(cols)
+                    and 'signal_id' not in cols
+                    and 'asset' not in cols
+                )
+                if is_minimal_schema:
+                    cur.execute(
+                        """
+                        UPDATE signals
+                        SET outcome = ?, pnl_pct = ?
+                        WHERE rowid = (
+                            SELECT rowid FROM signals
+                            WHERE ticker = 'BTCUSDT' AND outcome = 'OPEN'
+                            ORDER BY rowid DESC LIMIT 1
+                        )
+                        """,
+                        (out_val, pnl_val),
+                    )
+                    conn.commit()
+                    return
+
+                cur.execute(
+                    """
+                    UPDATE signals
+                    SET outcome = ?, pnl_pct = ?, result = ?
+                    WHERE signal_id = ?
+                    """,
+                    (out_val, pnl_val, out_val, str(signal_ref)),
+                )
+                conn.commit()
+        except Exception as exc:
+            logger.error('Failed to update BTC signal row: %s', exc, exc_info=True)
+
+    async def _persist_btc_signal_from_redis(self) -> None:
+        if not settings.redis_state_enabled:
+            return
+        signal_payload = await self.redis_state.get_json('signal', default={})
+        if not isinstance(signal_payload, dict):
+            return
+        signal = str(signal_payload.get('signal', 'HOLD')).upper()
+        confidence = float(signal_payload.get('confidence', 0.0))
+        if signal == 'HOLD':
+            return
+        if signal == self._last_saved_btc_signal:
+            return
+        if self._last_open_signal_id is not None:
+            await asyncio.to_thread(self._update_btc_signal_row, self._last_open_signal_id, 'TIMEOUT', 0.0)
+            self._last_open_signal_id = None
+        signal_ref = await asyncio.to_thread(self._insert_btc_signal_row, signal, confidence)
+        if signal_ref:
+            self._last_open_signal_id = signal_ref
+            self._last_saved_btc_signal = signal
+            logger.info('BTC signal saved: %s', signal)
+
+    async def _publish_intelligence_state(self, snapshot: dict[str, Any], state) -> None:
+        if not (settings.redis_state_enabled and self.redis_state.connected):
+            return
+        orderflow_payload = order_flow_decision_state(state.order_flow)
+        orderflow_payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        vol_payload = volatility_tradeability(state.volatility)
+        vol_payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        volume_payload = trade_based_volume_profile(
+            agg_trades=snapshot.get('agg_trades', []),
+            window_minutes=45,
+            n_bins=24,
+        )
+        volume_payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        preferred_direction = 'LONG' if str(orderflow_payload.get('decision_state', '')).upper() != 'FAVOR_SHORT' else 'SHORT'
+        execution_payload = self._build_execution_payload(snapshot=snapshot, state=state, direction=preferred_direction)
+
+        await self.redis_state.set_json('orderflow', orderflow_payload, ttl_seconds=10)
+        await self.redis_state.set_json('volatility', vol_payload, ttl_seconds=10)
+        await self.redis_state.set_json('volprofile', volume_payload, ttl_seconds=10)
+        await self.redis_state.set_json('execution', execution_payload, ttl_seconds=10)
+        combined_payload = combined_btc_signal(orderflow_payload, vol_payload)
+        combined_payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        await self.redis_state.set_json('signal', combined_payload, ttl_seconds=10)
+        await self._persist_btc_signal_from_redis()
+
     def _handle_paper_trade(self, payload: dict[str, Any], snapshot: dict[str, Any]) -> None:
         if not settings.paper_trade:
             return
@@ -232,6 +411,28 @@ class AppRuntime:
         closed = self._mark_to_market(snapshot)
         if closed:
             rr_achieved = self._rr_from_reason(str(closed.get('reason', 'manual')))
+            direction = str(closed.get('direction', 'LONG')).upper()
+            entry = float(closed.get('entry', 0.0))
+            exit_price = float(closed.get('exit', 0.0))
+            if entry > 0:
+                if direction == 'SHORT':
+                    pnl_pct = ((entry - exit_price) / entry) * 100.0
+                else:
+                    pnl_pct = ((exit_price - entry) / entry) * 100.0
+            else:
+                pnl_pct = 0.0
+
+            reason = str(closed.get('reason', 'timeout')).lower()
+            if reason.startswith('tp'):
+                outcome = 'TP'
+            elif reason in {'stop', 'sl'}:
+                outcome = 'SL'
+            else:
+                outcome = 'TIMEOUT'
+            self._update_btc_signal_row(self._last_open_signal_id, outcome, pnl_pct)
+            self._last_open_signal_id = None
+            self._last_saved_btc_signal = 'HOLD'
+
             row = {
                 **closed,
                 'rr_achieved': rr_achieved,
@@ -402,6 +603,18 @@ class AppRuntime:
         if closed:
             row = {**closed, 'rr_achieved': self._rr_from_reason(str(closed.get('reason', 'manual'))), 'mae': 0.0, 'mfe': 0.0}
             self.performance_tracker.record_trade(row)
+            direction = str(closed.get('direction', 'LONG')).upper()
+            entry = float(closed.get('entry', 0.0))
+            exit_price = float(closed.get('exit', 0.0))
+            if entry > 0:
+                pnl_pct = ((entry - exit_price) / entry) * 100.0 if direction == 'SHORT' else ((exit_price - entry) / entry) * 100.0
+            else:
+                pnl_pct = 0.0
+            reason = str(closed.get('reason', 'timeout')).lower()
+            outcome = 'TP' if reason.startswith('tp') else 'SL' if reason in {'stop', 'sl'} else 'TIMEOUT'
+            self._update_btc_signal_row(self._last_open_signal_id, outcome, pnl_pct)
+            self._last_open_signal_id = None
+            self._last_saved_btc_signal = 'HOLD'
         return {'closed': closed}
 
     async def market_klines(self, timeframe: str, limit: int) -> dict[str, Any]:
@@ -438,6 +651,8 @@ class AppRuntime:
         state = build_feature_state(snap)
         payload = order_flow_decision_state(state.order_flow)
         payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        if settings.redis_state_enabled and self.redis_state.connected:
+            await self.redis_state.set_json('orderflow', payload, ttl_seconds=10)
         return payload
 
     async def volume_profile_intelligence(self, window_minutes: int = 45, bins: int = 24) -> dict[str, Any]:
@@ -448,6 +663,8 @@ class AppRuntime:
             n_bins=int(max(12, min(bins, 48))),
         )
         payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        if settings.redis_state_enabled and self.redis_state.connected:
+            await self.redis_state.set_json('volprofile', payload, ttl_seconds=10)
         return payload
 
     async def volatility_intelligence(self) -> dict[str, Any]:
@@ -458,40 +675,35 @@ class AppRuntime:
         payload = volatility_tradeability(state.volatility)
         await self.buffer.set_volatility_tradeability(payload)
         payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        if settings.redis_state_enabled and self.redis_state.connected:
+            await self.redis_state.set_json('volatility', payload, ttl_seconds=10)
         return payload
 
-    async def execution_intelligence(self, direction: str | None = None) -> dict[str, Any]:
-        snap = await self.buffer.snapshot()
-        if not self._has_required_candles(snap):
-            return {'status': 'warming_up', 'accepted': False, 'decision_state': 'NO_TRADE'}
-
-        latest = snap.get('latest_signal', {}) or {}
+    def _build_execution_payload(self, snapshot: dict[str, Any], state, direction: str | None = None) -> dict[str, Any]:
+        latest = snapshot.get('latest_signal', {}) or {}
         resolved_direction = str(direction or latest.get('signal', 'LONG')).upper()
         if resolved_direction not in {'LONG', 'SHORT'}:
             resolved_direction = 'LONG'
         side = 'buy' if resolved_direction == 'LONG' else 'sell'
 
-        state = build_feature_state(snap)
         fallback_vol = volatility_tradeability(state.volatility)
-        await self.buffer.set_volatility_tradeability(fallback_vol)
         check = evaluate_execution(
-            snap.get('depth', {}),
-            snap.get('agg_trades', []),
+            snapshot.get('depth', {}),
+            snapshot.get('agg_trades', []),
             resolved_direction,
             order_flow=state.order_flow,
             derivatives=state.derivatives,
-            market_state=snap,
+            market_state=snapshot,
             fallback_tradeability=str(fallback_vol.get('tradeability', 'ALLOW')),
         )
         max_btc = recommended_max_position_btc(
-            depth=snap.get('depth', {}),
+            depth=snapshot.get('depth', {}),
             side=side,
             slippage_limit_pct=settings.slippage_reject_pct,
             min_qty_btc=0.01,
             max_qty_btc=8.0,
         )
-        bid, ask, mid = MarketDataBuffer.best_bid_ask(snap.get('depth', {}))
-
+        bid, ask, mid = MarketDataBuffer.best_bid_ask(snapshot.get('depth', {}))
         return {
             'direction': resolved_direction,
             'accepted': bool(check.accepted),
@@ -509,3 +721,13 @@ class AppRuntime:
             'rejection_code': execution_rejection_code(check.reason) if not check.accepted else '',
             'as_of_utc': datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
         }
+
+    async def execution_intelligence(self, direction: str | None = None) -> dict[str, Any]:
+        snap = await self.buffer.snapshot()
+        if not self._has_required_candles(snap):
+            return {'status': 'warming_up', 'accepted': False, 'decision_state': 'NO_TRADE'}
+        state = build_feature_state(snap)
+        payload = self._build_execution_payload(snapshot=snap, state=state, direction=direction)
+        if settings.redis_state_enabled and self.redis_state.connected:
+            await self.redis_state.set_json('execution', payload, ttl_seconds=10)
+        return payload

@@ -866,6 +866,7 @@ body{
             <tr style="color:#8b949e; border-bottom:1px solid #30363d;">
               <th style="padding:8px; text-align:left">#</th>
               <th style="padding:8px; text-align:left">Time</th>
+              <th style="padding:8px; text-align:left">Ticker</th>
               <th style="padding:8px; text-align:left">Type</th>
               <th style="padding:8px; text-align:left">Signal</th>
               <th style="padding:8px; text-align:right">Conf</th>
@@ -878,7 +879,7 @@ body{
             </tr>
           </thead>
           <tbody id="history-tbody">
-            <tr><td colspan="11" style="padding:20px; text-align:center; color:#484f58;">No signals recorded yet</td></tr>
+            <tr><td colspan="12" style="padding:20px; text-align:center; color:#484f58;">No signals recorded yet</td></tr>
           </tbody>
         </table>
       </div>
@@ -2105,10 +2106,16 @@ function historyStatus(sig){
   return String(sig?.status || sig?.result || "OPEN").toUpperCase();
 }
 
+function historyTicker(sig){
+  return String(sig?.ticker || sig?.asset || "BTCUSDT").toUpperCase();
+}
+
 function historySignalType(sig){
   const rawType = String(sig?.type || "").toUpperCase();
   if(rawType === "BLOCKED") return "BLOCKED";
   const signalType = String(sig?.signal || sig?.requested_signal || "").toUpperCase();
+  if(signalType === "BUY") return "LONG";
+  if(signalType === "SELL") return "SHORT";
   if(signalType === "SHORT") return "SHORT";
   if(signalType === "LONG") return "LONG";
   return "BLOCKED";
@@ -2126,6 +2133,8 @@ function matchesHistoryFilter(sig, filter){
 function matchesHistoryType(sig, typeTab){
   if(typeTab === "ALL") return true;
   const signalType = String(sig?.signal || sig?.requested_signal || "").toUpperCase();
+  if(signalType === "BUY") return typeTab === "LONG";
+  if(signalType === "SELL") return typeTab === "SHORT";
   return signalType === typeTab;
 }
 
@@ -2139,7 +2148,7 @@ function renderSignalHistoryTable(){
     .reverse();
 
   if(!visible.length){
-    tbody.innerHTML = '<tr><td colspan="11" style="padding:20px; text-align:center; color:#484f58;">No signals match current filter</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="12" style="padding:20px; text-align:center; color:#484f58;">No signals match current filter</td></tr>';
     return;
   }
 
@@ -2157,10 +2166,12 @@ function renderSignalHistoryTable(){
   const fmtPnl = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '—' : `${Number(v) >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`);
 
   tbody.innerHTML = visible.map(sig => {
-    const signalType = String(sig.signal || sig.requested_signal || 'WAIT').toUpperCase();
+    const signalTypeRaw = String(sig.signal || sig.requested_signal || 'WAIT').toUpperCase();
+    const signalType = signalTypeRaw === "BUY" ? "LONG" : signalTypeRaw === "SELL" ? "SHORT" : signalTypeRaw;
     const tradeType = historySignalType(sig);
     const status = historyStatus(sig);
     const result = resultMap[status] || status;
+    const ticker = historyTicker(sig);
     const isBlocked = status === "BLOCKED";
     const rowClass = isBlocked ? 'history-row-blocked' : signalType === "SHORT" ? 'history-row-short' : 'history-row-long';
     const sigColor = signalType === 'LONG' ? '#00c853' : signalType === 'SHORT' ? '#ff1744' : '#ffd60a';
@@ -2176,6 +2187,7 @@ function renderSignalHistoryTable(){
     return `<tr class="${rowClass}" style="border-bottom:1px solid #21262d;">
       <td style="padding:6px 8px; color:#8b949e">${sig.id}</td>
       <td style="padding:6px 8px; color:#8b949e">${time}</td>
+      <td style="padding:6px 8px; color:#e6edf3">${escapeHtml(ticker)}</td>
       <td style="padding:6px 8px">
         <span style="display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid rgba(148,163,184,.3);background:${typeBg};color:${typeColor};font-weight:700;font-size:11px">${tradeType}</span>
       </td>
@@ -2221,25 +2233,43 @@ function bindHistoryTabs(){
 
 async function loadSignalHistory(){
   try{
-    const data = await fetchJSON('/api/btc/signal/history?limit=20', { ttlMs: 7000, timeoutMs: 8000 });
-    if(!data) return;
+    const [historyData, signalsData] = await Promise.all([
+      fetchJSON('/api/history?limit=200', { ttlMs: 7000, timeoutMs: 9000 }),
+      fetchJSON('/api/signals?limit=500', { ttlMs: 7000, timeoutMs: 9000 }),
+    ]);
+    const historyRows = Array.isArray(historyData) ? historyData : [];
+    const allSignals = Array.isArray(signalsData) ? signalsData : [];
+    if(!historyRows.length && !allSignals.length) return;
 
-    const s = data.stats || {};
+    const normalizedSignal = (sig) => {
+      const raw = String(sig?.signal || sig?.requested_signal || '').toUpperCase();
+      if(raw === 'BUY') return 'LONG';
+      if(raw === 'SELL') return 'SHORT';
+      return raw;
+    };
+    const normalizedStatus = (sig) => String(sig?.status || sig?.result || sig?.outcome || 'OPEN').toUpperCase();
+    const closedRows = allSignals.filter(sig => !['OPEN', 'BLOCKED'].includes(normalizedStatus(sig)));
+    const longClosed = closedRows.filter(sig => normalizedSignal(sig) === 'LONG');
+    const shortClosed = closedRows.filter(sig => normalizedSignal(sig) === 'SHORT');
+    const longWins = longClosed.filter(sig => Number(sig?.pnl_pct) > 0);
+    const shortWins = shortClosed.filter(sig => Number(sig?.pnl_pct) > 0);
+    const totalPnl = closedRows.reduce((acc, sig) => acc + (Number(sig?.pnl_pct) || 0), 0);
+
     const el = (id) => document.getElementById(id);
-    if (el('stat-total')) el('stat-total').textContent = s.total || 0;
-    if (el('stat-long-count')) el('stat-long-count').textContent = s.long_total || 0;
-    if (el('stat-short-count')) el('stat-short-count').textContent = s.short_total || 0;
-    if (el('stat-long-wr')) el('stat-long-wr').textContent = `${Number(s.long_win_rate || 0).toFixed(1)}%`;
-    if (el('stat-short-wr')) el('stat-short-wr').textContent = `${Number(s.short_win_rate || 0).toFixed(1)}%`;
-    if (el('stat-blocked')) el('stat-blocked').textContent = s.blocked_today || 0;
+    if (el('stat-total')) el('stat-total').textContent = allSignals.length || 0;
+    if (el('stat-long-count')) el('stat-long-count').textContent = longClosed.length || 0;
+    if (el('stat-short-count')) el('stat-short-count').textContent = shortClosed.length || 0;
+    if (el('stat-long-wr')) el('stat-long-wr').textContent = `${longClosed.length ? ((longWins.length / longClosed.length) * 100).toFixed(1) : '0.0'}%`;
+    if (el('stat-short-wr')) el('stat-short-wr').textContent = `${shortClosed.length ? ((shortWins.length / shortClosed.length) * 100).toFixed(1) : '0.0'}%`;
+    if (el('stat-blocked')) el('stat-blocked').textContent = allSignals.filter(sig => normalizedStatus(sig) === 'BLOCKED').length || 0;
     if (el('stat-pnl')) {
-      const pnl = Number(s.total_pnl || 0);
+      const pnl = Number(totalPnl || 0);
       el('stat-pnl').textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%';
       el('stat-pnl').style.color = pnl >= 0 ? '#00c853' : '#ff1744';
     }
-    if (el('stat-open')) el('stat-open').textContent = s.open_signals || 0;
+    if (el('stat-open')) el('stat-open').textContent = allSignals.filter(sig => normalizedStatus(sig) === 'OPEN').length || 0;
 
-    latestHistorySignals = Array.isArray(data.signals) ? data.signals : [];
+    latestHistorySignals = historyRows;
     const openSignals = latestHistorySignals.filter(sig => historyStatus(sig) === "OPEN");
     const multiOpenWarning = document.getElementById('multi-open-warning');
     if (multiOpenWarning) {
@@ -2398,9 +2428,9 @@ init();
 (function(){
   const intel_refresh_ms = 15000;
   const intel_urls = {
-    flow: "http://127.0.0.1:9000/api/orderflow",
-    volume: "http://127.0.0.1:9000/api/volume-profile",
-    volatility: "http://127.0.0.1:9000/api/volatility",
+    flow: "/api/btc/orderflow",
+    volume: "/api/btc/volume",
+    volatility: "/api/btc/volatility",
   };
   const intel_tabs = ["flow", "volume", "volatility"];
   let intel_active_tab = "flow";

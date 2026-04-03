@@ -13,9 +13,9 @@ logger = logging.getLogger(__name__)
 class RedisStateStore:
     """Lightweight JSON/list state persistence for runtime market state."""
 
-    def __init__(self, redis_url: str, key_prefix: str = "btcintel") -> None:
+    def __init__(self, redis_url: str, key_prefix: str = "btc") -> None:
         self.redis_url = redis_url
-        self.key_prefix = key_prefix.strip() or "btcintel"
+        self.key_prefix = key_prefix.strip() or "btc"
         self._client: Redis | None = None
         self.connected = False
 
