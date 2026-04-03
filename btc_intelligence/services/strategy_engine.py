@@ -7,6 +7,8 @@ from pathlib import Path
 from statistics import mean, stdev
 from typing import Any
 
+from .walk_forward import WalkForwardConfig, WalkForwardValidator
+
 
 STRATEGIES = ("trend_following", "mean_reversion", "breakout", "volatility_based")
 
@@ -24,7 +26,12 @@ class StrategyEngine:
     Regime-aware multi-strategy selector with independent strategy tracking.
     """
 
-    def __init__(self, state_path: str, config: StrategyEngineConfig | None = None) -> None:
+    def __init__(
+        self,
+        state_path: str,
+        config: StrategyEngineConfig | None = None,
+        walk_forward_validator: WalkForwardValidator | None = None,
+    ) -> None:
         self.config = config or StrategyEngineConfig()
         self.state_path = Path(state_path)
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -36,6 +43,8 @@ class StrategyEngine:
         }
         self.history: dict[str, list[dict[str, Any]]] = {k: [] for k in STRATEGIES}
         self.last_update_count: dict[str, int] = {k: 0 for k in STRATEGIES}
+        self.last_wf_validation: dict[str, dict[str, Any]] = {}
+        self.walk_forward_validator = walk_forward_validator or WalkForwardValidator(WalkForwardConfig())
         self._load()
 
     def _load(self) -> None:
@@ -56,6 +65,11 @@ class StrategyEngine:
             if isinstance(payload.get("last_update_count"), dict):
                 for key in STRATEGIES:
                     self.last_update_count[key] = int(payload["last_update_count"].get(key, 0))
+            if isinstance(payload.get("last_wf_validation"), dict):
+                loaded_wf = payload.get("last_wf_validation", {})
+                self.last_wf_validation = {
+                    str(k): dict(v) for k, v in loaded_wf.items() if isinstance(v, dict)
+                }
         except Exception:
             return
 
@@ -64,6 +78,7 @@ class StrategyEngine:
             "weights": self.weights,
             "history": {k: v[-800:] for k, v in self.history.items()},
             "last_update_count": self.last_update_count,
+            "last_wf_validation": self.last_wf_validation,
         }
         try:
             self.state_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -188,6 +203,19 @@ class StrategyEngine:
             base = float(self.weights.get(key, 0.25))
             max_delta = self.config.max_change_per_update * base
             delta = max(-max_delta, min(max_delta, delta_raw))
-            self.weights[key] = max(0.05, base + delta)
+            proposed_weight = max(0.05, base + delta)
+            old_weights = dict(self.weights)
+            new_weights = dict(self.weights)
+            new_weights[key] = proposed_weight
+            wf_result = self.walk_forward_validator.validate_weight_update(
+                strategy=key,
+                old_weights=old_weights,
+                new_weights=new_weights,
+                trade_history=self.history.get(key, []),
+            )
+            applied_fraction = float(wf_result.get("applied_fraction", 1.0))
+            applied_fraction = max(0.0, min(1.0, applied_fraction))
+            self.weights[key] = max(0.05, base + (delta * applied_fraction))
+            self.last_wf_validation[key] = wf_result
             self.last_update_count[key] = len(self.history[key])
         self._normalize_weights()
