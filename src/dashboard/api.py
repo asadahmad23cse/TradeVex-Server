@@ -1281,7 +1281,7 @@ async def btc_execution_proxy():
 async def btc_decision_intelligence_proxy():
     payload = await _btc_proxy_payload(
         name="decision_intelligence",
-        redis_key=["btc:intelligence", "btc:decision", "btc:signal"],
+        redis_key=["intelligence", "decision", "signal"],
         upstream_url=[
             "http://127.0.0.1:9000/api/decision",
             "http://127.0.0.1:9000/api/intelligence",
@@ -1298,7 +1298,7 @@ async def btc_decision_intelligence_proxy():
     if not normalized.get("probability"):
         prob_payload = await _btc_proxy_payload(
             name="probability_for_decision",
-            redis_key=["btc:probability", "btc:intelligence", "btc:signal"],
+            redis_key=["probability", "intelligence", "signal"],
             upstream_url=[
                 "http://127.0.0.1:9000/api/probability",
                 "http://127.0.0.1:9000/api/intelligence",
@@ -1311,7 +1311,7 @@ async def btc_decision_intelligence_proxy():
     if not normalized.get("execution_plan"):
         exec_payload = await _btc_proxy_payload(
             name="execution_plan_for_decision",
-            redis_key=["btc:execution_plan", "btc:intelligence"],
+            redis_key=["execution_plan", "intelligence"],
             upstream_url=[
                 "http://127.0.0.1:9000/api/execution-plan",
                 "http://127.0.0.1:9000/api/intelligence",
@@ -1333,7 +1333,7 @@ async def btc_decision_intelligence_proxy():
 async def btc_probability_proxy():
     payload = await _btc_proxy_payload(
         name="probability",
-        redis_key=["btc:probability", "btc:intelligence", "btc:signal"],
+        redis_key=["probability", "intelligence", "signal"],
         upstream_url=[
             "http://127.0.0.1:9000/api/probability",
             "http://127.0.0.1:9000/api/intelligence",
@@ -1358,7 +1358,7 @@ async def btc_probability_proxy():
 async def btc_execution_plan_proxy():
     return await _btc_proxy_payload(
         name="execution_plan",
-        redis_key="btc:execution_plan",
+        redis_key="execution_plan",
         upstream_url="http://127.0.0.1:9000/api/execution-plan",
     )
 
