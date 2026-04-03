@@ -6,7 +6,7 @@
 <title>BTC Quant Terminal</title>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 :root{
   --bg:#070b12;
@@ -431,7 +431,7 @@ body{
   gap:8px;
 }
 .equity-stats b{color:#e6edf3;}
-#equity-curve-chart{
+#intel_equity_canvas{
   width:100%;
   height:200px;
   border:1px solid #30363d;
@@ -985,8 +985,7 @@ body{
         <span>| Sharpe: <b id="eq-sharpe">0.00</b></span>
         <span>| Trades: <b id="eq-trades">0</b></span>
       </div>
-      <div id="equity-curve-chart"></div>
-      <div id="equity-curve-empty" style="display:none; margin-top:8px; color:#8b949e; font-size:12px;">Accumulating trade data...</div>
+      <canvas id="intel_equity_canvas" style="width:100%;height:180px;"></canvas>
       <div class="session-grid">
         <div class="session-card">
           <div class="session-title">Asia Session</div>
@@ -1062,10 +1061,6 @@ let sessionDayKey = null;
 let sessionHigh = null;
 let sessionLow = null;
 let latestHistorySignals = [];
-let equityChart = null;
-let equitySeries = null;
-let equityDrawdownSeries = null;
-let equityChartJs = null;
 const API_CACHE = new Map();
 const API_INFLIGHT = new Map();
 const sparkPrices = [];
@@ -2271,66 +2266,70 @@ function historyRowClass(sig){
   return "history-row-closed";
 }
 
-function initEquityChart(){
-  const el = document.getElementById("equity-curve-chart");
-  if(!el) return;
-  el.innerHTML = "";
-  if(equityChartJs){
-    try{ equityChartJs.destroy(); }catch(_){}
-    equityChartJs = null;
-  }
+async function intel_renderEquityCurve() {
+  try {
+    const r = await fetch('/api/equity-curve');
+    const d = await r.json();
+    console.log('Equity curve data:', d);
+    updateTradeStats(d);
 
-  if(window.LightweightCharts){
-    if(equityChart){
-      try{ equityChart.remove(); }catch(_){}
+    const canvas = document.getElementById('intel_equity_canvas');
+    if(!canvas) return;
+
+    if (!d.cumulative_pnl || d.cumulative_pnl.length === 0) {
+      canvas.style.display = 'none';
+      return;
     }
-    equityChart = LightweightCharts.createChart(el,{
-      layout:{background:{type:"solid",color:"#0d1117"},textColor:"#8b949e"},
-      grid:{vertLines:{color:"#1f2937"},horzLines:{color:"#1f2937"}},
-      rightPriceScale:{borderColor:"#30363d"},
-      timeScale:{borderColor:"#30363d",timeVisible:true,secondsVisible:false},
-      crosshair:{mode:1},
-    });
-    equitySeries = equityChart.addBaselineSeries({
-      baseValue:{type:"price",price:0},
-      topLineColor:"#00c853",
-      topFillColor1:"rgba(0,200,83,0.25)",
-      topFillColor2:"rgba(0,200,83,0.03)",
-      bottomLineColor:"#ff4444",
-      bottomFillColor1:"rgba(255,68,68,0.20)",
-      bottomFillColor2:"rgba(255,68,68,0.03)",
-      lineWidth:2,
-    });
-    equityDrawdownSeries = equityChart.addAreaSeries({
-      lineColor:"rgba(255,159,28,0.45)",
-      topColor:"rgba(255,159,28,0.15)",
-      bottomColor:"rgba(255,159,28,0.03)",
-      lineWidth:1,
-      priceLineVisible:false,
-      lastValueVisible:false,
-    });
-    return;
-  }
+    canvas.style.display = 'block';
 
-  if(window.Chart){
-    const canvas = document.createElement("canvas");
-    canvas.id = "equity-curve-chartjs";
-    el.appendChild(canvas);
-    const ctx = canvas.getContext("2d");
-    if(!ctx) return;
-    equityChartJs = new Chart(ctx, {
-      type: "line",
-      data: { labels: [], datasets: [{ label: "Cumulative P&L", data: [], borderColor: "#00c853", backgroundColor: "rgba(0,200,83,0.12)", borderWidth: 2, pointRadius: 0, tension: 0.2, fill: true }] },
+    const ctx = canvas.getContext('2d');
+    if(!ctx || !window.Chart) return;
+
+    if (window.intel_equityChart) {
+      window.intel_equityChart.destroy();
+    }
+
+    window.intel_equityChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: d.timestamps.map(t => new Date(t).toLocaleTimeString()),
+        datasets: [{
+          label: 'Cumulative P&L %',
+          data: d.cumulative_pnl,
+          borderColor: '#00ff88',
+          backgroundColor: 'rgba(0,255,136,0.1)',
+          borderWidth: 2,
+          pointRadius: 0,
+          fill: true,
+          tension: 0.4
+        }]
+      },
       options: {
         responsive: true,
         maintainAspectRatio: false,
-        plugins: { legend: { display: false } },
+        plugins: { legend: { display: false }},
         scales: {
-          x: { ticks: { color: "#8b949e", maxRotation: 0, autoSkip: true }, grid: { color: "#1f2937" } },
-          y: { ticks: { color: "#8b949e" }, grid: { color: "#1f2937" } },
-        },
-      },
+          x: {
+            display: true,
+            ticks: {
+              color: '#64748b',
+              maxTicksLimit: 8
+            },
+            grid: { color: '#1e293b' }
+          },
+          y: {
+            display: true,
+            ticks: {
+              color: '#64748b',
+              callback: v => Number(v).toFixed(2) + '%'
+            },
+            grid: { color: '#1e293b' }
+          }
+        }
+      }
     });
+  } catch(e) {
+    console.error('Equity curve error:', e);
   }
 }
 
@@ -2377,47 +2376,6 @@ function renderSignalHistoryTable(){
   }).join('');
 }
 
-function renderEquityCurve(eq){
-  if(!eq) return;
-  const emptyEl = document.getElementById("equity-curve-empty");
-  const timestamps = Array.isArray(eq.timestamps) ? eq.timestamps : [];
-  const cumulative = Array.isArray(eq.cumulative_pnl) ? eq.cumulative_pnl : [];
-  const dd = Array.isArray(eq.drawdown) ? eq.drawdown : [];
-  if(!cumulative.length){
-    if(emptyEl) emptyEl.style.display = "block";
-    if(equitySeries) equitySeries.setData([]);
-    if(equityDrawdownSeries) equityDrawdownSeries.setData([]);
-    if(equityChartJs){
-      equityChartJs.data.labels = [];
-      equityChartJs.data.datasets[0].data = [];
-      equityChartJs.update();
-    }
-    return;
-  }
-  if(emptyEl) emptyEl.style.display = "none";
-
-  const curveData = [];
-  const ddData = [];
-  for(let i=0;i<timestamps.length;i++){
-    const ts = toChartTsSec(timestamps[i]);
-    const cumVal = Number(cumulative[i]);
-    const ddVal = Number(dd[i]);
-    if(!Number.isFinite(ts) || !Number.isFinite(cumVal)) continue;
-    curveData.push({time: ts, value: cumVal});
-    ddData.push({time: ts, value: Number.isFinite(ddVal) ? ddVal : 0});
-  }
-  if(equitySeries && equityDrawdownSeries && equityChart){
-    equitySeries.setData(curveData);
-    equityDrawdownSeries.setData(ddData);
-    if(curveData.length > 1){
-      equityChart.timeScale().fitContent();
-    }
-  }else if(equityChartJs){
-    equityChartJs.data.labels = timestamps.map(x => String(x || "").replace("T"," ").replace("Z",""));
-    equityChartJs.data.datasets[0].data = cumulative.map(v => Number(v || 0));
-    equityChartJs.update();
-  }
-}
 
 function updateTradeStats(eq){
   if(!eq) return;
@@ -2494,17 +2452,9 @@ function bindExportCsv(){
 
 async function loadSignalHistory(){
   try{
-    const [historyData, equityData] = await Promise.all([
-      fetchJSON('/api/history?limit=200', { ttlMs: 7000, timeoutMs: 9000 }),
-      fetchJSON('/api/equity-curve', { ttlMs: 15000, timeoutMs: 9000 }),
-    ]);
-    console.log('Equity curve data:', equityData);
+    const historyData = await fetchJSON('/api/history?limit=200', { ttlMs: 7000, timeoutMs: 9000 });
     latestHistorySignals = Array.isArray(historyData) ? historyData : [];
     renderSignalHistoryTable();
-    if(equityData && typeof equityData === "object"){
-      renderEquityCurve(equityData);
-      updateTradeStats(equityData);
-    }
   }catch(e){
     console.warn('History fetch failed:', e);
   }
@@ -2627,7 +2577,6 @@ async function switchRange(range){
 
 async function init(){
   initChart();
-  initEquityChart();
   bindExportCsv();
   document.querySelectorAll('.tf-btn').forEach(btn=>{
     btn.addEventListener('click',()=>switchTimeframe(btn.dataset.tf));
@@ -2640,6 +2589,7 @@ async function init(){
   setRangeActive();
   await switchTimeframe("15m");
   await loadSignalHistory();
+  await intel_renderEquityCurve();
   await fetchNews();
   await restFallbackTick();
   connectWebSocket();
@@ -2647,6 +2597,7 @@ async function init(){
   setInterval(loadSignal, SIGNAL_REFRESH_MS);
   setInterval(loadSignalMarkers, 120000);
   setInterval(loadSignalHistory, 30000);
+  setInterval(intel_renderEquityCurve, 30000);
   setInterval(fetchNews, 120000);
 }
 

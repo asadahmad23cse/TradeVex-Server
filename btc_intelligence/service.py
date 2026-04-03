@@ -52,6 +52,7 @@ MIN_CONFIDENCE = 25.0
 MAX_OPEN_SIGNALS = 1
 MIN_HOLD_SECONDS = 300
 MIN_PRICE_MOVE_PCT = 0.05
+MIN_CONFIDENCE_CHANGE = 10.0
 
 
 class AppRuntime:
@@ -106,6 +107,9 @@ class AppRuntime:
         self._last_open_signal_id: str | None = None
         self._open_signal_state: dict[str, Any] | None = None
         self._last_open_pnl_update_ts: float = 0.0
+        self._last_signal_time: float | None = None
+        self._last_signal_direction: str | None = None
+        self._last_signal_confidence: float | None = None
 
         self.signal_log_path = Path(settings.signal_log_path)
         self.signal_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -764,6 +768,28 @@ class AppRuntime:
         confidence = float(signal_payload.get('confidence', 0.0))
         if confidence < MIN_CONFIDENCE:
             return
+        now_ts = float(time_module.time())
+        if self._last_signal_time is not None:
+            elapsed = now_ts - float(self._last_signal_time)
+            direction_flipped = (
+                self._last_signal_direction is not None
+                and signal != str(self._last_signal_direction).upper()
+            )
+            confidence_changed = (
+                self._last_signal_confidence is None
+                or abs(float(confidence) - float(self._last_signal_confidence)) > MIN_CONFIDENCE_CHANGE
+            )
+            hold_elapsed = elapsed >= MIN_HOLD_SECONDS
+            if not (direction_flipped or confidence_changed or hold_elapsed):
+                logger.debug(
+                    "Skipping signal — %.0fs since last, no flip, confidence delta <= %.1f",
+                    elapsed,
+                    MIN_CONFIDENCE_CHANGE,
+                )
+                return
+            if signal == str(self._last_signal_direction).upper() and not (confidence_changed or hold_elapsed):
+                logger.debug("Skipping — same direction %s repeated", signal)
+                return
         size_multiplier = float(signal_payload.get('size_multiplier', 1.0))
         signal_note = str(signal_payload.get('signal_note', 'normal'))
         entry_price = float(signal_payload.get('entry_price', current_price))
@@ -774,13 +800,6 @@ class AppRuntime:
         rr_ratio = float(signal_payload.get('rr_ratio', 1.0))
         if entry_price <= 0:
             entry_price = float(current_price)
-
-        open_state = self._open_signal_state
-        if open_state is not None:
-            open_signal = str(open_state.get('signal', 'HOLD')).upper()
-            if open_signal == signal:
-                # Same-direction refresh; keep one open row.
-                return
 
         open_count = await asyncio.to_thread(self._count_open_btc_signals)
         if open_count >= MAX_OPEN_SIGNALS:
@@ -829,6 +848,9 @@ class AppRuntime:
             }
             self._last_open_signal_id = str(insert_meta.get("signal_ref", ""))
             self._last_saved_btc_signal = signal
+            self._last_signal_time = now_ts
+            self._last_signal_direction = signal
+            self._last_signal_confidence = float(confidence)
             logger.info(
                 "BTC signal saved: %s conf=%.1f%% size=%sx note=%s",
                 signal,
