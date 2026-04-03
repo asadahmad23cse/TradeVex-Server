@@ -6,6 +6,7 @@
 <title>Quant Terminal - Multi Asset</title>
 <link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
 <script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 :root{--bg:#070b12;--panel:rgba(16,24,36,.92);--line:rgba(148,163,184,.22);--txt:#e2e8f0;--muted:#94a3b8;--accent:#f7931a;--buy:#34d399;--sell:#f87171;--hold:#60a5fa;--bull:#22c55e;--bear:#ef4444;--side:#facc15;--hv:#fb923c}
 *{box-sizing:border-box} body{margin:0;background:radial-gradient(1000px 600px at -10% -10%, rgba(247,147,26,.18), transparent 60%),radial-gradient(900px 700px at 110% 0%, rgba(96,165,250,.12), transparent 60%),linear-gradient(180deg,#070b12 0%,#0a1220 100%);color:var(--txt);font-family:"Sora",system-ui,sans-serif}
@@ -93,6 +94,10 @@
 .how-sure-track{height:10px;flex:1;background:rgba(148,163,184,.18);border-radius:999px;overflow:hidden;border:1px solid rgba(148,163,184,.22)}
 .how-sure-fill{height:100%;background:linear-gradient(90deg,#f97316,#22c55e);width:0}
 .how-sure-val{font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:700;color:#e2e8f0;min-width:48px;text-align:right}
+.score-track{height:10px;flex:1;background:rgba(148,163,184,.18);border-radius:999px;overflow:hidden;border:1px solid rgba(148,163,184,.22)}
+.score-fill{height:100%;width:0;background:#00ff88}
+#sfill{background:#00ff88}
+#efill{background:#f7931a}
 .gate-box,.pipeline-box,.size-box{padding:10px;border:1px solid rgba(148,163,184,.16);border-radius:10px;background:#0f1724}
 .section-h{font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;font-weight:700}
 .gate-grid{display:grid;grid-template-columns:1fr auto;gap:6px 8px}
@@ -126,6 +131,22 @@
 .stock-history-table{width:100%;border-collapse:collapse;font-size:11px}
 .stock-history-table th,.stock-history-table td{padding:7px 6px;border-bottom:1px solid rgba(148,163,184,.12);text-align:left}
 .stock-history-table th{background:#0f1724;color:#94a3b8;position:sticky;top:0}
+.terminal-stats-panel{margin-bottom:10px;padding:10px;border:1px solid rgba(148,163,184,.16);border-radius:10px;background:#0f1724}
+.terminal-stats-grid{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:8px 10px}
+.terminal-stat{font-size:11px;color:#94a3b8}
+.terminal-stat b{color:#e2e8f0;margin-left:4px}
+.terminal-equity-wrap{margin-top:10px;padding:10px;border:1px solid rgba(148,163,184,.16);border-radius:10px;background:#0f1724}
+.terminal-equity-stats{font-size:11px;color:#94a3b8;margin-bottom:8px;display:flex;flex-wrap:wrap;gap:10px}
+.terminal-equity-stats b{color:#e2e8f0}
+.terminal-equity-box{width:100%;height:200px;max-height:200px;overflow:hidden;position:relative;background:#0d1117;border-radius:8px;border:1px solid #1e293b}
+#terminal-equity-canvas{width:100%!important;height:200px!important;max-height:200px!important;display:block}
+body{background:#0a0a0f!important}
+.panel,.card,.bottom,.metric,.srow,.factor,.stock-intel-item,.gate-box,.pipeline-box,.size-box,.terminal-stats-panel,.terminal-equity-wrap,.stock-history-wrap{
+  background:#0d1117!important;
+  border-color:#1e293b!important;
+  box-shadow:none!important;
+}
+.title,.big{color:#e2e8f0}
 .bottom{margin-top:10px;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}.btabs{display:flex;border-bottom:1px solid var(--line)}.btab{padding:10px 12px;background:#0f1724;color:var(--muted);border:none;border-right:1px solid var(--line);font-size:12px;font-weight:700;cursor:pointer}.btab.active{background:#1f2b3d;color:#fff}
 .bpanel{display:none;padding:12px}.bpanel.active{display:block}.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.metric{padding:8px;background:#0f1724;border:1px solid rgba(148,163,184,.16);border-radius:8px}.mval{font-family:"JetBrains Mono",monospace;font-size:13px;font-weight:700}
 .news{padding:8px;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:#0f1724;margin-bottom:8px}.news a{color:#93c5fd;text-decoration:none}.news a:hover{text-decoration:underline}
@@ -629,8 +650,8 @@ body{
         <div class="srow"><span class="k">Signal</span><span id="sig" class="sv">HOLD</span></div>
         <div class="srow"><span class="k">Confidence</span><div style="display:flex;gap:8px;align-items:center;flex:1"><div class="ctrack"><div id="cfill" class="cfill"></div></div><span id="conf" class="sv">--</span></div></div>
         <div class="how-sure-wrap"><span class="how-sure-label">How Sure (AI)</span><div class="how-sure-track"><div id="how-sure-fill" class="how-sure-fill"></div></div><span id="how-sure-val" class="how-sure-val">0%</span></div>
-        <div class="srow"><span class="k">Signal Strength</span><span id="alpha" class="sv">--</span></div>
-        <div class="srow"><span class="k">Edge After Costs</span><span id="edge" class="sv">--</span></div>
+        <div class="srow"><span class="k">Signal Strength</span><div style="display:flex;gap:8px;align-items:center;flex:1"><div class="score-track"><div id="sfill" class="score-fill"></div></div><span id="alpha" class="sv">--</span></div></div>
+        <div class="srow"><span class="k">Edge After Costs</span><div style="display:flex;gap:8px;align-items:center;flex:1"><div class="score-track"><div id="efill" class="score-fill"></div></div><span id="edge" class="sv">--</span></div></div>
         <div id="sig-levels-section">
           <div class="srow"><span class="k">Entry</span><span id="entry" class="sv">--</span></div>
           <div class="srow"><span class="k">Stop Loss</span><span id="sl" class="sv">--</span></div>
@@ -939,6 +960,22 @@ body{
 
   <div class="panel stock-history-wrap">
     <div class="head"><div class="title">Signal History</div><div id="stock-history-time" class="sub">refresh: 30s</div></div>
+    <div class="terminal-stats-panel">
+      <div class="terminal-stats-grid">
+        <div class="terminal-stat">Total Trades:<b id="st-total-trades">0</b></div>
+        <div class="terminal-stat">Win Rate:<b id="st-win-rate">0.0%</b></div>
+        <div class="terminal-stat">Total P&L:<b id="st-total-pnl">0.00%</b></div>
+        <div class="terminal-stat">Avg Win:<b id="st-avg-win">0.00%</b></div>
+        <div class="terminal-stat">Max DD:<b id="st-max-dd">0.00%</b></div>
+        <div class="terminal-stat">Avg Loss:<b id="st-avg-loss">0.00%</b></div>
+        <div class="terminal-stat">Sharpe:<b id="st-sharpe">0.00</b></div>
+        <div class="terminal-stat">Profit Factor:<b id="st-pf">0.00</b></div>
+        <div class="terminal-stat">Best Trade:<b id="st-best">0.00%</b></div>
+        <div class="terminal-stat">Worst Trade:<b id="st-worst">0.00%</b></div>
+        <div class="terminal-stat">Avg Duration:<b id="st-duration">0s</b></div>
+        <div class="terminal-stat">Open:<b id="st-open">0</b></div>
+      </div>
+    </div>
     <div id="stock-history-stats" class="stock-history-stats">
       <span>Signals: 0</span><span>LONG: 0 (0%)</span><span>SHORT: 0 (0%)</span><span>Total P&L: 0.00%</span><span>Blocked: 0</span><span>Open: 0</span>
     </div>
@@ -956,6 +993,12 @@ body{
         </thead>
         <tbody id="stock-history-body"><tr><td colspan="11" class="empty">Loading history...</td></tr></tbody>
       </table>
+    </div>
+    <div class="terminal-equity-wrap">
+      <div class="terminal-equity-stats" id="terminal-equity-stats">Total: 0.00% | Win Rate: 0.0% | Max DD: 0.00% | Sharpe: 0.00 | Trades: 0</div>
+      <div class="terminal-equity-box">
+        <canvas id="terminal-equity-canvas"></canvas>
+      </div>
     </div>
   </div>
 </div>
@@ -1015,6 +1058,7 @@ let fearGreedInterval=null;
 let currentCryptoSymbol="BTCUSDT";
 let cryptoLastCandles=[];
 let chart,candle,s20,s50,btEqChart,btEqSeries,pfC,pfS;
+let terminalEquityChart=null;
 const _priceCache = new Map();
 const PRICE_TTL = 180000;
 const prefetchCache = new Map();
@@ -2049,8 +2093,12 @@ function renderSignalData(s){
   $("conf").textContent=Math.round(conf)+"%";
   $("cfill").style.width=Math.max(0,Math.min(100,conf))+"%";
   renderHowSure(conf);
-  $("alpha").textContent=Math.max(0,Math.min(100,alpha))+" / 100";
-  $("edge").textContent=Math.max(0,Math.min(100,edge))+" / 100";
+  const alphaPct=Math.max(0,Math.min(100,alpha));
+  const edgePct=Math.max(0,Math.min(100,edge));
+  $("alpha").textContent=alphaPct+" / 100";
+  $("edge").textContent=edgePct+" / 100";
+  if($("sfill"))$("sfill").style.width=`${alphaPct}%`;
+  if($("efill"))$("efill").style.width=`${edgePct}%`;
   const levelsSection=$("sig-levels-section");
   if(levelsSection)levelsSection.style.display=isTradeSignal?"block":"none";
   if(isTradeSignal){
@@ -2325,11 +2373,96 @@ function renderStockHistoryStats(rows){
     stat.innerHTML=`<span>Signals: ${total}</span><span>LONG: ${longCount} (${longPct.toFixed(1)}%)</span><span>SHORT: ${shortCount} (${shortPct.toFixed(1)}%)</span><span>Total P&L: ${pnl>=0?"+":""}${pnl.toFixed(2)}%</span><span>Blocked: ${blocked}</span><span>Open: ${open}</span>`;
   }
 }
+function fmtSignedPct(v,d=2){
+  const n=Number(v||0);
+  return `${n>=0?"+":""}${n.toFixed(d)}%`;
+}
+function fmtDurationSec(v){
+  const s=Math.max(0,Number(v||0));
+  if(s<60)return `${Math.floor(s)}s`;
+  if(s<3600)return `${Math.floor(s/60)}m ${Math.floor(s%60)}s`;
+  return `${Math.floor(s/3600)}h ${Math.floor((s%3600)/60)}m`;
+}
+function renderTerminalStatsPanel(eq){
+  const d=eq||{};
+  if($("st-total-trades"))$("st-total-trades").textContent=String(Number(d.total_trades||0));
+  if($("st-win-rate"))$("st-win-rate").textContent=`${(Number(d.win_rate||0)*100).toFixed(1)}%`;
+  if($("st-total-pnl"))$("st-total-pnl").textContent=fmtSignedPct(d.total_pnl,2);
+  if($("st-avg-win"))$("st-avg-win").textContent=fmtSignedPct(d.avg_win,2);
+  if($("st-max-dd"))$("st-max-dd").textContent=fmtSignedPct(d.max_drawdown,2);
+  if($("st-avg-loss"))$("st-avg-loss").textContent=fmtSignedPct(d.avg_loss,2);
+  if($("st-sharpe"))$("st-sharpe").textContent=Number(d.sharpe_ratio||0).toFixed(2);
+  if($("st-pf"))$("st-pf").textContent=Number(d.profit_factor||0).toFixed(2);
+  if($("st-best"))$("st-best").textContent=fmtSignedPct(d.best_trade,2);
+  if($("st-worst"))$("st-worst").textContent=fmtSignedPct(d.worst_trade,2);
+  if($("st-duration"))$("st-duration").textContent=fmtDurationSec(d.avg_duration_seconds||0);
+  if($("st-open"))$("st-open").textContent=String(Number(d.open_positions||0));
+  if($("terminal-equity-stats")){
+    $("terminal-equity-stats").innerHTML=`Total: <b>${fmtSignedPct(d.total_pnl,2)}</b> | Win Rate: <b>${(Number(d.win_rate||0)*100).toFixed(1)}%</b> | Max DD: <b>${fmtSignedPct(d.max_drawdown,2)}</b> | Sharpe: <b>${Number(d.sharpe_ratio||0).toFixed(2)}</b> | Trades: <b>${Number(d.total_trades||0)}</b>`;
+  }
+}
+function renderTerminalEquityChart(eq){
+  const canvas=$("terminal-equity-canvas");
+  if(!canvas||!window.Chart)return;
+  const pnl=Array.isArray(eq?.cumulative_pnl)?eq.cumulative_pnl:[];
+  const ts=Array.isArray(eq?.timestamps)?eq.timestamps:[];
+  if(!pnl.length){
+    const ctx=canvas.getContext("2d");
+    if(ctx){ctx.clearRect(0,0,canvas.width,canvas.height);}
+    return;
+  }
+  const ctx=canvas.getContext("2d");
+  if(!ctx)return;
+  if(terminalEquityChart){terminalEquityChart.destroy();}
+  terminalEquityChart=new Chart(ctx,{
+    type:"line",
+    data:{
+      labels:ts.map(t=>new Date(t).toLocaleTimeString()),
+      datasets:[{
+        label:"Cumulative P&L %",
+        data:pnl,
+        borderColor:"#00ff88",
+        backgroundColor:"rgba(0,255,136,0.1)",
+        borderWidth:2,
+        pointRadius:0,
+        fill:true,
+        tension:0.35
+      }]
+    },
+    options:{
+      responsive:true,
+      maintainAspectRatio:false,
+      plugins:{legend:{display:false}},
+      scales:{
+        x:{ticks:{color:"#64748b",maxTicksLimit:8},grid:{color:"#1e293b"}},
+        y:{ticks:{color:"#64748b",callback:v=>`${Number(v).toFixed(2)}%`},grid:{color:"#1e293b"}}
+      }
+    }
+  });
+}
+async function loadTerminalEquity(){
+  if(APP_STATE.mode==="crypto"){
+    renderTerminalStatsPanel({});
+    renderTerminalEquityChart({timestamps:[],cumulative_pnl:[]});
+    return;
+  }
+  const t=String(APP_STATE.ticker||"RELIANCE.NS");
+  try{
+    const eq=await json(`/api/equity-curve?ticker=${encodeURIComponent(t)}&limit=5000`,{timeoutMs:10000,cacheTtlMs:15000});
+    renderTerminalStatsPanel(eq||{});
+    renderTerminalEquityChart(eq||{});
+  }catch(e){
+    renderTerminalStatsPanel({});
+    renderTerminalEquityChart({timestamps:[],cumulative_pnl:[]});
+  }
+}
 async function loadTerminalHistory(){
   if(APP_STATE.mode==="crypto"){
     terminalHistoryRows=[];
     renderStockHistoryStats([]);
     renderStockHistory();
+    renderTerminalStatsPanel({});
+    renderTerminalEquityChart({timestamps:[],cumulative_pnl:[]});
     return;
   }
   const t=String(APP_STATE.ticker||"RELIANCE.NS");
@@ -2338,9 +2471,11 @@ async function loadTerminalHistory(){
     terminalHistoryRows=Array.isArray(rows)?rows:[];
     renderStockHistoryStats(terminalHistoryRows);
     renderStockHistory();
+    loadTerminalEquity();
     if($("stock-history-time"))$("stock-history-time").textContent=`updated: ${new Date().toLocaleTimeString("en-IN")}`;
   }catch(e){
     if($("stock-history-body"))$("stock-history-body").innerHTML='<tr><td colspan="11" class="empty">History unavailable</td></tr>';
+    loadTerminalEquity();
   }
 }
 function bindStockHistoryTabs(){
@@ -3043,11 +3178,12 @@ function boot(){
   const query=new URLSearchParams(location.search);
   const modeParam=String(query.get("mode")||"").toLowerCase();
   const symbolParam=String(query.get("symbol")||"").toUpperCase();
+  const tickerParam=String(query.get("ticker")||"").toUpperCase();
   const nameParam=String(query.get("name")||"");
   const savedMode=String(localStorage.getItem("terminalMode")||"stocks").toLowerCase();
   const savedTicker=localStorage.getItem("lastTicker")||"RELIANCE.NS";
   const savedClass=localStorage.getItem("lastAssetClass")||inferAssetClass(savedTicker);
-  const startMode=modeParam==="crypto"?"crypto":modeParam==="stocks"?"stocks":(savedMode==="crypto"?"crypto":"stocks");
+  const startMode=modeParam==="crypto"?"crypto":(tickerParam?"stocks":modeParam==="stocks"?"stocks":(savedMode==="crypto"?"crypto":"stocks"));
   APP_STATE.tf="15m";
   if(startMode==="crypto"){
     const cFromQuery=CRYPTO_ASSETS.find(a=>a.symbol===symbolParam||a.short===symbolParam);
@@ -3056,9 +3192,10 @@ function boot(){
     APP_STATE.assetClass="crypto";
     APP_STATE.name=nameParam||CRYPTO_ASSETS.find(a=>a.symbol===targetSymbol)?.name||targetSymbol;
   }else{
-    APP_STATE.ticker=savedTicker;
-    APP_STATE.assetClass=savedClass;
-    APP_STATE.name=nameParam||ALL.find(a=>a.ticker===savedTicker)?.name||savedTicker;
+    const startTicker=tickerParam||savedTicker;
+    APP_STATE.ticker=startTicker;
+    APP_STATE.assetClass=inferAssetClass(startTicker,savedClass);
+    APP_STATE.name=nameParam||ALL.find(a=>String(a.ticker).toUpperCase()===startTicker)?.name||startTicker;
   }
   APP_STATE.mode=startMode;
   APP_STATE.currency=currencyForTicker(APP_STATE.ticker,APP_STATE.assetClass);

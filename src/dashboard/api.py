@@ -2663,9 +2663,9 @@ def get_history(limit: int = 100, tab: str = "all", ticker: str | None = None):
 
 
 @app.get("/api/equity-curve")
-def get_equity_curve(limit: int = 5000):
+def get_equity_curve(limit: int = 5000, ticker: str | None = None):
     lim = max(1, min(int(limit), 20000))
-    rows = _fetch_trade_report_rows(limit=lim)
+    rows = _fetch_trade_report_rows(limit=lim, ticker=ticker)
     closed_outcomes = {"TP1", "TP2", "TP3", "SL", "CLOSED"}
     closed = [r for r in rows if str(r.get("outcome", "")).upper() in closed_outcomes]
     closed.sort(key=lambda x: str(x.get("exit_time") or x.get("entry_time") or ""))
