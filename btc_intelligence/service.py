@@ -5,7 +5,6 @@ import json
 import logging
 import sqlite3
 import time as time_module
-import uuid
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -49,6 +48,8 @@ from btc_intelligence.utils.notifier import TelegramNotifier
 
 
 logger = logging.getLogger(__name__)
+MIN_CONFIDENCE = 25.0
+MAX_OPEN_SIGNALS = 1
 
 
 class AppRuntime:
@@ -232,6 +233,11 @@ class AppRuntime:
                         confidence REAL,
                         outcome TEXT,
                         pnl_pct REAL,
+                        sl REAL,
+                        tp1 REAL,
+                        tp2 REAL,
+                        tp3 REAL,
+                        rr_ratio REAL,
                         size_multiplier REAL,
                         signal_note TEXT,
                         entry_price REAL,
@@ -247,6 +253,11 @@ class AppRuntime:
                     "ALTER TABLE signals ADD COLUMN size_multiplier REAL",
                     "ALTER TABLE signals ADD COLUMN signal_note TEXT",
                     "ALTER TABLE signals ADD COLUMN entry_price REAL",
+                    "ALTER TABLE signals ADD COLUMN sl REAL DEFAULT 0",
+                    "ALTER TABLE signals ADD COLUMN tp1 REAL DEFAULT 0",
+                    "ALTER TABLE signals ADD COLUMN tp2 REAL DEFAULT 0",
+                    "ALTER TABLE signals ADD COLUMN tp3 REAL DEFAULT 0",
+                    "ALTER TABLE signals ADD COLUMN rr_ratio REAL DEFAULT 0",
                 ):
                     try:
                         cur.execute(ddl)
@@ -281,6 +292,11 @@ class AppRuntime:
             return ((entry_price - current_price) / entry_price) * 100.0
         return ((current_price - entry_price) / entry_price) * 100.0
 
+    def _next_btc_signal_id(self, cur: sqlite3.Cursor) -> str:
+        cur.execute("SELECT COUNT(*) FROM signals WHERE ticker = 'BTCUSDT'")
+        count = int((cur.fetchone() or [0])[0] or 0)
+        return f"BTC-{count + 1:03d}"
+
     def _insert_btc_signal_row(
         self,
         signal: str,
@@ -288,6 +304,11 @@ class AppRuntime:
         size_multiplier: float,
         signal_note: str,
         entry_price: float,
+        sl: float,
+        tp1: float,
+        tp2: float,
+        tp3: float,
+        rr_ratio: float,
     ) -> dict[str, Any] | None:
         """
         Insert BTC signal into shared data/signals.db.
@@ -308,16 +329,22 @@ class AppRuntime:
                         """
                         INSERT INTO signals (
                             ticker, signal, confidence, outcome, pnl_pct,
-                            size_multiplier, signal_note, entry_price, timestamp
+                            entry_price, sl, tp1, tp2, tp3, rr_ratio,
+                            size_multiplier, signal_note, timestamp
                         )
-                        VALUES ('BTCUSDT', ?, ?, 'OPEN', 0.0, ?, ?, ?, datetime('now'))
+                        VALUES ('BTCUSDT', ?, ?, 'OPEN', 0.0, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
                         """,
                         (
                             str(signal).upper(),
                             float(confidence),
+                            float(entry_price),
+                            float(sl),
+                            float(tp1),
+                            float(tp2),
+                            float(tp3),
+                            float(rr_ratio),
                             float(size_multiplier),
                             str(signal_note),
-                            float(entry_price),
                         ),
                     )
                     conn.commit()
@@ -327,14 +354,14 @@ class AppRuntime:
                         "is_minimal_schema": True,
                     }
 
-                signal_id = f"btc_{int(datetime.now(timezone.utc).timestamp())}_{uuid.uuid4().hex[:8]}"
+                signal_id = self._next_btc_signal_id(cur)
                 now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
                 cur.execute(
                     """
                     INSERT INTO signals (
                         signal_id, ticker, timestamp, asset, asset_class, timeframe,
                         signal, strength, confidence, alpha_score, regime,
-                        entry_price, stop_loss, take_profit, position_size_pct,
+                        entry_price, stop_loss, take_profit, sl, tp1, tp2, tp3, rr_ratio, position_size_pct,
                         kelly_fraction, hurst_exponent, factor_scores, ic_weights,
                         slippage_cost_pct, cost_pct, net_alpha_score, cs_alpha_score,
                         execution_price, implementation_shortfall_pct,
@@ -342,7 +369,7 @@ class AppRuntime:
                     )
                     VALUES (?, 'BTCUSDT', ?, 'BTCUSDT', 'crypto', 'intraday',
                             ?, 'MEDIUM', ?, 0.0, 'SIDEWAYS',
-                            ?, 0.0, 0.0, 0.0,
+                            ?, ?, ?, ?, ?, ?, ?, ?, 0.0,
                             0.0, NULL, '{}', '{}',
                             0.0, 0.0, 0.0, 0.0,
                             ?, 0.0,
@@ -354,6 +381,13 @@ class AppRuntime:
                         str(signal).upper(),
                         float(confidence),
                         float(entry_price),
+                        float(sl),
+                        float(tp1),
+                        float(sl),
+                        float(tp1),
+                        float(tp2),
+                        float(tp3),
+                        float(rr_ratio),
                         float(entry_price),
                         float(size_multiplier),
                         str(signal_note),
@@ -410,6 +444,222 @@ class AppRuntime:
         except Exception as exc:
             logger.error('Failed to update BTC open signal pnl: %s', exc, exc_info=True)
 
+    def _count_open_btc_signals(self) -> int:
+        try:
+            with sqlite3.connect(self._shared_signals_db) as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT COUNT(*) FROM signals WHERE outcome = 'OPEN' AND ticker = 'BTCUSDT'"
+                )
+                row = cur.fetchone()
+                return int((row or [0])[0] or 0)
+        except Exception as exc:
+            logger.error('Failed to count BTC open signals: %s', exc, exc_info=True)
+            return 0
+
+    def _close_all_open_btc_signals(self, current_price: float, outcome: str = 'CLOSED') -> int:
+        if current_price <= 0:
+            return 0
+        try:
+            with sqlite3.connect(self._shared_signals_db) as conn:
+                cur = conn.cursor()
+                cols = self._read_signal_columns(cur)
+                signal_ref_expr = "signal_id" if 'signal_id' in cols else "CAST(rowid AS TEXT)"
+                cur.execute(
+                    f"""
+                    SELECT rowid, COALESCE(signal, 'HOLD'), COALESCE(entry_price, 0.0), {signal_ref_expr}
+                    FROM signals
+                    WHERE ticker = 'BTCUSDT' AND outcome = 'OPEN'
+                    """
+                )
+                rows = cur.fetchall()
+                if not rows:
+                    return 0
+
+                out = str(outcome).upper()
+                for rowid, signal, entry_price, signal_ref in rows:
+                    pnl_pct = self._calc_signal_pnl_pct(str(signal), float(entry_price or 0.0), current_price)
+                    set_parts = ["outcome = ?", "pnl_pct = ?"]
+                    params: list[Any] = [out, float(pnl_pct)]
+                    if 'result' in cols:
+                        set_parts.append("result = ?")
+                        params.append(out)
+                    params.append(int(rowid))
+                    cur.execute(
+                        f"UPDATE signals SET {', '.join(set_parts)} WHERE rowid = ?",
+                        params,
+                    )
+
+                    state_ref = str(self._open_signal_state.get('signal_ref', '')) if self._open_signal_state else ''
+                    if state_ref and state_ref in {str(rowid), str(signal_ref)}:
+                        self._open_signal_state = None
+                        self._last_open_signal_id = None
+                        self._last_saved_btc_signal = 'HOLD'
+
+                conn.commit()
+                return len(rows)
+        except Exception as exc:
+            logger.error('Failed to close BTC open signals: %s', exc, exc_info=True)
+            return 0
+
+    def _refresh_btc_open_signals(self, current_price: float) -> None:
+        if current_price <= 0:
+            return
+        try:
+            with sqlite3.connect(self._shared_signals_db) as conn:
+                cur = conn.cursor()
+                cols = self._read_signal_columns(cur)
+
+                if 'outcome' in cols and 'result' in cols:
+                    open_expr = "UPPER(COALESCE(outcome, result, '')) = 'OPEN'"
+                elif 'outcome' in cols:
+                    open_expr = "UPPER(COALESCE(outcome, '')) = 'OPEN'"
+                elif 'result' in cols:
+                    open_expr = "UPPER(COALESCE(result, '')) = 'OPEN'"
+                else:
+                    return
+
+                if 'ticker' in cols:
+                    ticker_expr = "ticker = 'BTCUSDT'"
+                elif 'asset' in cols:
+                    ticker_expr = "asset = 'BTCUSDT'"
+                else:
+                    ticker_expr = "1 = 1"
+
+                signal_id_expr = "signal_id" if 'signal_id' in cols else "CAST(rowid AS TEXT)"
+                entry_expr = "COALESCE(entry_price, 0.0)" if 'entry_price' in cols else "0.0"
+                if 'sl' in cols and 'stop_loss' in cols:
+                    sl_expr = "COALESCE(sl, stop_loss, 0.0)"
+                elif 'sl' in cols:
+                    sl_expr = "COALESCE(sl, 0.0)"
+                elif 'stop_loss' in cols:
+                    sl_expr = "COALESCE(stop_loss, 0.0)"
+                else:
+                    sl_expr = "0.0"
+                if 'tp1' in cols and 'take_profit' in cols:
+                    tp1_expr = "COALESCE(tp1, take_profit, 0.0)"
+                elif 'tp1' in cols:
+                    tp1_expr = "COALESCE(tp1, 0.0)"
+                elif 'take_profit' in cols:
+                    tp1_expr = "COALESCE(take_profit, 0.0)"
+                else:
+                    tp1_expr = "0.0"
+
+                cur.execute(
+                    f"""
+                    SELECT
+                        rowid,
+                        {signal_id_expr} AS signal_ref,
+                        COALESCE(signal, 'HOLD') AS signal,
+                        {entry_expr} AS entry_price,
+                        {sl_expr} AS sl,
+                        {tp1_expr} AS tp1
+                    FROM signals
+                    WHERE {ticker_expr} AND {open_expr}
+                    """
+                )
+                rows = cur.fetchall()
+                if not rows:
+                    return
+
+                for rowid, signal_ref, signal, entry_price, sl, tp1 in rows:
+                    side = str(signal or 'HOLD').upper()
+                    if side not in {'LONG', 'SHORT'}:
+                        continue
+                    entry = float(entry_price or 0.0)
+                    if entry <= 0:
+                        continue
+                    sl_val = float(sl or 0.0)
+                    tp1_val = float(tp1 or 0.0)
+
+                    outcome: str | None = None
+                    if side == 'LONG':
+                        if sl_val > 0 and current_price <= sl_val:
+                            outcome = 'SL'
+                            logger.info("BTC SL hit: %s entry=%s sl=%s", side, format(entry, "g"), format(sl_val, "g"))
+                        elif tp1_val > 0 and current_price >= tp1_val:
+                            outcome = 'TP1'
+                            logger.info("BTC TP1 hit: %s entry=%s tp1=%s", side, format(entry, "g"), format(tp1_val, "g"))
+                    else:
+                        if sl_val > 0 and current_price >= sl_val:
+                            outcome = 'SL'
+                            logger.info("BTC SL hit: %s entry=%s sl=%s", side, format(entry, "g"), format(sl_val, "g"))
+                        elif tp1_val > 0 and current_price <= tp1_val:
+                            outcome = 'TP1'
+                            logger.info("BTC TP1 hit: %s entry=%s tp1=%s", side, format(entry, "g"), format(tp1_val, "g"))
+
+                    pnl_pct = self._calc_signal_pnl_pct(side, entry, current_price)
+
+                    set_parts = ["pnl_pct = ?"]
+                    params: list[Any] = [float(pnl_pct)]
+                    if outcome is not None:
+                        if 'outcome' in cols:
+                            set_parts.append("outcome = ?")
+                            params.append(outcome)
+                        if 'result' in cols:
+                            set_parts.append("result = ?")
+                            params.append(outcome)
+                    params.append(int(rowid))
+                    cur.execute(
+                        f"UPDATE signals SET {', '.join(set_parts)} WHERE rowid = ?",
+                        params,
+                    )
+
+                    if outcome is not None and self._open_signal_state is not None:
+                        state_ref = str(self._open_signal_state.get('signal_ref', ''))
+                        if state_ref and state_ref == str(signal_ref):
+                            self._open_signal_state = None
+                            self._last_open_signal_id = None
+                            self._last_saved_btc_signal = 'HOLD'
+
+                conn.commit()
+        except Exception as exc:
+            logger.error('Failed to refresh BTC open signals: %s', exc, exc_info=True)
+
+    async def _read_mtf_bias(self) -> str:
+        if not (settings.redis_state_enabled and self.redis_state.connected):
+            return ""
+        bias = ""
+        payload = await self.redis_state.get_json('mtf_bias', default=None)
+        if isinstance(payload, dict):
+            bias = str(
+                payload.get('bias')
+                or payload.get('bias_4h')
+                or payload.get('mtf_bias')
+                or payload.get('direction')
+                or ""
+            )
+        elif isinstance(payload, str):
+            bias = payload
+
+        if not bias and self.redis_state._client is not None:
+            try:
+                raw = await self.redis_state._client.get(self.redis_state._key('mtf_bias'))
+                if raw:
+                    raw_s = str(raw).strip()
+                    if raw_s.startswith('{') and raw_s.endswith('}'):
+                        try:
+                            obj = json.loads(raw_s)
+                            if isinstance(obj, dict):
+                                bias = str(
+                                    obj.get('bias')
+                                    or obj.get('bias_4h')
+                                    or obj.get('mtf_bias')
+                                    or obj.get('direction')
+                                    or ""
+                                )
+                        except Exception:
+                            bias = ""
+                    else:
+                        bias = raw_s
+            except Exception:
+                bias = ""
+
+        normalized = str(bias).replace('"', '').upper().strip()
+        if normalized in {"BULLISH", "BEARISH"}:
+            return normalized
+        return ""
+
     async def _persist_btc_signal_from_redis(self, current_price: float) -> None:
         if not settings.redis_state_enabled:
             return
@@ -422,8 +672,18 @@ class AppRuntime:
             return
 
         confidence = float(signal_payload.get('confidence', 0.0))
+        if confidence < MIN_CONFIDENCE:
+            return
         size_multiplier = float(signal_payload.get('size_multiplier', 1.0))
         signal_note = str(signal_payload.get('signal_note', 'normal'))
+        entry_price = float(signal_payload.get('entry_price', current_price))
+        sl = float(signal_payload.get('sl', entry_price))
+        tp1 = float(signal_payload.get('tp1', entry_price))
+        tp2 = float(signal_payload.get('tp2', entry_price))
+        tp3 = float(signal_payload.get('tp3', entry_price))
+        rr_ratio = float(signal_payload.get('rr_ratio', 1.0))
+        if entry_price <= 0:
+            entry_price = float(current_price)
 
         open_state = self._open_signal_state
         if open_state is not None:
@@ -432,6 +692,15 @@ class AppRuntime:
                 # Same-direction refresh; keep one open row.
                 return
 
+        open_count = await asyncio.to_thread(self._count_open_btc_signals)
+        if open_count >= MAX_OPEN_SIGNALS:
+            await asyncio.to_thread(self._close_all_open_btc_signals, float(current_price), 'CLOSED')
+
+        open_state = self._open_signal_state
+        if open_state is not None:
+            open_signal = str(open_state.get('signal', 'HOLD')).upper()
+
+            # Safety close for stale in-memory state that may not be in DB open set anymore.
             prev_entry = float(open_state.get('entry_price', 0.0))
             prev_pnl_pct = self._calc_signal_pnl_pct(open_signal, prev_entry, current_price)
             await asyncio.to_thread(
@@ -450,14 +719,22 @@ class AppRuntime:
             confidence,
             size_multiplier,
             signal_note,
-            current_price,
+            entry_price,
+            sl,
+            tp1,
+            tp2,
+            tp3,
+            rr_ratio,
         )
         if insert_meta:
             self._open_signal_state = {
                 "signal_ref": str(insert_meta.get("signal_ref", "")),
                 "is_minimal_schema": bool(insert_meta.get("is_minimal_schema", False)),
                 "signal": signal,
-                "entry_price": float(current_price),
+                "entry_price": float(entry_price),
+                "sl": float(sl),
+                "tp1": float(tp1),
+                "tp2": float(tp2),
                 "opened_at_ts": float(time_module.time()),
             }
             self._last_open_signal_id = str(insert_meta.get("signal_ref", ""))
@@ -507,12 +784,18 @@ class AppRuntime:
         await self.redis_state.set_json('volatility', vol_payload, ttl_seconds=10)
         await self.redis_state.set_json('volprofile', volume_payload, ttl_seconds=10)
         await self.redis_state.set_json('execution', execution_payload, ttl_seconds=10)
-        combined_payload = combined_btc_signal(orderflow_payload, vol_payload)
+        current_price = self._extract_current_price(snapshot)
+        mtf_bias = await self._read_mtf_bias()
+        combined_payload = combined_btc_signal(
+            orderflow_payload,
+            vol_payload,
+            current_price=current_price,
+            mtf_bias=mtf_bias,
+        )
         combined_payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
         await self.redis_state.set_json('signal', combined_payload, ttl_seconds=10)
-        current_price = self._extract_current_price(snapshot)
         await self._persist_btc_signal_from_redis(current_price=current_price)
-        await self._maybe_update_open_signal_pnl(current_price=current_price)
+        await asyncio.to_thread(self._refresh_btc_open_signals, current_price)
 
     def _handle_paper_trade(self, payload: dict[str, Any], snapshot: dict[str, Any]) -> None:
         if not settings.paper_trade:
@@ -795,15 +1078,29 @@ class AppRuntime:
         state = build_feature_state(snap)
         payload = order_flow_decision_state(state.order_flow)
         vol_payload = volatility_tradeability(state.volatility)
-        combined = combined_btc_signal(payload, vol_payload)
+        current_price = self._extract_current_price(snap)
+        mtf_bias = await self._read_mtf_bias()
+        combined = combined_btc_signal(
+            payload,
+            vol_payload,
+            current_price=current_price,
+            mtf_bias=mtf_bias,
+        )
         payload.update(
             {
                 "signal": combined.get("signal", "HOLD"),
                 "confidence": combined.get("confidence", 0.0),
+                "entry_price": combined.get("entry_price", 0.0),
+                "sl": combined.get("sl", 0.0),
+                "tp1": combined.get("tp1", 0.0),
+                "tp2": combined.get("tp2", 0.0),
+                "tp3": combined.get("tp3", 0.0),
+                "rr_ratio": combined.get("rr_ratio", 1.0),
                 "size_multiplier": combined.get("size_multiplier", 1.0),
                 "signal_note": combined.get("signal_note", "normal"),
                 "volatility_regime": combined.get("volatility_regime", vol_payload.get("volatility_regime", "NORMAL")),
                 "tradeability": combined.get("tradeability", vol_payload.get("tradeability", "ALLOW")),
+                "mtf_bias_4h": combined.get("mtf_bias_4h", "UNKNOWN"),
             }
         )
         payload['as_of_utc'] = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')

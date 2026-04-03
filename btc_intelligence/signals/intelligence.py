@@ -234,9 +234,41 @@ def execution_rejection_code(reason: str) -> str:
     return "UNKNOWN_REJECT"
 
 
+def calculate_sl_tp(signal: str, entry_price: float, atr_pct: float) -> dict[str, Any]:
+    atr_value = float(entry_price) * (float(atr_pct) / 100.0)
+    side = str(signal).upper()
+
+    if side == "LONG":
+        sl = entry_price - (1.5 * atr_value)
+        tp1 = entry_price + (1.5 * atr_value)
+        tp2 = entry_price + (3.0 * atr_value)
+        tp3 = entry_price + (4.5 * atr_value)
+    elif side == "SHORT":
+        sl = entry_price + (1.5 * atr_value)
+        tp1 = entry_price - (1.5 * atr_value)
+        tp2 = entry_price - (3.0 * atr_value)
+        tp3 = entry_price - (4.5 * atr_value)
+    else:
+        sl = entry_price
+        tp1 = entry_price
+        tp2 = entry_price
+        tp3 = entry_price
+
+    return {
+        "sl": round(float(sl), 2),
+        "tp1": round(float(tp1), 2),
+        "tp2": round(float(tp2), 2),
+        "tp3": round(float(tp3), 2),
+        "rr_ratio": 1.0,
+        "atr_value": round(float(atr_value), 2),
+    }
+
+
 def combined_btc_signal(
     orderflow_payload: dict[str, Any],
     volatility_payload: dict[str, Any],
+    current_price: float = 0.0,
+    mtf_bias: str = "",
 ) -> dict[str, Any]:
     """
     Build executable BTC signal from order flow, with volatility as size adjuster.
@@ -244,7 +276,10 @@ def combined_btc_signal(
     decision = str(orderflow_payload.get("decision_state", "NO_TRADE")).upper()
     volatility_regime = str(volatility_payload.get("volatility_regime", "NORMAL")).upper()
     tradeability = str(volatility_payload.get("tradeability", "ALLOW")).upper()
+    bias_4h = str(mtf_bias or "").upper().strip()
     obi = float(orderflow_payload.get("obi", 0.0))
+    entry_price = float(current_price)
+    atr_pct = float(volatility_payload.get("atr_pct", volatility_payload.get("atr_multiplier_pct", 0.0)))
 
     if decision == "FAVOR_LONG":
         signal = "LONG"
@@ -253,6 +288,14 @@ def combined_btc_signal(
         signal = "SHORT"
         confidence = max(0.0, min(100.0, abs(obi) * 100.0))
     else:
+        signal = "HOLD"
+        confidence = 0.0
+
+    # Multi-timeframe directional filter (4H bias from Redis, optional fallback).
+    if signal == "LONG" and bias_4h == "BEARISH":
+        signal = "HOLD"
+        confidence = 0.0
+    elif signal == "SHORT" and bias_4h == "BULLISH":
         signal = "HOLD"
         confidence = 0.0
 
@@ -269,14 +312,24 @@ def combined_btc_signal(
         size_multiplier = 1.0
         signal_note = "normal"
 
+    sl_tp = calculate_sl_tp(signal=signal, entry_price=entry_price, atr_pct=atr_pct)
+
     return {
         "ticker": "BTCUSDT",
         "signal": signal,
         "confidence": round(confidence, 2),
+        "entry_price": round(entry_price, 2),
+        "sl": sl_tp["sl"],
+        "tp1": sl_tp["tp1"],
+        "tp2": sl_tp["tp2"],
+        "tp3": sl_tp["tp3"],
+        "rr_ratio": sl_tp["rr_ratio"],
+        "atr_value": sl_tp["atr_value"],
         "size_multiplier": float(size_multiplier),
         "signal_note": signal_note,
         "orderflow_decision": decision,
         "volatility_regime": volatility_regime,
         "tradeability": tradeability,
+        "mtf_bias_4h": bias_4h if bias_4h in {"BULLISH", "BEARISH"} else "UNKNOWN",
         "obi": round(obi, 4),
     }
