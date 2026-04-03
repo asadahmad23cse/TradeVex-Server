@@ -422,7 +422,7 @@ def _normalize_direction(raw_signal: Any) -> str:
     return s or "HOLD"
 
 
-def _fetch_trade_report_rows(limit: int = 200) -> list[dict[str, Any]]:
+def _fetch_trade_report_rows(limit: int = 200, ticker: str | None = None) -> list[dict[str, Any]]:
     db_path = _db_sqlite_path()
     if not db_path.exists():
         return []
@@ -466,6 +466,14 @@ def _fetch_trade_report_rows(limit: int = 200) -> list[dict[str, Any]]:
             size_expr = coalesce_expr(["size_multiplier"], "1.0")
             rr_expr = coalesce_expr(["rr_ratio", "risk_reward"], "0.0")
 
+            where_sql = ""
+            params: list[Any] = []
+            ticker_norm = str(ticker or "").upper().strip()
+            if ticker_norm:
+                where_sql = f"WHERE UPPER({ticker_expr}) = ?"
+                params.append(ticker_norm)
+            params.append(int(limit))
+
             cur.execute(
                 f"""
                 SELECT
@@ -487,10 +495,11 @@ def _fetch_trade_report_rows(limit: int = 200) -> list[dict[str, Any]]:
                     {size_expr} AS size_multiplier,
                     {rr_expr} AS rr_ratio
                 FROM signals
+                {where_sql}
                 ORDER BY datetime({ts_expr}) DESC, rowid DESC
                 LIMIT ?
                 """,
-                (int(limit),),
+                tuple(params),
             )
 
             for row in cur.fetchall():
@@ -1797,6 +1806,404 @@ def get_stock_signal(ticker: str = "RELIANCE.NS"):
         return _attach_factor_fields({"ticker": ticker, "signal": "HOLD", "confidence": 50, "alpha_score": 0.0, "message": str(e)})
 
 
+def _norm_signal_dir(raw_signal: Any) -> str:
+    s = str(raw_signal or "").upper().strip()
+    if s in {"BUY", "LONG"}:
+        return "LONG"
+    if s in {"SELL", "SHORT"}:
+        return "SHORT"
+    return "HOLD"
+
+
+def _latest_store_signal_for_ticker(ticker: str) -> dict[str, Any] | None:
+    if _store is None:
+        return None
+    try:
+        needle = str(ticker or "").upper().strip()
+        needle_alt = needle.replace(".NS", "").replace(".BO", "")
+        rows = _store.get_recent_signals(limit=400)
+        for row in rows:
+            asset = str(row.get("asset") or row.get("ticker") or "").upper().strip()
+            if not asset:
+                continue
+            asset_alt = asset.replace(".NS", "").replace(".BO", "")
+            if asset == needle or asset_alt == needle_alt:
+                return dict(row)
+    except Exception:
+        return None
+    return None
+
+
+def _download_stock_frame(ticker: str, interval: str = "15m", period: str = "5d"):
+    try:
+        import yfinance as yf  # type: ignore[import]
+
+        df = yf.download(ticker, interval=interval, period=period, progress=False, auto_adjust=False)
+        if df is None or df.empty:
+            return None
+        if hasattr(df.columns, "levels"):
+            df.columns = df.columns.get_level_values(0)
+        for col in ("Open", "High", "Low", "Close", "Volume"):
+            if col not in df.columns:
+                return None
+        return df
+    except Exception:
+        return None
+
+
+def _calc_rsi_from_closes(closes: list[float], period: int = 14) -> float:
+    if len(closes) <= period:
+        return 50.0
+    gains = 0.0
+    losses = 0.0
+    for i in range(1, period + 1):
+        diff = float(closes[i]) - float(closes[i - 1])
+        if diff >= 0:
+            gains += diff
+        else:
+            losses -= diff
+    avg_gain = gains / period
+    avg_loss = losses / period
+    if avg_loss <= 1e-9:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
+
+
+def _compute_rr_ratio(entry_price: float, sl: float, tp1: float) -> float:
+    risk = abs(float(entry_price) - float(sl))
+    reward = abs(float(tp1) - float(entry_price))
+    if risk <= 1e-9:
+        return 0.0
+    return round(reward / risk, 2)
+
+
+def _bucket_from_confidence(conf: float) -> str:
+    if conf >= 80:
+        return "STRONG"
+    if conf >= 65:
+        return "MODERATE"
+    return "WEAK"
+
+
+def _build_terminal_signal_payload(ticker: str, source: dict[str, Any]) -> dict[str, Any]:
+    src = _attach_factor_fields(dict(source or {}))
+    signal_dir = _norm_signal_dir(src.get("signal"))
+
+    conf_raw = _safe_float(src.get("confidence"), 0.0)
+    confidence = conf_raw * 100.0 if 0.0 <= conf_raw <= 1.0 else conf_raw
+    confidence = max(0.0, min(100.0, confidence))
+
+    alpha_raw = _safe_float(src.get("alpha_score"), 0.0)
+    strength = abs(alpha_raw) * 100.0 if abs(alpha_raw) <= 1.0 else abs(alpha_raw)
+    signal_strength = max(0.0, min(100.0, round(strength, 1)))
+
+    edge_raw = src.get("net_alpha_score", src.get("edge_after_costs", signal_strength))
+    edge_val = _safe_float(edge_raw, signal_strength)
+    if abs(edge_val) <= 1.0:
+        edge_val *= 100.0
+    edge_after_costs = max(0.0, min(100.0, round(edge_val, 1)))
+
+    entry_price = _safe_float(src.get("entry_price", src.get("entry")), 0.0)
+    sl = _safe_float(src.get("sl", src.get("stop_loss")), 0.0)
+    tp1 = _safe_float(src.get("tp1", src.get("take_profit")), 0.0)
+    rr_ratio = _safe_float(src.get("rr_ratio", src.get("risk_reward")), 0.0)
+    if rr_ratio <= 0 and entry_price > 0 and sl > 0 and tp1 > 0:
+        rr_ratio = _compute_rr_ratio(entry_price, sl, tp1)
+    rr_ratio = round(rr_ratio, 2)
+
+    regime = str(src.get("regime") or src.get("regime_for_confidence") or "SIDEWAYS").upper()
+    reason = str(src.get("reason") or src.get("message") or "Live terminal signal")
+
+    f1 = _safe_float(src.get("F1_momentum"), 0.0)
+    f2 = _safe_float(src.get("F2_mean_rev"), 0.0)
+    f3 = _safe_float(src.get("F3_volume"), 0.0)
+    f5 = _safe_float(src.get("F5_volatility"), 0.0)
+
+    confidence_threshold = 65.0
+    cost_gate_val = round(max(0.01, (100.0 - edge_after_costs) / 275.0), 3)
+    data_quality = bool(entry_price > 0 and confidence > 0)
+    confidence_gate = bool(confidence >= confidence_threshold)
+    cost_gate = bool(edge_after_costs >= 20.0)
+    mtf_alignment = True
+    if signal_dir == "LONG" and f1 < 0:
+        mtf_alignment = False
+    if signal_dir == "SHORT" and f1 > 0:
+        mtf_alignment = False
+    fear_greed = True
+    regime_filter = "HIGH_VOL" not in regime and "HALT" not in regime
+
+    pipeline_output = (
+        signal_dir
+        if signal_dir in {"LONG", "SHORT"} and data_quality and confidence_gate and cost_gate and mtf_alignment and fear_greed and regime_filter
+        else "HOLD"
+    )
+
+    trade_rows = _fetch_trade_report_rows(limit=800, ticker=ticker)
+    closed_outcomes = {"TP", "TP1", "TP2", "TP3", "SL", "STOPPED", "CLOSED", "TIMEOUT"}
+    closed_rows = [r for r in trade_rows if str(r.get("outcome", "")).upper() in closed_outcomes]
+    trades_count = len(closed_rows)
+    wins = [r for r in closed_rows if _safe_float(r.get("pnl_pct"), 0.0) > 0]
+    win_rate = (len(wins) / trades_count * 100.0) if trades_count else 0.0
+    rr_for_kelly = max(rr_ratio, 0.1)
+    p = win_rate / 100.0
+    kelly_f = max(0.0, (p - (1.0 - p) / rr_for_kelly) * 100.0)
+    method = "KELLY" if trades_count >= 30 else "COLD START"
+    if method == "KELLY":
+        size_pct = max(0.25, min(5.0, kelly_f / 10.0))
+    else:
+        size_pct = max(0.25, min(1.50, (confidence / 100.0) * 1.2))
+    size_pct = round(size_pct, 2)
+    size_usd = round(size_pct * 10.0, 2)
+
+    strength_bucket = _bucket_from_confidence(confidence)
+    dir_bucket = signal_dir if signal_dir in {"LONG", "SHORT"} else "NEUTRAL"
+    bucket = f"{dir_bucket}/{strength_bucket}/{regime}"
+
+    return {
+        "ticker": str(ticker),
+        "signal": signal_dir,
+        "confidence": round(confidence, 1),
+        "regime": regime,
+        "signal_strength": signal_strength,
+        "edge_after_costs": edge_after_costs,
+        "entry_price": round(entry_price, 2),
+        "sl": round(sl, 2),
+        "tp1": round(tp1, 2),
+        "rr_ratio": rr_ratio,
+        "reason": reason,
+        "gate_status": {
+            "data_quality": data_quality,
+            "confidence_gate": confidence_gate,
+            "cost_gate": cost_gate,
+            "mtf_alignment": mtf_alignment,
+            "fear_greed": fear_greed,
+            "regime_filter": regime_filter,
+        },
+        "pipeline": {
+            "raw_signal": signal_dir,
+            "regime_gate": regime,
+            "regime_pass": regime_filter,
+            "confidence_val": round(confidence, 1),
+            "confidence_threshold": confidence_threshold,
+            "confidence_pass": confidence_gate,
+            "cost_gate_val": cost_gate_val,
+            "cost_pass": cost_gate,
+            "output": pipeline_output,
+        },
+        "position_sizing": {
+            "size_pct": size_pct,
+            "size_usd": size_usd,
+            "method": method,
+            "kelly_f": round(kelly_f, 1),
+            "win_rate": round(win_rate, 1),
+            "trades_count": trades_count,
+            "rr": rr_ratio,
+            "bucket": bucket,
+            "algo": "quant_alpha_factor_model_v1",
+        },
+        "factors": {
+            "F1_momentum": round(f1, 3),
+            "F2_mean_rev": round(f2, 3),
+            "F3_volume": round(f3, 3),
+            "F5_volatility": round(f5, 3),
+        },
+        "as_of_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+    }
+
+
+@app.get("/api/terminal-signal")
+def get_terminal_signal(ticker: str = "RELIANCE.NS"):
+    src = _latest_store_signal_for_ticker(ticker)
+    if src is None:
+        src = get_stock_signal(ticker=ticker)
+    if not isinstance(src, dict):
+        src = {"ticker": ticker, "signal": "HOLD", "confidence": 0.0}
+    return _build_terminal_signal_payload(ticker=ticker, source=src)
+
+
+@app.get("/api/stock/flow")
+def get_stock_flow(ticker: str = "RELIANCE.NS"):
+    df = _download_stock_frame(ticker=ticker, interval="15m", period="5d")
+    if df is None or len(df) < 20:
+        return {
+            "ticker": ticker,
+            "decision": "NO_TRADE",
+            "trend": "NEUTRAL",
+            "money_flow": 0.0,
+            "smart_money": "NEUTRAL",
+            "rsi": 50.0,
+            "reason": "Insufficient intraday data",
+            "as_of_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        }
+
+    view = df.tail(40)
+    highs = [float(v) for v in view["High"].tolist()]
+    lows = [float(v) for v in view["Low"].tolist()]
+    closes = [float(v) for v in view["Close"].tolist()]
+    volumes = [float(v) for v in view["Volume"].tolist()]
+
+    mf_num = 0.0
+    mf_den = 0.0
+    avg_vol = sum(volumes) / max(len(volumes), 1)
+    smart_score = 0
+    for i in range(len(closes)):
+        hi = highs[i]
+        lo = lows[i]
+        cl = closes[i]
+        op = float(view["Open"].iloc[i])
+        vol = volumes[i]
+        span = hi - lo
+        if span > 1e-9:
+            mfm = ((cl - lo) - (hi - cl)) / span
+            mf_num += mfm * vol
+            mf_den += vol
+        body_ratio = abs(cl - op) / max(span, 1e-9)
+        if vol > avg_vol * 1.3 and body_ratio > 0.55:
+            smart_score += 1 if cl >= op else -1
+
+    money_flow = (mf_num / mf_den) if mf_den > 0 else 0.0
+    rsi = _calc_rsi_from_closes(closes[-20:], period=14)
+    if money_flow > 0.05:
+        trend = "ACCUMULATION"
+    elif money_flow < -0.05:
+        trend = "DISTRIBUTION"
+    else:
+        trend = "NEUTRAL"
+
+    if smart_score >= 2:
+        smart_money = "BUYER_DOMINANT"
+    elif smart_score <= -2:
+        smart_money = "SELLER_DOMINANT"
+    else:
+        smart_money = "NEUTRAL"
+
+    if trend == "ACCUMULATION" and rsi < 70:
+        decision = "FAVOR_LONG"
+        reason = "Money flow accumulation with healthy RSI"
+    elif trend == "DISTRIBUTION" and rsi > 30:
+        decision = "FAVOR_SHORT"
+        reason = "Money flow distribution with downside pressure"
+    else:
+        decision = "NO_TRADE"
+        reason = "Flow mixed or edge not strong"
+
+    return {
+        "ticker": ticker,
+        "decision": decision,
+        "trend": trend,
+        "money_flow": round(money_flow, 4),
+        "smart_money": smart_money,
+        "rsi": round(rsi, 2),
+        "reason": reason,
+        "as_of_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+    }
+
+
+@app.get("/api/stock/volume")
+def get_stock_volume_profile(ticker: str = "RELIANCE.NS"):
+    df = _download_stock_frame(ticker=ticker, interval="15m", period="5d")
+    if df is None or len(df) < 20:
+        return {
+            "ticker": ticker,
+            "decision": "NO_TRADE",
+            "support": 0.0,
+            "resistance": 0.0,
+            "poc_price": 0.0,
+            "distance_from_vwap_pct": 0.0,
+            "reason": "Insufficient intraday data",
+            "as_of_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        }
+
+    view = df.tail(60)
+    last_close = _safe_float(view["Close"].iloc[-1], 0.0)
+    support = _safe_float(view["Low"].tail(20).min(), 0.0)
+    resistance = _safe_float(view["High"].tail(20).max(), 0.0)
+
+    volumes = [float(v) for v in view["Volume"].tolist()]
+    closes = [float(v) for v in view["Close"].tolist()]
+    total_vol = sum(volumes)
+    vwap = (sum(c * v for c, v in zip(closes, volumes)) / total_vol) if total_vol > 0 else last_close
+    dist_pct = ((last_close - vwap) / last_close * 100.0) if last_close > 0 else 0.0
+
+    if last_close > vwap and dist_pct > 0.10:
+        decision = "FAVOR_LONG"
+        reason = "Price holding above VWAP with positive structure"
+    elif last_close < vwap and dist_pct < -0.10:
+        decision = "FAVOR_SHORT"
+        reason = "Price below VWAP with negative structure"
+    else:
+        decision = "NO_TRADE"
+        reason = "Price near fair value (VWAP)"
+
+    return {
+        "ticker": ticker,
+        "decision": decision,
+        "support": round(support, 2),
+        "resistance": round(resistance, 2),
+        "poc_price": round(vwap, 2),
+        "distance_from_vwap_pct": round(dist_pct, 4),
+        "reason": reason,
+        "as_of_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+    }
+
+
+@app.get("/api/stock/volatility")
+def get_stock_volatility(ticker: str = "RELIANCE.NS"):
+    df = _download_stock_frame(ticker=ticker, interval="15m", period="5d")
+    if df is None or len(df) < 20:
+        return {
+            "ticker": ticker,
+            "tradeability": "NO_TRADE",
+            "regime": "UNKNOWN",
+            "atr_pct": 0.0,
+            "reason": "Insufficient intraday data",
+            "as_of_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        }
+
+    view = df.tail(120).copy()
+    highs = view["High"].astype(float).tolist()
+    lows = view["Low"].astype(float).tolist()
+    closes = view["Close"].astype(float).tolist()
+
+    tr_values: list[float] = []
+    prev_close = closes[0] if closes else 0.0
+    for hi, lo, cl in zip(highs, lows, closes):
+        tr = max(hi - lo, abs(hi - prev_close), abs(lo - prev_close))
+        tr_values.append(float(tr))
+        prev_close = cl
+
+    atr = sum(tr_values[-14:]) / max(len(tr_values[-14:]), 1)
+    last_price = closes[-1] if closes else 0.0
+    atr_pct = (atr / last_price * 100.0) if last_price > 0 else 0.0
+
+    if atr_pct < 0.10:
+        regime = "LOW"
+        tradeability = "REDUCE_SIZE"
+        reason = "Low volatility; reduce position size"
+    elif atr_pct < 0.80:
+        regime = "NORMAL"
+        tradeability = "ALLOW"
+        reason = "Normal tradable volatility"
+    elif atr_pct < 1.50:
+        regime = "EXPANSION"
+        tradeability = "CAUTION"
+        reason = "Volatility expansion; trade cautiously"
+    else:
+        regime = "HIGH_VOL"
+        tradeability = "NO_TRADE"
+        reason = "Extreme volatility regime"
+
+    return {
+        "ticker": ticker,
+        "tradeability": tradeability,
+        "regime": regime,
+        "atr_pct": round(atr_pct, 4),
+        "reason": reason,
+        "as_of_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+    }
+
+
 @app.get("/api/signal-quality")
 def get_signal_quality(ticker: str = "RELIANCE.NS"):
     """Return composite Signal Quality Score (SQS) for an asset."""
@@ -2239,9 +2646,20 @@ async def paper_reject(payload: dict):
 
 
 @app.get("/api/history")
-def get_history(limit: int = 100):
+def get_history(limit: int = 100, tab: str = "all", ticker: str | None = None):
     lim = max(1, min(int(limit), 1000))
-    return _fetch_trade_report_rows(limit=lim)
+    rows = _fetch_trade_report_rows(limit=lim, ticker=ticker)
+    tab_norm = str(tab or "all").strip().lower()
+    if tab_norm in {"tp", "takeprofit", "take_profit"}:
+        allowed = {"TP1", "TP2", "TP"}
+        return [r for r in rows if str(r.get("outcome", "")).upper() in allowed]
+    if tab_norm in {"sl", "stop", "stoploss", "stop_loss"}:
+        allowed = {"SL", "STOPPED"}
+        return [r for r in rows if str(r.get("outcome", "")).upper() in allowed]
+    if tab_norm in {"active", "open"}:
+        return [r for r in rows if str(r.get("outcome", "")).upper() == "OPEN"]
+    # all: intentionally unfiltered to include TIMEOUT and all terminal outcomes.
+    return rows
 
 
 @app.get("/api/equity-curve")
