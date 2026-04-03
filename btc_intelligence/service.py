@@ -76,7 +76,7 @@ from btc_intelligence.utils.notifier import TelegramNotifier
 
 
 logger = logging.getLogger(__name__)
-MIN_CONFIDENCE = 25.0
+ABSOLUTE_MIN_CONFIDENCE = 25.0
 MAX_OPEN_SIGNALS = 1
 MIN_HOLD_SECONDS = 300
 MIN_PRICE_MOVE_PCT = 0.05
@@ -309,21 +309,35 @@ class AppRuntime:
                 vec, _ = state.to_vector(direction='LONG', regime=regime.regime)
                 self.feature_seq.append(vec.squeeze(0))
 
-                await self.buffer.set_latest_signal(payload)
                 await self.buffer.mark_feature_eval(last_close)
-                await self._append_signal_log(payload)
-                await self.hub.broadcast(payload)
-                await self._publish_intelligence_state(
+                intelligence_payload = await self._publish_intelligence_state(
                     snapshot,
                     state,
                     regime_name=regime.regime,
                     signal_payload=payload,
                 )
+                ws_payload = dict(payload)
+                ws_payload["raw_confidence"] = float(payload.get("confidence", 0.0))
+                if isinstance(intelligence_payload, dict):
+                    meta_output = intelligence_payload.get("meta_output", {})
+                    if not isinstance(meta_output, dict):
+                        meta_output = {}
+                    ws_payload["meta_confidence"] = float(meta_output.get("confidence", ws_payload["raw_confidence"]))
+                    ws_payload["meta_decision"] = str(meta_output.get("decision", "HOLD")).upper()
+                    ws_payload["validation_status"] = str(meta_output.get("validation_status", "REJECTED")).upper()
+                else:
+                    ws_payload["meta_confidence"] = float(ws_payload["raw_confidence"])
+                    ws_payload["meta_decision"] = str(ws_payload.get("signal", "HOLD")).upper()
+                    ws_payload["validation_status"] = "REJECTED"
 
-                self._handle_paper_trade(payload, snapshot)
+                await self.buffer.set_latest_signal(ws_payload)
+                await self._append_signal_log(ws_payload)
+                await self.hub.broadcast(ws_payload)
 
-                if payload.get('signal') in {'LONG', 'SHORT'}:
-                    await self.notifier.send(self._format_telegram(payload))
+                self._handle_paper_trade(ws_payload, snapshot)
+
+                if ws_payload.get('signal') in {'LONG', 'SHORT'}:
+                    await self.notifier.send(self._format_telegram(ws_payload))
 
             except asyncio.CancelledError:
                 raise
@@ -1586,27 +1600,70 @@ class AppRuntime:
             return
 
         try:
-            data = json.loads(raw)
+            redis_payload = json.loads(raw)
         except Exception:
             return
-        if not isinstance(data, dict):
+        if not isinstance(redis_payload, dict):
             return
 
-        signal = str(data.get('signal', 'HOLD')).upper()
-        confidence = float(data.get('confidence', 0.0))
+        signal = str(redis_payload.get('signal', 'HOLD')).upper()
+        confidence = float(redis_payload.get('confidence', 0.0))
+        if confidence < ABSOLUTE_MIN_CONFIDENCE:
+            logger.debug(
+                'persist blocked: raw_conf=%.1f < %.1f',
+                confidence,
+                ABSOLUTE_MIN_CONFIDENCE,
+            )
+            return
 
-        # Gate 1: Only LONG/SHORT
+        meta_output_payload = (
+            redis_payload.get('meta_output', {})
+            if isinstance(redis_payload.get('meta_output', {}), dict)
+            else {}
+        )
+        meta_decision = str(
+            redis_payload.get('meta_decision')
+            or meta_output_payload.get('decision')
+            or redis_payload.get('decision')
+            or 'HOLD'
+        ).upper()
+        meta_conf = float(
+            redis_payload.get('meta_confidence')
+            or redis_payload.get('adjusted_confidence')
+            or meta_output_payload.get('confidence')
+            or confidence
+        )
+        META_MIN_CONFIDENCE = 55.0
+        if meta_decision not in {'LONG', 'SHORT'}:
+            logger.warning(
+                'Signal blocked by meta gate: decision=%s conf=%.1f',
+                meta_decision,
+                meta_conf,
+            )
+            logger.debug('persist blocked: meta_decision=%s', meta_decision)
+            return
+        if meta_conf < META_MIN_CONFIDENCE:
+            logger.warning(
+                'Signal blocked by meta gate: decision=%s conf=%.1f',
+                meta_decision,
+                meta_conf,
+            )
+            logger.debug(
+                'persist blocked: meta_conf=%.1f < %.1f',
+                meta_conf,
+                META_MIN_CONFIDENCE,
+            )
+            return
+
+        # Raw signal payload must still carry executable side.
         if signal not in {'LONG', 'SHORT'}:
+            logger.debug('persist blocked: non-executable signal=%s', signal)
             return
 
-        # Gate 2: Min confidence
-        if confidence < MIN_CONFIDENCE:
-            return
-
-        obi = float(data.get('obi', 0.0))
-        cvd_slope = float(data.get('cvd_slope', 0.0))
-        vol_regime = str(data.get('volatility_regime', data.get('regime', ''))).upper()
-        mtf_bias = str(data.get('mtf_bias_4h', data.get('mtf_bias', ''))).upper()
+        obi = float(redis_payload.get('obi', 0.0))
+        cvd_slope = float(redis_payload.get('cvd_slope', 0.0))
+        vol_regime = str(redis_payload.get('volatility_regime', redis_payload.get('regime', ''))).upper()
+        mtf_bias = str(redis_payload.get('mtf_bias_4h', redis_payload.get('mtf_bias', ''))).upper()
         quality_score = self._compute_signal_quality(
             confidence=confidence,
             obi=obi,
@@ -1641,16 +1698,16 @@ class AppRuntime:
             0.0 if elapsed == float('inf') else elapsed,
         )
 
-        size_multiplier = float(data.get('size_multiplier', 1.0))
-        signal_note = str(data.get('signal_note', ''))
-        entry_price = float(data.get('entry_price', 0.0))
+        size_multiplier = float(redis_payload.get('size_multiplier', 1.0))
+        signal_note = str(redis_payload.get('signal_note', ''))
+        entry_price = float(redis_payload.get('entry_price', 0.0))
         if entry_price <= 0:
             entry_price = float(current_price)
-        sl = float(data.get('sl', 0.0))
-        tp1 = float(data.get('tp1', 0.0))
-        tp2 = float(data.get('tp2', 0.0))
-        tp3 = float(data.get('tp3', 0.0))
-        rr_ratio = float(data.get('rr_ratio', 1.0))
+        sl = float(redis_payload.get('sl', 0.0))
+        tp1 = float(redis_payload.get('tp1', 0.0))
+        tp2 = float(redis_payload.get('tp2', 0.0))
+        tp3 = float(redis_payload.get('tp3', 0.0))
+        rr_ratio = float(redis_payload.get('rr_ratio', 1.0))
 
         # Close existing open signals first (single-position policy).
         await asyncio.to_thread(
@@ -1676,11 +1733,11 @@ class AppRuntime:
             rr_ratio,
         )
         if insert_meta:
-            decision_block = data.get('decision_engine', {}) if isinstance(data.get('decision_engine', {}), dict) else {}
-            prob_block = data.get('probability', {}) if isinstance(data.get('probability', {}), dict) else {}
-            meta_block = data.get('meta_decision', {}) if isinstance(data.get('meta_decision', {}), dict) else {}
-            meta_output = data.get('meta_output', {}) if isinstance(data.get('meta_output', {}), dict) else {}
-            strategy_block = data.get('strategy_selection', {}) if isinstance(data.get('strategy_selection', {}), dict) else {}
+            decision_block = redis_payload.get('decision_engine', {}) if isinstance(redis_payload.get('decision_engine', {}), dict) else {}
+            prob_block = redis_payload.get('probability', {}) if isinstance(redis_payload.get('probability', {}), dict) else {}
+            meta_block = redis_payload.get('meta_decision_details', {}) if isinstance(redis_payload.get('meta_decision_details', {}), dict) else {}
+            meta_output = redis_payload.get('meta_output', {}) if isinstance(redis_payload.get('meta_output', {}), dict) else {}
+            strategy_block = redis_payload.get('strategy_selection', {}) if isinstance(redis_payload.get('strategy_selection', {}), dict) else {}
             breakdown_block = decision_block.get('decision_breakdown', {}) if isinstance(decision_block.get('decision_breakdown', {}), dict) else {}
             raw_prob = float(prob_block.get('up_prob', 0.0)) / 100.0 if signal == 'LONG' else float(prob_block.get('down_prob', 0.0)) / 100.0
             factor_values = {
@@ -1700,9 +1757,9 @@ class AppRuntime:
                 'tp2': float(tp2),
                 'opened_at_ts': float(time_module.time()),
                 'opened_at_iso': datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
-                'regime': str(decision_block.get('regime', data.get('volatility_regime', 'SIDEWAYS'))),
-                'volatility_state': str(data.get('volatility_regime', 'NORMAL')),
-                'flow_state': str(data.get('orderflow_decision', data.get('decision_state', 'FLAT'))),
+                'regime': str(decision_block.get('regime', redis_payload.get('volatility_regime', 'SIDEWAYS'))),
+                'volatility_state': str(redis_payload.get('volatility_regime', 'NORMAL')),
+                'flow_state': str(redis_payload.get('orderflow_decision', redis_payload.get('decision_state', 'FLAT'))),
                 'raw_prob': float(max(0.0, min(1.0, raw_prob))),
                 'calibrated_prob': float(max(0.0, min(1.0, meta_block.get('calibration', {}).get('calibrated_prob', raw_prob) if isinstance(meta_block.get('calibration', {}), dict) else raw_prob))),
                 'factor_values': factor_values,
@@ -1737,7 +1794,7 @@ class AppRuntime:
         state,
         regime_name: str = "",
         signal_payload: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> dict[str, Any]:
         intelligence_bundle = self._compute_intelligence_bundle(
             snapshot=snapshot,
             state=state,
@@ -1789,7 +1846,7 @@ class AppRuntime:
         combined_payload["probability"] = intelligence_bundle.get("probability", {})
         combined_payload["execution_plan"] = intelligence_bundle.get("execution_plan", {})
         combined_payload["trade_triggers"] = intelligence_bundle.get("trade_triggers", [])
-        combined_payload["meta_decision"] = intelligence_bundle.get("meta_decision", {})
+        combined_payload["meta_decision_details"] = intelligence_bundle.get("meta_decision", {})
         combined_payload["meta_labeling"] = intelligence_bundle.get("meta_labeling", {})
         combined_payload["validation_engine"] = intelligence_bundle.get("validation_engine", {})
         combined_payload["strategy_selection"] = intelligence_bundle.get("strategy_selection", {})
@@ -1799,6 +1856,7 @@ class AppRuntime:
         combined_payload["drawdown_status"] = intelligence_bundle.get("drawdown_status", {})
         combined_payload["meta_output"] = intelligence_bundle.get("meta_output", {})
         combined_payload["adaptive_learning"] = intelligence_bundle.get("adaptive_learning", {})
+        combined_payload["raw_confidence"] = float(combined_payload.get("confidence", 0.0))
         try:
             kelly_payload = intelligence_bundle.get("kelly_sizing", {})
             if isinstance(kelly_payload, dict) and kelly_payload:
@@ -1812,15 +1870,25 @@ class AppRuntime:
         except Exception as exc:
             logger.debug("Kelly payload publish fallback: %s", exc)
 
-        meta_final = str(combined_payload.get("meta_output", {}).get("decision", "")).upper()
+        meta_output_block = combined_payload.get("meta_output", {})
+        if not isinstance(meta_output_block, dict):
+            meta_output_block = {}
+        meta_details = combined_payload.get("meta_decision_details", {})
+        if not isinstance(meta_details, dict):
+            meta_details = {}
+        combined_payload["meta_decision"] = str(meta_output_block.get("decision", "HOLD")).upper()
+        combined_payload["meta_confidence"] = float(meta_output_block.get("confidence", 0.0))
+        combined_payload["validation_status"] = str(meta_output_block.get("validation_status", "REJECTED")).upper()
+
+        meta_final = str(meta_output_block.get("decision", "")).upper()
         if not meta_final:
-            meta_final = str(combined_payload.get("meta_decision", {}).get("final_decision", "")).upper()
+            meta_final = str(meta_details.get("final_decision", "")).upper()
         if meta_final == "HOLD":
             combined_payload["signal"] = "HOLD"
             combined_payload["confidence"] = min(float(combined_payload.get("confidence", 0.0)), 49.0)
-            meta_reasons = combined_payload.get("meta_output", {}).get("adaptive_adjustments", [])
+            meta_reasons = meta_output_block.get("adaptive_adjustments", [])
             if not meta_reasons:
-                meta_reasons = combined_payload.get("meta_decision", {}).get("reasons", [])
+                meta_reasons = meta_details.get("reasons", [])
             if isinstance(meta_reasons, list) and meta_reasons:
                 combined_payload["signal_note"] = f"meta_hold:{str(meta_reasons[0])[:80]}"
             else:
@@ -1831,6 +1899,7 @@ class AppRuntime:
             await self.redis_state.set_json('signal', combined_payload, ttl_seconds=10)
         await self._persist_btc_signal_from_redis(current_price=current_price)
         await asyncio.to_thread(self._refresh_btc_open_signals, current_price)
+        return combined_payload
 
     def _handle_paper_trade(self, payload: dict[str, Any], snapshot: dict[str, Any]) -> None:
         if not settings.paper_trade:
@@ -1840,6 +1909,17 @@ class AppRuntime:
         if signal in {'LONG', 'SHORT'} and self.paper.open_position is None:
             entry_zone = payload.get('entry_zone', [0, 0])
             entry = (float(entry_zone[0]) + float(entry_zone[1])) / 2.0
+            meta_confidence = float(payload.get('meta_confidence', 0.0))
+            if meta_confidence <= 0.0:
+                meta_output = (
+                    self._latest_intelligence_bundle.get('meta_output', {})
+                    if isinstance(self._latest_intelligence_bundle, dict)
+                    else {}
+                )
+                if isinstance(meta_output, dict):
+                    meta_confidence = float(meta_output.get('confidence', payload.get('confidence', 0.0)))
+                else:
+                    meta_confidence = float(payload.get('confidence', 0.0))
             opened = self.paper.open(
                 direction=signal,
                 entry=entry,
@@ -1848,11 +1928,12 @@ class AppRuntime:
                 tp2=float(payload.get('take_profit', {}).get('TP2', 0.0)),
                 tp3=float(payload.get('take_profit', {}).get('TP3', 0.0)),
                 size_btc=float(payload.get('position_size_btc', 0.0)),
+                confidence=meta_confidence,
             )
             if opened:
                 self._open_trade_context = {
                     'factors': list(payload.get('factors_present', [])),
-                    'confidence': float(payload.get('confidence', 0.0)),
+                    'confidence': float(meta_confidence),
                     'strategy': str(payload.get('strategy', 'NONE')),
                 }
 
@@ -2050,6 +2131,7 @@ class AppRuntime:
             tp2=float(payload.get('tp2', 0.0)),
             tp3=float(payload.get('tp3', 0.0)),
             size_btc=float(payload.get('size_btc', 0.0)),
+            confidence=float(payload.get('confidence', 100.0)),
         )
         return {'opened': opened, 'open_position': self.paper.open_position is not None}
 
