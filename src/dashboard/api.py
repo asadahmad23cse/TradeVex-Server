@@ -573,32 +573,141 @@ def _proxy_cache_get(name: str) -> dict[str, Any] | None:
     return payload
 
 
-async def _btc_proxy_payload(name: str, redis_key: str, upstream_url: str) -> dict[str, Any]:
+def _as_key_list(value: Union[str, List[str]]) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    return [str(v) for v in value if str(v).strip()]
+
+
+def _extract_probability_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    block: dict[str, Any] = {}
+    if not isinstance(payload, dict):
+        return block
+    if any(k in payload for k in ("up_prob", "down_prob", "sideways_prob")):
+        block = dict(payload)
+    elif isinstance(payload.get("probability"), dict):
+        block = dict(payload.get("probability", {}))
+
+    if not block:
+        return {}
+
+    up_prob = float(block.get("up_prob", 0.0) or 0.0)
+    down_prob = float(block.get("down_prob", 0.0) or 0.0)
+    sideways_prob = float(block.get("sideways_prob", max(0.0, 100.0 - up_prob - down_prob)) or 0.0)
+    dominant_state = str(block.get("dominant_state") or block.get("dominant") or "SIDEWAYS").upper()
+
+    calibration_score = block.get("calibration_score")
+    if calibration_score is None:
+        platt_prob = block.get("platt_probability")
+        if platt_prob is not None:
+            calibration_score = float(platt_prob) * 100.0
+        else:
+            calibration_score = float(max(up_prob, down_prob, sideways_prob))
+
+    block["up_prob"] = round(up_prob, 2)
+    block["down_prob"] = round(down_prob, 2)
+    block["sideways_prob"] = round(sideways_prob, 2)
+    block["dominant_state"] = dominant_state
+    block["dominant"] = dominant_state
+    block["calibration_score"] = round(float(calibration_score), 2)
+    return block
+
+
+def _normalize_decision_intelligence_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        return {}
+
+    if isinstance(payload.get("decision_engine"), dict):
+        out = dict(payload)
+        out["decision_breakdown"] = (
+            dict(out.get("decision_breakdown", {}))
+            if isinstance(out.get("decision_breakdown"), dict)
+            else {}
+        )
+        out["probability"] = _extract_probability_payload(out)
+        out["execution_plan"] = dict(out.get("execution_plan", {})) if isinstance(out.get("execution_plan"), dict) else {}
+        return out
+
+    decision_engine = dict(payload)
+    out: dict[str, Any] = {
+        "decision_engine": decision_engine,
+        "decision_breakdown": (
+            dict(payload.get("decision_breakdown", {}))
+            if isinstance(payload.get("decision_breakdown"), dict)
+            else {}
+        ),
+        "factor_contributions": list(payload.get("factor_contributions", []))
+        if isinstance(payload.get("factor_contributions"), list)
+        else [],
+        "trade_verdict": dict(payload.get("trade_verdict", {}))
+        if isinstance(payload.get("trade_verdict"), dict)
+        else {},
+        "meta_decision": dict(payload.get("meta_decision", {}))
+        if isinstance(payload.get("meta_decision"), dict)
+        else {},
+        "meta_labeling": dict(payload.get("meta_labeling", {}))
+        if isinstance(payload.get("meta_labeling"), dict)
+        else {},
+        "validation_engine": dict(payload.get("validation_engine", {}))
+        if isinstance(payload.get("validation_engine"), dict)
+        else {},
+        "strategy_selection": dict(payload.get("strategy_selection", {}))
+        if isinstance(payload.get("strategy_selection"), dict)
+        else {},
+        "data_drift": dict(payload.get("data_drift", {}))
+        if isinstance(payload.get("data_drift"), dict)
+        else {},
+        "meta_output": dict(payload.get("meta_output", {}))
+        if isinstance(payload.get("meta_output"), dict)
+        else {},
+        "adaptive_learning": dict(payload.get("adaptive_learning", {}))
+        if isinstance(payload.get("adaptive_learning"), dict)
+        else {},
+        "as_of_utc": payload.get("as_of_utc"),
+    }
+    out["probability"] = _extract_probability_payload(payload)
+    out["execution_plan"] = dict(payload.get("execution_plan", {})) if isinstance(payload.get("execution_plan"), dict) else {}
+    return out
+
+
+async def _btc_proxy_payload(
+    name: str,
+    redis_key: Union[str, List[str]],
+    upstream_url: Union[str, List[str]],
+) -> dict[str, Any]:
+    redis_keys = _as_key_list(redis_key)
+    upstream_urls = _as_key_list(upstream_url)
+
     # 1) Redis fast-path
-    try:
-        raw = r.get(redis_key)
-        if raw:
-            payload = json.loads(raw)
-            if isinstance(payload, dict):
-                payload["stale"] = False
-                _btc_proxy_cache[name] = dict(payload)
-                return payload
-    except Exception:
-        pass
+    for key in redis_keys:
+        try:
+            raw = r.get(key)
+            if raw:
+                payload = json.loads(raw)
+                if isinstance(payload, dict):
+                    payload["stale"] = False
+                    _btc_proxy_cache[name] = dict(payload)
+                    return payload
+        except Exception:
+            continue
 
     # 2) Upstream fallback
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.get(upstream_url)
-            resp.raise_for_status()
-            payload = resp.json()
-            if isinstance(payload, dict):
-                payload["stale"] = False
-                _btc_proxy_cache[name] = dict(payload)
-                return payload
-            wrapped = {"data": payload, "stale": False}
-            _btc_proxy_cache[name] = dict(wrapped)
-            return wrapped
+            for url in upstream_urls:
+                try:
+                    resp = await client.get(url)
+                    resp.raise_for_status()
+                    payload = resp.json()
+                    if isinstance(payload, dict):
+                        payload["stale"] = False
+                        _btc_proxy_cache[name] = dict(payload)
+                        return payload
+                    wrapped = {"data": payload, "stale": False}
+                    _btc_proxy_cache[name] = dict(wrapped)
+                    return wrapped
+                except Exception:
+                    continue
     except Exception:
         pass
 
@@ -1170,20 +1279,79 @@ async def btc_execution_proxy():
 
 @app.get("/api/btc/decision-intelligence")
 async def btc_decision_intelligence_proxy():
-    return await _btc_proxy_payload(
+    payload = await _btc_proxy_payload(
         name="decision_intelligence",
-        redis_key="btc:intelligence",
-        upstream_url="http://127.0.0.1:9000/api/intelligence",
+        redis_key=["btc:intelligence", "btc:decision", "btc:signal"],
+        upstream_url=[
+            "http://127.0.0.1:9000/api/decision",
+            "http://127.0.0.1:9000/api/intelligence",
+            "http://127.0.0.1:9000/signal",
+        ],
     )
+    if not isinstance(payload, dict):
+        return {"error": "upstream_unavailable", "stale": True}
+
+    normalized = _normalize_decision_intelligence_payload(payload)
+    if normalized.get("error"):
+        return normalized
+
+    if not normalized.get("probability"):
+        prob_payload = await _btc_proxy_payload(
+            name="probability_for_decision",
+            redis_key=["btc:probability", "btc:intelligence", "btc:signal"],
+            upstream_url=[
+                "http://127.0.0.1:9000/api/probability",
+                "http://127.0.0.1:9000/api/intelligence",
+                "http://127.0.0.1:9000/api/decision",
+                "http://127.0.0.1:9000/signal",
+            ],
+        )
+        normalized["probability"] = _extract_probability_payload(prob_payload if isinstance(prob_payload, dict) else {})
+
+    if not normalized.get("execution_plan"):
+        exec_payload = await _btc_proxy_payload(
+            name="execution_plan_for_decision",
+            redis_key=["btc:execution_plan", "btc:intelligence"],
+            upstream_url=[
+                "http://127.0.0.1:9000/api/execution-plan",
+                "http://127.0.0.1:9000/api/intelligence",
+                "http://127.0.0.1:9000/api/execution",
+            ],
+        )
+        if isinstance(exec_payload, dict):
+            if isinstance(exec_payload.get("execution_plan"), dict):
+                normalized["execution_plan"] = dict(exec_payload.get("execution_plan", {}))
+            elif any(k in exec_payload for k in ("entry_zone", "stop_loss", "take_profit", "take_profit_2", "expected_rr", "slippage_risk")):
+                normalized["execution_plan"] = dict(exec_payload)
+
+    if not isinstance(normalized.get("decision_breakdown"), dict):
+        normalized["decision_breakdown"] = {}
+    return normalized
 
 
 @app.get("/api/btc/probability")
 async def btc_probability_proxy():
-    return await _btc_proxy_payload(
+    payload = await _btc_proxy_payload(
         name="probability",
-        redis_key="btc:probability",
-        upstream_url="http://127.0.0.1:9000/api/probability",
+        redis_key=["btc:probability", "btc:intelligence", "btc:signal"],
+        upstream_url=[
+            "http://127.0.0.1:9000/api/probability",
+            "http://127.0.0.1:9000/api/intelligence",
+            "http://127.0.0.1:9000/api/decision",
+            "http://127.0.0.1:9000/signal",
+        ],
     )
+    if not isinstance(payload, dict):
+        return {"up_prob": 0.0, "down_prob": 0.0, "sideways_prob": 0.0, "dominant": "SIDEWAYS", "calibration_score": 0.0, "stale": True}
+
+    if payload.get("error"):
+        return payload
+
+    prob = _extract_probability_payload(payload)
+    if prob:
+        prob["stale"] = bool(payload.get("stale", False))
+        return prob
+    return {"up_prob": 0.0, "down_prob": 0.0, "sideways_prob": 0.0, "dominant": "SIDEWAYS", "calibration_score": 0.0, "stale": True}
 
 
 @app.get("/api/btc/execution-plan")
