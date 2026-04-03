@@ -478,6 +478,21 @@ body{
   flex-direction:column;
   min-height:0;
 }
+.main>.panel:last-child{
+  display:flex;
+  flex-direction:column;
+  min-height:0;
+}
+.main>.panel:last-child .head{
+  flex:0 0 auto;
+}
+.main>.panel:last-child .right-body{
+  flex:1;
+  min-height:0;
+  overflow-y:auto;
+  overflow-x:hidden;
+  align-content:start;
+}
 @media (max-width:1040px){
   .main{
     height:auto !important;
@@ -958,49 +973,6 @@ body{
     </div>
   </div>
 
-  <div class="panel stock-history-wrap">
-    <div class="head"><div class="title">Signal History</div><div id="stock-history-time" class="sub">refresh: 30s</div></div>
-    <div class="terminal-stats-panel">
-      <div class="terminal-stats-grid">
-        <div class="terminal-stat">Total Trades:<b id="st-total-trades">0</b></div>
-        <div class="terminal-stat">Win Rate:<b id="st-win-rate">0.0%</b></div>
-        <div class="terminal-stat">Total P&L:<b id="st-total-pnl">0.00%</b></div>
-        <div class="terminal-stat">Avg Win:<b id="st-avg-win">0.00%</b></div>
-        <div class="terminal-stat">Max DD:<b id="st-max-dd">0.00%</b></div>
-        <div class="terminal-stat">Avg Loss:<b id="st-avg-loss">0.00%</b></div>
-        <div class="terminal-stat">Sharpe:<b id="st-sharpe">0.00</b></div>
-        <div class="terminal-stat">Profit Factor:<b id="st-pf">0.00</b></div>
-        <div class="terminal-stat">Best Trade:<b id="st-best">0.00%</b></div>
-        <div class="terminal-stat">Worst Trade:<b id="st-worst">0.00%</b></div>
-        <div class="terminal-stat">Avg Duration:<b id="st-duration">0s</b></div>
-        <div class="terminal-stat">Open:<b id="st-open">0</b></div>
-      </div>
-    </div>
-    <div id="stock-history-stats" class="stock-history-stats">
-      <span>Signals: 0</span><span>LONG: 0 (0%)</span><span>SHORT: 0 (0%)</span><span>Total P&L: 0.00%</span><span>Blocked: 0</span><span>Open: 0</span>
-    </div>
-    <div class="stock-history-tabs">
-      <button class="stock-history-tab active" data-hfilter="all">All</button>
-      <button class="stock-history-tab" data-hfilter="active">Active</button>
-      <button class="stock-history-tab" data-hfilter="blocked">Blocked</button>
-      <button class="stock-history-tab" data-hfilter="sl">SL</button>
-      <button class="stock-history-tab" data-hfilter="tp">TP</button>
-    </div>
-    <div class="tbl" style="max-height:300px">
-      <table class="stock-history-table">
-        <thead>
-          <tr><th>#</th><th>Time</th><th>Type</th><th>Signal</th><th>Conf</th><th>Entry</th><th>SL</th><th>TP1</th><th>R:R</th><th>Result</th><th>P&L</th></tr>
-        </thead>
-        <tbody id="stock-history-body"><tr><td colspan="11" class="empty">Loading history...</td></tr></tbody>
-      </table>
-    </div>
-    <div class="terminal-equity-wrap">
-      <div class="terminal-equity-stats" id="terminal-equity-stats">Total: 0.00% | Win Rate: 0.0% | Max DD: 0.00% | Sharpe: 0.00 | Trades: 0</div>
-      <div class="terminal-equity-box">
-        <canvas id="terminal-equity-canvas"></canvas>
-      </div>
-    </div>
-  </div>
 </div>
 
 <script>
@@ -1244,7 +1216,6 @@ async function loadAssetData(){
     loadOrderFlow(APP_STATE.ticker);
     loadStockIntelligence(APP_STATE.ticker);
   }
-  loadTerminalHistory();
   loadNews(APP_STATE.ticker,APP_STATE.assetClass);
   if(APP_STATE.mode==="stocks")loadMarketOverview();
   updatePaperActiveStock();
@@ -3160,7 +3131,6 @@ function boot(){
   initChart();
   initTf();
   bindStockIntelTabs();
-  bindStockHistoryTabs();
   screener();
   initBT();
   initPF();
@@ -3230,7 +3200,6 @@ function boot(){
   setInterval(()=>{if(!document.hidden&&APP_STATE.mode==="stocks"){loadStockIntelligence(APP_STATE.ticker)}},15000);
   setInterval(()=>{if(APP_STATE.mode==="stocks")refreshWatch({fast:true})},60000);
   setInterval(()=>{if(APP_STATE.mode==="stocks"){loadOrderFlow(APP_STATE.ticker)}else{renderCryptoOrderFlow()}},60000);
-  setInterval(()=>{if(APP_STATE.mode==="stocks"){loadTerminalHistory()}},30000);
   setInterval(()=>{if(APP_STATE.mode==="stocks"){refreshTopBar()}else{loadCryptoPrices();loadCryptoStats();loadCryptoSignalBadges()}},30000);
   setInterval(loadTickerBar,300000);
   setInterval(()=>{if(APP_STATE.mode==="stocks"){loadNews(APP_STATE.ticker,APP_STATE.assetClass||nAsset())}else{refreshCryptoNews()}},300000);
