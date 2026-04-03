@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import deque
 import json
 from pathlib import Path
-from statistics import mean, pstdev
+from statistics import mean, stdev
 from typing import Any
 
 
@@ -35,8 +35,8 @@ class DataDriftEngine:
         if not values:
             return 0.0, 1.0
         mu = mean(values)
-        if len(values) > 1:
-            sd = pstdev(values)
+        if len(values) >= 2:
+            sd = stdev(values)
         else:
             sd = 1.0
         return float(mu), float(max(sd, 1e-6))
