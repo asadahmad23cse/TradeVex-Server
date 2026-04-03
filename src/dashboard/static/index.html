@@ -691,6 +691,7 @@ body{
         <a class="pill link" href="/terminal">Multi-Asset Terminal</a>
         <div id="ws-pill" class="pill">WS: connecting</div>
         <div id="sig-pill" class="pill">Signal API: checking</div>
+        <div id="intel-pill" class="pill" style="font-size:11px;">Intelligence: checking</div>
         <div class="pill ok">Update: 15s</div>
       </div>
     </div>
@@ -1241,6 +1242,23 @@ function setPill(id, text, ok){
   el.textContent = text;
   el.className = "pill " + (ok ? "ok" : "bad");
 }
+function setIntelPill(ok, errorMessage){
+  const el = document.getElementById("intel-pill");
+  if(!el) return;
+  if(ok){
+    el.textContent = "🟢 Intelligence: Live";
+    el.className = "pill ok";
+    el.removeAttribute("title");
+    return;
+  }
+  el.textContent = "🔴 Intelligence API unavailable";
+  el.className = "pill bad";
+  if(errorMessage){
+    el.title = String(errorMessage);
+  }else{
+    el.removeAttribute("title");
+  }
+}
 function setOf(id, val, color){
   const e = document.getElementById(id);
   if(e){
@@ -1580,8 +1598,9 @@ function setMiniBar(id, value, color){
   el.style.background = color;
 }
 
-function updateDecisionIntelPanels(intel, fallbackSignal){
+function updateDecisionIntelPanels(intel, fallbackSignal, intelJson){
   const data = intel && typeof intel === "object" ? intel : {};
+  const intelError = Boolean((intelJson && typeof intelJson === "object" && intelJson.error) || data.error);
   const decision = data.decision_engine || {};
   const meta = data.meta_decision || decision.meta_decision || {};
   const breakdown = data.decision_breakdown || {};
@@ -1613,28 +1632,50 @@ function updateDecisionIntelPanels(intel, fallbackSignal){
     }
   }
 
-  const pctText = (v) => `${Number(v || 0).toFixed(1)}`;
-  setSimpleText("db-regime", pctText(breakdown.regime_score), "#e6edf3");
-  setSimpleText("db-momentum", pctText(breakdown.momentum_score), "#e6edf3");
-  setSimpleText("db-flow", pctText(breakdown.flow_score), "#e6edf3");
-  setSimpleText("db-cost", pctText(breakdown.cost_score), "#e6edf3");
-  const finalScore = Number(breakdown.final_score || 0);
-  setSimpleText("db-final", pctText(finalScore), finalScore >= 0 ? "#00c853" : "#ff4d4d");
-  setSimpleText("db-explain", String(breakdown.explanation || "Awaiting decision breakdown"), "#9fb0c7");
+  const scoreText = (v) => (typeof v === "number" && Number.isFinite(v) ? v.toFixed(1) : "—");
+  const bdAvail = Boolean(
+    data &&
+    data.decision_breakdown &&
+    !intelError &&
+    typeof breakdown.final_score === "number"
+  );
+  const regimeScore = bdAvail ? Number(breakdown.regime_score) : null;
+  const momentumScore = bdAvail ? Number(breakdown.momentum_score) : null;
+  const flowScore = bdAvail ? Number(breakdown.flow_score) : null;
+  const costScore = bdAvail ? Number(breakdown.cost_score) : null;
+  const finalScore = bdAvail ? Number(breakdown.final_score) : null;
+  const explanation = bdAvail
+    ? String(breakdown.explanation || "—")
+    : "Decision intelligence unavailable";
 
-  const up = Number(prob.up_prob || 0);
-  const down = Number(prob.down_prob || 0);
-  const side = Number(prob.sideways_prob || 0);
-  setSimpleText("prob-up-val", `${up.toFixed(1)}%`, "#00c853");
-  setSimpleText("prob-down-val", `${down.toFixed(1)}%`, "#ff1744");
-  setSimpleText("prob-side-val", `${side.toFixed(1)}%`, "#58a6ff");
-  setMiniBar("prob-up-bar", up, "#00c853");
-  setMiniBar("prob-down-bar", down, "#ff1744");
-  setMiniBar("prob-side-bar", side, "#2979ff");
+  setSimpleText("db-regime", scoreText(regimeScore), "#e6edf3");
+  setSimpleText("db-momentum", scoreText(momentumScore), "#e6edf3");
+  setSimpleText("db-flow", scoreText(flowScore), "#e6edf3");
+  setSimpleText("db-cost", scoreText(costScore), "#e6edf3");
+  setSimpleText("db-final", scoreText(finalScore), finalScore === null ? "#e6edf3" : finalScore >= 0 ? "#00c853" : "#ff4d4d");
+  setSimpleText("db-explain", explanation, bdAvail ? "#9fb0c7" : "#ffb347");
+
+  const probAvail = Boolean(
+    data &&
+    data.probability &&
+    !intelError &&
+    typeof prob.up_prob === "number"
+  );
+  const up = probAvail ? Number(prob.up_prob) : null;
+  const down = probAvail ? Number(prob.down_prob) : null;
+  const side = probAvail ? Number(prob.sideways_prob) : null;
+  setSimpleText("prob-up-val", up === null ? "—" : `${up.toFixed(1)}%`, "#00c853");
+  setSimpleText("prob-down-val", down === null ? "—" : `${down.toFixed(1)}%`, "#ff1744");
+  setSimpleText("prob-side-val", side === null ? "—" : `${side.toFixed(1)}%`, "#58a6ff");
+  setMiniBar("prob-up-bar", up === null ? 0 : up, "#00c853");
+  setMiniBar("prob-down-bar", down === null ? 0 : down, "#ff1744");
+  setMiniBar("prob-side-bar", side === null ? 0 : side, "#2979ff");
   const cal = meta.calibration || {};
   const calProb = Number(cal.calibrated_prob);
-  const dominantText = `${String(prob.dominant_state || "SIDEWAYS")} · Cal ${Number.isFinite(calProb) ? (calProb * 100).toFixed(1) + "%" : "—"}`;
-  setSimpleText("prob-dominant", dominantText, "#e6edf3");
+  const dominantText = probAvail
+    ? `${String(prob.dominant_state || prob.dominant || "SIDEWAYS")} · Cal ${Number.isFinite(calProb) ? (calProb * 100).toFixed(1) + "%" : "—"}`
+    : "Awaiting data...";
+  setSimpleText("prob-dominant", dominantText, probAvail ? "#e6edf3" : "#ffb347");
 
   const entryZone = Array.isArray(plan.entry_zone) && plan.entry_zone.length >= 2
     ? `${fmtPx(plan.entry_zone[0])} - ${fmtPx(plan.entry_zone[1])}`
@@ -2380,15 +2421,18 @@ async function loadSignal(){
       }
     }
     if(!s) throw new Error("signal fetch failed");
+    const intelOk = Boolean(intelJson && typeof intelJson === "object" && !intelJson.error);
+    setIntelPill(intelOk, intelJson?.error);
     latestDecisionIntel = (intelJson && typeof intelJson === "object" && !intelJson.error) ? intelJson : null;
     applySignalPayload(s, "btc_service");
-    updateDecisionIntelPanels(latestDecisionIntel, s);
+    updateDecisionIntelPanels(latestDecisionIntel, s, intelJson);
     setPill("sig-pill","Signal API: /api/btc/signal",true);
   }catch(err){
     setPill("sig-pill","Signal API: offline",false);
+    setIntelPill(false, err?.message);
     document.getElementById("sig-source").textContent=`source: unavailable (${err.message})`;
     latestDecisionIntel = null;
-    updateDecisionIntelPanels(null, null);
+    updateDecisionIntelPanels(null, null, { error: err?.message || "fetch_failed" });
     updatePipelineTrace(null);
     updateConstraintFlags(null);
     updateOnChainSqsPanel(null);
