@@ -47,6 +47,8 @@ from btc_intelligence.services import (
     AggregatorConfig,
     AdaptiveLearningConfig,
     AdaptiveLearningEngine,
+    CycleMonitor,
+    CycleMonitorConfig,
     DataDriftEngine,
     DecisionEngine,
     DecisionEngineInput,
@@ -157,6 +159,12 @@ class AppRuntime:
             self.drawdown_controller = DrawdownController(
                 state_path="btc_intelligence/logs/drawdown_state.json",
             )
+        try:
+            self.cycle_monitor = CycleMonitor(
+                CycleMonitorConfig(log_dir="btc_intelligence/logs/monitor")
+            )
+        except Exception:
+            self.cycle_monitor = None
         self.meta_decision_engine = MetaDecisionEngine()
         self.adaptive_learning = AdaptiveLearningEngine(
             state_path="btc_intelligence/logs/adaptive_learning_state.json",
@@ -941,6 +949,36 @@ class AppRuntime:
             "net_alpha": round(net_alpha, 6),
             "as_of_utc": now_iso,
         }
+        aggregate_payload["monitoring_summary"] = {}
+        try:
+            if self.cycle_monitor is not None:
+                walk_forward_payload = self.strategy_engine.last_wf_validation
+                if not isinstance(walk_forward_payload, dict):
+                    walk_forward_payload = {}
+                cycle_record = self.cycle_monitor.record_cycle(
+                    timestamp_utc=now_iso,
+                    final_decision=str(meta_output.get("decision", "HOLD")),
+                    confidence=float(meta_output.get("confidence", 0.0)),
+                    validation=validation_payload if isinstance(validation_payload, dict) else {},
+                    meta_label=meta_label_payload if isinstance(meta_label_payload, dict) else {},
+                    drift=drift_payload if isinstance(drift_payload, dict) else {},
+                    drawdown_status=drawdown_status if isinstance(drawdown_status, dict) else {},
+                    signal_aggregation=signal_aggregation_payload if isinstance(signal_aggregation_payload, dict) else {},
+                    walk_forward=walk_forward_payload,
+                    kelly_sizing=kelly_sizing_payload if isinstance(kelly_sizing_payload, dict) else {},
+                    strategy_used=str(meta_output.get("strategy_used", strategy_payload.get("strategy_used", "trend_following"))),
+                    adaptive_adjustments=list(meta_output.get("adaptive_adjustments", [])),
+                )
+                aggregate_payload["monitoring_summary"] = self.cycle_monitor.get_summary()
+                for alert in list(cycle_record.get("alerts", [])):
+                    if str(alert.get("severity", "")).upper() == "CRITICAL":
+                        logger.warning(
+                            "Cycle monitor critical alert [%s]: %s",
+                            str(alert.get("type", "unknown")),
+                            str(alert.get("message", "")),
+                        )
+        except Exception:
+            pass
         return aggregate_payload
 
     def _next_btc_signal_id(self, cur: sqlite3.Cursor) -> str:

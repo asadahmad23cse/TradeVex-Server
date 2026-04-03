@@ -1,4 +1,5 @@
 from .adaptive_learning import AdaptiveLearningConfig, AdaptiveLearningEngine
+from .cycle_monitor import CycleMonitor, CycleMonitorConfig
 from .data_drift import DataDriftEngine
 from .decision_engine import DecisionEngine, DecisionEngineInput
 from .drawdown_controller import DrawdownConfig, DrawdownController
@@ -16,6 +17,8 @@ from .walk_forward import WalkForwardConfig, WalkForwardValidator
 __all__ = [
     "AdaptiveLearningConfig",
     "AdaptiveLearningEngine",
+    "CycleMonitor",
+    "CycleMonitorConfig",
     "DataDriftEngine",
     "DecisionEngine",
     "DecisionEngineInput",
