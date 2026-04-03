@@ -253,32 +253,40 @@ class SignalStore:
 
     def save_signal(self, sig) -> None:
         """Persist a TradingSignal object."""
-        d = sig.to_dict()
-        sql = text("""
-            INSERT OR REPLACE INTO signals
-            (signal_id, timestamp, asset, asset_class, timeframe,
-             signal, strength, confidence, alpha_score, regime,
-             entry_price, stop_loss, take_profit, position_size_pct,
-             kelly_fraction, hurst_exponent, factor_scores, ic_weights,
-             slippage_cost_pct, cost_pct, net_alpha_score, cs_alpha_score,
-             execution_price, implementation_shortfall_pct,
-             confluence_grade, confluence_pct, sqs, sqs_grade,
-             size_multiplier_used, factor_breakdown, top_aligned_factors,
-             top_drag_factors)
-            VALUES
-            (:signal_id, :timestamp, :asset, :asset_class, :timeframe,
-             :signal, :strength, :confidence, :alpha_score, :regime,
-             :entry_price, :stop_loss, :take_profit, :position_size_pct,
-             :kelly_fraction, :hurst_exponent, :factor_scores, :ic_weights,
-             :slippage_cost_pct, :cost_pct, :net_alpha_score, :cs_alpha_score,
-             :execution_price, :implementation_shortfall_pct,
-             :confluence_grade, :confluence_pct, :sqs, :sqs_grade,
-             :size_multiplier_used, :factor_breakdown, :top_aligned_factors,
-             :top_drag_factors)
-        """)
-        with self.engine.connect() as conn:
-            conn.execute(sql, d)
-            conn.commit()
+        try:
+            signal_data = sig.to_dict()
+            logger.info(f"Saving signal to DB: {signal_data}")
+
+            sql = text("""
+                INSERT OR REPLACE INTO signals
+                (signal_id, timestamp, asset, asset_class, timeframe,
+                 signal, strength, confidence, alpha_score, regime,
+                 entry_price, stop_loss, take_profit, position_size_pct,
+                 kelly_fraction, hurst_exponent, factor_scores, ic_weights,
+                 slippage_cost_pct, cost_pct, net_alpha_score, cs_alpha_score,
+                 execution_price, implementation_shortfall_pct,
+                 confluence_grade, confluence_pct, sqs, sqs_grade,
+                 size_multiplier_used, factor_breakdown, top_aligned_factors,
+                 top_drag_factors)
+                VALUES
+                (:signal_id, :timestamp, :asset, :asset_class, :timeframe,
+                 :signal, :strength, :confidence, :alpha_score, :regime,
+                 :entry_price, :stop_loss, :take_profit, :position_size_pct,
+                 :kelly_fraction, :hurst_exponent, :factor_scores, :ic_weights,
+                 :slippage_cost_pct, :cost_pct, :net_alpha_score, :cs_alpha_score,
+                 :execution_price, :implementation_shortfall_pct,
+                 :confluence_grade, :confluence_pct, :sqs, :sqs_grade,
+                 :size_multiplier_used, :factor_breakdown, :top_aligned_factors,
+                 :top_drag_factors)
+            """)
+            with self.engine.connect() as conn:
+                conn.execute(sql, signal_data)
+                conn.commit()
+                row_count = conn.execute(text("SELECT COUNT(*) FROM signals")).scalar_one()
+            logger.info(f"Signal saved successfully, DB row count: {row_count}")
+        except Exception as e:
+            logger.error(f"Failed to save signal: {e}", exc_info=True)
+            raise
 
     def close_signal(
         self,

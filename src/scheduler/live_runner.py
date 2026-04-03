@@ -521,6 +521,7 @@ class LiveRunner:
         if order_record.state not in {"FILLED", "PARTIAL", "SUBMITTED"}:
             return False
 
+        logger.info("Calling store.save_signal for signal_id=%s asset=%s", sig.signal_id, sig.asset)
         self.store.save_signal(sig)
         if order_record.state in {"FILLED", "PARTIAL"}:
             self.portfolio.open_position(sig)
