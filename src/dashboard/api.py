@@ -6,7 +6,7 @@ WebSocket at /ws broadcasts new signals in real-time.
 5 pages: Live Signals, Portfolio, History, Factor Analysis, Regime Monitor.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 import json
 import logging
@@ -376,6 +376,180 @@ def _combined_signal_rows(limit: int = 200) -> list[dict[str, Any]]:
     merged = list(dedup.values())
     merged.sort(key=lambda x: str(x.get("time") or ""), reverse=True)
     return merged[:limit]
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        if value is None or value == "":
+            return float(default)
+        return float(value)
+    except Exception:
+        return float(default)
+
+
+def _parse_utc(ts: Any) -> datetime | None:
+    raw = str(ts or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        return datetime.fromisoformat(raw)
+    except Exception:
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(raw, fmt)
+            except Exception:
+                continue
+    return None
+
+
+def _iso_utc(dt: datetime | None) -> str:
+    if dt is None:
+        return ""
+    try:
+        return dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    except Exception:
+        return str(dt)
+
+
+def _normalize_direction(raw_signal: Any) -> str:
+    s = str(raw_signal or "").upper()
+    if s in {"BUY", "LONG"}:
+        return "LONG"
+    if s in {"SELL", "SHORT"}:
+        return "SHORT"
+    return s or "HOLD"
+
+
+def _fetch_trade_report_rows(limit: int = 200) -> list[dict[str, Any]]:
+    db_path = _db_sqlite_path()
+    if not db_path.exists():
+        return []
+
+    out: list[dict[str, Any]] = []
+    try:
+        with sqlite3.connect(db_path) as conn:
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            table_names = {str(r[0]) for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if "signals" not in table_names:
+                return []
+
+            cols = {str(r[1]) for r in cur.execute("PRAGMA table_info(signals)").fetchall()}
+
+            def coalesce_expr(candidates: list[str], default_sql: str) -> str:
+                available = [c for c in candidates if c in cols]
+                if not available:
+                    return default_sql
+                joined = ", ".join(available)
+                return f"COALESCE({joined}, {default_sql})"
+
+            signal_id_expr = (
+                "COALESCE(signal_id, 'BTC-' || printf('%03d', rowid))"
+                if "signal_id" in cols
+                else "'BTC-' || printf('%03d', rowid)"
+            )
+            ticker_expr = coalesce_expr(["ticker", "asset", "symbol"], "'BTCUSDT'")
+            signal_expr = coalesce_expr(["signal", "requested_signal"], "'HOLD'")
+            confidence_expr = coalesce_expr(["confidence"], "0.0")
+            entry_expr = coalesce_expr(["entry_price", "entry"], "0.0")
+            exit_expr = coalesce_expr(["exit_price", "close_price"], "0.0")
+            sl_expr = coalesce_expr(["sl", "stop_loss"], "0.0")
+            tp1_expr = coalesce_expr(["tp1", "take_profit"], "0.0")
+            outcome_expr = coalesce_expr(["outcome", "result"], "'OPEN'")
+            pnl_expr = coalesce_expr(["pnl_pct"], "0.0")
+            mfe_expr = coalesce_expr(["mfe_pct"], "0.0")
+            mae_expr = coalesce_expr(["mae_pct"], "0.0")
+            duration_expr = coalesce_expr(["duration_seconds"], "0")
+            ts_expr = coalesce_expr(["timestamp", "time", "as_of_utc"], "datetime('now')")
+            size_expr = coalesce_expr(["size_multiplier"], "1.0")
+            rr_expr = coalesce_expr(["rr_ratio", "risk_reward"], "0.0")
+
+            cur.execute(
+                f"""
+                SELECT
+                    rowid AS rowid,
+                    {signal_id_expr} AS signal_id,
+                    {ticker_expr} AS ticker,
+                    {signal_expr} AS signal,
+                    {confidence_expr} AS confidence,
+                    {entry_expr} AS entry_price,
+                    {exit_expr} AS exit_price,
+                    {sl_expr} AS sl,
+                    {tp1_expr} AS tp1,
+                    {outcome_expr} AS outcome,
+                    {pnl_expr} AS pnl_pct,
+                    {mfe_expr} AS mfe_pct,
+                    {mae_expr} AS mae_pct,
+                    {duration_expr} AS duration_seconds,
+                    {ts_expr} AS entry_time,
+                    {size_expr} AS size_multiplier,
+                    {rr_expr} AS rr_ratio
+                FROM signals
+                ORDER BY datetime({ts_expr}) DESC, rowid DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            )
+
+            for row in cur.fetchall():
+                r = dict(row)
+                direction = _normalize_direction(r.get("signal"))
+                entry_price = _safe_float(r.get("entry_price"), 0.0)
+                exit_price = _safe_float(r.get("exit_price"), 0.0)
+                sl = _safe_float(r.get("sl"), 0.0)
+                tp1 = _safe_float(r.get("tp1"), 0.0)
+                pnl_pct = _safe_float(r.get("pnl_pct"), 0.0)
+                mfe_pct = max(0.0, _safe_float(r.get("mfe_pct"), 0.0))
+                mae_pct = max(0.0, _safe_float(r.get("mae_pct"), 0.0))
+                duration_seconds = int(_safe_float(r.get("duration_seconds"), 0.0))
+                outcome = str(r.get("outcome") or "OPEN").upper()
+                entry_time_raw = str(r.get("entry_time") or "")
+                entry_dt = _parse_utc(entry_time_raw)
+                if outcome == "OPEN":
+                    exit_time = ""
+                elif duration_seconds > 0 and entry_dt is not None:
+                    exit_time = _iso_utc(entry_dt + timedelta(seconds=int(duration_seconds)))
+                else:
+                    exit_time = entry_time_raw
+
+                risk_pct = 0.0
+                if entry_price > 0 and sl > 0:
+                    risk_pct = abs((entry_price - sl) / entry_price) * 100.0
+                if risk_pct > 0:
+                    rr_achieved = pnl_pct / risk_pct
+                else:
+                    rr_achieved = _safe_float(r.get("rr_ratio"), 0.0)
+                    if rr_achieved == 0.0 and outcome.startswith("TP"):
+                        rr_achieved = 1.0
+                    elif rr_achieved == 0.0 and outcome == "SL":
+                        rr_achieved = -1.0
+
+                out.append(
+                    {
+                        "signal_id": str(r.get("signal_id") or f"BTC-{int(r.get('rowid') or 0):03d}"),
+                        "ticker": str(r.get("ticker") or "BTCUSDT").upper(),
+                        "direction": direction,
+                        "entry_time": entry_time_raw,
+                        "exit_time": exit_time,
+                        "entry_price": round(entry_price, 4),
+                        "exit_price": round(exit_price, 4),
+                        "sl": round(sl, 4),
+                        "tp1": round(tp1, 4),
+                        "confidence": round(_safe_float(r.get("confidence"), 0.0), 2),
+                        "outcome": outcome,
+                        "pnl_pct": round(pnl_pct, 4),
+                        "mfe_pct": round(mfe_pct, 4),
+                        "mae_pct": round(mae_pct, 4),
+                        "duration_seconds": duration_seconds,
+                        "rr_achieved": round(rr_achieved, 4),
+                        "size_multiplier": round(_safe_float(r.get("size_multiplier"), 1.0), 4),
+                    }
+                )
+    except Exception as exc:
+        logger.warning("Failed to build trade report rows: %s", exc)
+    return out
 
 
 def _proxy_cache_get(name: str) -> dict[str, Any] | None:
@@ -2067,7 +2241,110 @@ async def paper_reject(payload: dict):
 @app.get("/api/history")
 def get_history(limit: int = 100):
     lim = max(1, min(int(limit), 1000))
-    return _combined_signal_rows(limit=lim)
+    return _fetch_trade_report_rows(limit=lim)
+
+
+@app.get("/api/equity-curve")
+def get_equity_curve(limit: int = 5000):
+    lim = max(1, min(int(limit), 20000))
+    rows = _fetch_trade_report_rows(limit=lim)
+    closed_outcomes = {"TP1", "TP2", "TP3", "SL", "CLOSED"}
+    closed = [r for r in rows if str(r.get("outcome", "")).upper() in closed_outcomes]
+    closed.sort(key=lambda x: str(x.get("exit_time") or x.get("entry_time") or ""))
+
+    pnl_values = [float(r.get("pnl_pct") or 0.0) for r in closed]
+    timestamps = [str(r.get("exit_time") or r.get("entry_time") or "") for r in closed]
+
+    cumulative_pnl: list[float] = []
+    drawdown: list[float] = []
+    running = 0.0
+    peak = 0.0
+    for pnl in pnl_values:
+        running += pnl
+        peak = max(peak, running)
+        cumulative_pnl.append(round(running, 4))
+        drawdown.append(round(running - peak, 4))
+
+    total_trades = len(pnl_values)
+    wins = [x for x in pnl_values if x > 0]
+    losses = [x for x in pnl_values if x < 0]
+    total_pnl = round(sum(pnl_values), 4)
+    max_drawdown = round(min(drawdown), 4) if drawdown else 0.0
+    win_rate = (len(wins) / total_trades) if total_trades else 0.0
+
+    mean_ret = (sum(pnl_values) / total_trades) if total_trades else 0.0
+    std_ret = 0.0
+    if total_trades > 1:
+        var = sum((x - mean_ret) ** 2 for x in pnl_values) / (total_trades - 1)
+        std_ret = math.sqrt(max(var, 0.0))
+    sharpe = (mean_ret / std_ret) * math.sqrt(365 * 24) if std_ret > 0 else 0.0
+
+    sum_wins = sum(wins)
+    sum_losses_abs = abs(sum(losses))
+    if sum_losses_abs > 0:
+        profit_factor = sum_wins / sum_losses_abs
+    else:
+        profit_factor = sum_wins if sum_wins > 0 else 0.0
+
+    avg_duration_seconds = (
+        sum(float(r.get("duration_seconds") or 0.0) for r in closed) / total_trades
+        if total_trades
+        else 0.0
+    )
+    open_positions = sum(1 for r in rows if str(r.get("outcome", "")).upper() == "OPEN")
+
+    sessions = {
+        "asia": {"name": "Asia Session", "trades": 0, "wins": 0, "pnl_pct": 0.0},
+        "london": {"name": "London Session", "trades": 0, "wins": 0, "pnl_pct": 0.0},
+        "ny": {"name": "NY Session", "trades": 0, "wins": 0, "pnl_pct": 0.0},
+    }
+
+    for row in closed:
+        dt = _parse_utc(row.get("entry_time"))
+        hour = dt.hour if dt is not None else 0
+        if 13 <= hour < 21:
+            bucket = "ny"
+        elif 8 <= hour < 16:
+            bucket = "london"
+        elif 0 <= hour < 8:
+            bucket = "asia"
+        else:
+            bucket = "asia"
+        sessions[bucket]["trades"] += 1
+        pnl = float(row.get("pnl_pct") or 0.0)
+        sessions[bucket]["pnl_pct"] += pnl
+        if pnl > 0:
+            sessions[bucket]["wins"] += 1
+
+    session_payload = {}
+    for key, payload in sessions.items():
+        trades = int(payload["trades"])
+        wins_count = int(payload["wins"])
+        session_payload[key] = {
+            "name": payload["name"],
+            "trades": trades,
+            "win_rate": (wins_count / trades) if trades else 0.0,
+            "pnl_pct": round(float(payload["pnl_pct"]), 4),
+        }
+
+    return {
+        "timestamps": timestamps,
+        "cumulative_pnl": cumulative_pnl,
+        "drawdown": drawdown,
+        "total_pnl": total_pnl,
+        "max_drawdown": max_drawdown,
+        "win_rate": round(win_rate, 6),
+        "total_trades": total_trades,
+        "sharpe_ratio": round(sharpe, 4),
+        "avg_win": round((sum(wins) / len(wins)) if wins else 0.0, 4),
+        "avg_loss": round((sum(losses) / len(losses)) if losses else 0.0, 4),
+        "profit_factor": round(profit_factor, 4),
+        "best_trade": round(max(pnl_values), 4) if pnl_values else 0.0,
+        "worst_trade": round(min(pnl_values), 4) if pnl_values else 0.0,
+        "avg_duration_seconds": int(avg_duration_seconds),
+        "open_positions": int(open_positions),
+        "sessions": session_payload,
+    }
 
 
 @app.get("/api/snapshot")

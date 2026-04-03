@@ -233,6 +233,10 @@ class AppRuntime:
                         confidence REAL,
                         outcome TEXT,
                         pnl_pct REAL,
+                        mfe_pct REAL,
+                        mae_pct REAL,
+                        exit_price REAL,
+                        duration_seconds INT,
                         sl REAL,
                         tp1 REAL,
                         tp2 REAL,
@@ -258,6 +262,10 @@ class AppRuntime:
                     "ALTER TABLE signals ADD COLUMN tp2 REAL DEFAULT 0",
                     "ALTER TABLE signals ADD COLUMN tp3 REAL DEFAULT 0",
                     "ALTER TABLE signals ADD COLUMN rr_ratio REAL DEFAULT 0",
+                    "ALTER TABLE signals ADD COLUMN mfe_pct REAL DEFAULT 0",
+                    "ALTER TABLE signals ADD COLUMN mae_pct REAL DEFAULT 0",
+                    "ALTER TABLE signals ADD COLUMN exit_price REAL DEFAULT 0",
+                    "ALTER TABLE signals ADD COLUMN duration_seconds INT DEFAULT 0",
                 ):
                     try:
                         cur.execute(ddl)
@@ -444,6 +452,75 @@ class AppRuntime:
         except Exception as exc:
             logger.error('Failed to update BTC open signal pnl: %s', exc, exc_info=True)
 
+    def _update_mfe_mae(
+        self,
+        signal_id: str,
+        current_price: float,
+        entry_price: float,
+        signal_direction: str,
+    ) -> None:
+        """
+        Track MFE/MAE for open BTC trades and keep live exit/duration fields updated.
+        """
+        if not signal_id or entry_price <= 0 or current_price <= 0:
+            return
+
+        side = str(signal_direction).upper()
+        if side == "LONG":
+            favorable = current_price - entry_price
+            adverse = entry_price - current_price
+        else:
+            favorable = entry_price - current_price
+            adverse = current_price - entry_price
+
+        favorable_pct = (favorable / entry_price) * 100.0
+        adverse_pct = (adverse / entry_price) * 100.0
+
+        try:
+            with sqlite3.connect(self._shared_signals_db) as conn:
+                cur = conn.cursor()
+                cols = self._read_signal_columns(cur)
+                is_minimal_schema = 'signal_id' not in cols and 'asset' not in cols
+                if is_minimal_schema:
+                    cur.execute(
+                        """
+                        UPDATE signals
+                        SET
+                            mfe_pct = MAX(COALESCE(mfe_pct, 0), ?),
+                            mae_pct = MAX(COALESCE(mae_pct, 0), ?),
+                            exit_price = ?,
+                            duration_seconds = (strftime('%s','now') - strftime('%s', timestamp))
+                        WHERE rowid = ? AND outcome = 'OPEN'
+                        """,
+                        (
+                            float(favorable_pct),
+                            float(adverse_pct),
+                            float(current_price),
+                            int(signal_id),
+                        ),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        UPDATE signals
+                        SET
+                            mfe_pct = MAX(COALESCE(mfe_pct, 0), ?),
+                            mae_pct = MAX(COALESCE(mae_pct, 0), ?),
+                            exit_price = ?,
+                            duration_seconds = (strftime('%s','now') - strftime('%s', timestamp))
+                        WHERE signal_id = ? AND outcome = 'OPEN'
+                        """,
+                        (
+                            float(favorable_pct),
+                            float(adverse_pct),
+                            float(current_price),
+                            str(signal_id),
+                        ),
+                    )
+                conn.commit()
+        except Exception as exc:
+            logger.error('Failed to update BTC MFE/MAE: %s', exc, exc_info=True)
+
     def _count_open_btc_signals(self) -> int:
         try:
             with sqlite3.connect(self._shared_signals_db) as conn:
@@ -569,6 +646,12 @@ class AppRuntime:
                     entry = float(entry_price or 0.0)
                     if entry <= 0:
                         continue
+                    self._update_mfe_mae(
+                        signal_id=str(signal_ref),
+                        current_price=float(current_price),
+                        entry_price=float(entry),
+                        signal_direction=side,
+                    )
                     sl_val = float(sl or 0.0)
                     tp1_val = float(tp1 or 0.0)
 

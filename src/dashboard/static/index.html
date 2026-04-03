@@ -332,45 +332,133 @@ body{
   background:rgba(148,163,184,.12);
 }
 
-.history-row-win { background: rgba(0,200,83,0.05); }
-.history-row-loss { background: rgba(255,23,68,0.05); }
-.history-row-open { background: rgba(255,152,0,0.05); }
-.history-row-long { background: rgba(0,200,83,0.05); }
-.history-row-short { background: rgba(255,50,50,0.06); }
-.history-row-blocked { background: rgba(255,214,10,0.08); }
-.history-filters{display:flex;gap:8px;flex-wrap:wrap}
-.hist-filter-btn{
+.trade-stats-panel{
+  margin:8px 12px;
+  padding:12px 16px;
+  background:#161b22;
+  border:1px solid #30363d;
+  border-radius:8px;
+}
+.trade-stats-grid{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(160px,1fr));
+  gap:8px 14px;
+}
+.trade-stat{
+  font-size:12px;
+  color:#8b949e;
+}
+.trade-stat b{
+  color:#e6edf3;
+  margin-left:4px;
+}
+.trade-history-card{
+  margin:8px 12px;
+  background:#161b22;
+  border:1px solid #30363d;
+  border-radius:8px;
+  overflow:hidden;
+}
+.trade-history-head{
+  padding:10px 16px;
+  font-size:14px;
+  font-weight:600;
+  color:#e6edf3;
+  border-bottom:1px solid #30363d;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+.export-btn{
   border:1px solid #30363d;
   background:#0d1117;
-  color:#8b949e;
+  color:#e6edf3;
   border-radius:6px;
-  padding:4px 10px;
+  padding:5px 10px;
   font-size:11px;
   cursor:pointer;
 }
-.hist-filter-btn.active{
-  border-color:#58a6ff;
-  color:#e6edf3;
-  background:#1f2937;
+.trade-history-wrap{
+  overflow-x:auto;
+  max-height:330px;
+  overflow-y:auto;
 }
-.history-tabs{
-  display:flex;
-  gap:8px;
-  padding:8px 16px;
-  border-top:1px solid #30363d;
-}
-.hist-tab-btn{
-  border:none;
-  border-bottom:2px solid transparent;
-  background:transparent;
-  color:#8b949e;
-  padding:6px 10px;
+.trade-history-table{
+  width:100%;
+  border-collapse:collapse;
   font-size:12px;
-  cursor:pointer;
+  font-family:'JetBrains Mono',monospace;
 }
-.hist-tab-btn.active{
+.trade-history-table th{
+  padding:8px;
+  text-align:left;
+  color:#8b949e;
+  border-bottom:1px solid #30363d;
+  position:sticky;
+  top:0;
+  background:#161b22;
+  z-index:1;
+}
+.trade-history-table td{
+  padding:7px 8px;
+  border-bottom:1px solid #21262d;
+}
+.history-row-prof{border-left:3px solid #6b7280;}
+.history-row-tp{border-left:3px solid #00c853;background:rgba(0,200,83,0.04);}
+.history-row-sl{border-left:3px solid #ff4d4d;background:rgba(255,23,68,0.05);}
+.history-row-open{border-left:3px solid #58a6ff;background:rgba(88,166,255,0.05);animation:openPulse 1.8s ease-in-out infinite;}
+.history-row-closed{border-left:3px solid #6b7280;background:rgba(148,163,184,0.03);}
+@keyframes openPulse{
+  0%{box-shadow:inset 0 0 0 rgba(88,166,255,0.00);}
+  50%{box-shadow:inset 0 0 18px rgba(88,166,255,0.08);}
+  100%{box-shadow:inset 0 0 0 rgba(88,166,255,0.00);}
+}
+.equity-block{
+  margin:8px 12px;
+  padding:10px 12px 14px;
+  background:#161b22;
+  border:1px solid #30363d;
+  border-radius:8px;
+}
+.equity-stats{
+  color:#8b949e;
+  font-size:12px;
+  margin:0 0 8px 0;
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+}
+.equity-stats b{color:#e6edf3;}
+#equity-curve-chart{
+  width:100%;
+  height:200px;
+  border:1px solid #30363d;
+  border-radius:8px;
+  background:#0d1117;
+}
+.session-grid{
+  margin-top:12px;
+  display:grid;
+  grid-template-columns:repeat(3,minmax(140px,1fr));
+  gap:10px;
+}
+.session-card{
+  background:#0d1117;
+  border:1px solid #30363d;
+  border-radius:8px;
+  padding:10px;
+}
+.session-title{
   color:#e6edf3;
-  border-bottom-color:#58a6ff;
+  font-size:12px;
+  font-weight:700;
+  margin-bottom:6px;
+}
+.session-line{
+  color:#8b949e;
+  font-size:11px;
+  line-height:1.5;
 }
 
 @media(max-width:980px){
@@ -838,56 +926,84 @@ body{
       </div>
     </div>
 
-    <div id="stats-bar" class="stats-bar" style="display:flex; gap:20px; padding:10px 16px; margin:8px 12px; background:#161b22; border:1px solid #30363d; border-radius:8px; font-size:13px; color:#8b949e; flex-wrap:wrap;">
-      <span>Signals: <b id="stat-total" style="color:#e6edf3">0</b></span>
-      <span>📈 LONG: <b id="stat-long-count" style="color:#00c853">0</b> (<b id="stat-long-wr" style="color:#00c853">0%</b>)</span>
-      <span>📉 SHORT: <b id="stat-short-count" style="color:#ff6b7a">0</b> (<b id="stat-short-wr" style="color:#ff6b7a">0%</b>)</span>
-      <span>Total P&L: <b id="stat-pnl" style="color:#e6edf3">0%</b></span>
-      <span>Blocked: <b id="stat-blocked" style="color:#ffd60a">0</b></span>
-      <span>Open: <b id="stat-open" style="color:#ff9800">0</b></span>
+    <div class="trade-stats-panel">
+      <div class="trade-stats-grid">
+        <div class="trade-stat">Total Trades:<b id="stat-total-trades">0</b></div>
+        <div class="trade-stat">Win Rate:<b id="stat-win-rate">0.0%</b></div>
+        <div class="trade-stat">Total P&L:<b id="stat-total-pnl">0.00%</b></div>
+        <div class="trade-stat">Avg Win:<b id="stat-avg-win">0.00%</b></div>
+        <div class="trade-stat">Max DD:<b id="stat-max-dd">0.00%</b></div>
+        <div class="trade-stat">Avg Loss:<b id="stat-avg-loss">0.00%</b></div>
+        <div class="trade-stat">Sharpe:<b id="stat-sharpe">0.00</b></div>
+        <div class="trade-stat">Profit Factor:<b id="stat-profit-factor">0.00</b></div>
+        <div class="trade-stat">Best Trade:<b id="stat-best-trade">0.00%</b></div>
+        <div class="trade-stat">Worst Trade:<b id="stat-worst-trade">0.00%</b></div>
+        <div class="trade-stat">Avg Duration:<b id="stat-avg-duration">0s</b></div>
+        <div class="trade-stat">Open Positions:<b id="stat-open-positions">0</b></div>
+      </div>
     </div>
 
-    <div style="margin:8px 12px; background:#161b22; border:1px solid #30363d; border-radius:8px; overflow:hidden;">
-      <div style="padding:10px 16px; font-size:14px; font-weight:600; color:#e6edf3; border-bottom:1px solid #30363d; display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;">
+    <div class="trade-history-card">
+      <div class="trade-history-head">
         <span>Signal History</span>
-        <div class="history-filters">
-          <button type="button" class="hist-filter-btn active" data-filter="ALL">All</button>
-          <button type="button" class="hist-filter-btn" data-filter="ACTIVE">Active</button>
-          <button type="button" class="hist-filter-btn" data-filter="BLOCKED">Blocked</button>
-          <button type="button" class="hist-filter-btn" data-filter="SL">SL</button>
-          <button type="button" class="hist-filter-btn" data-filter="TP">TP</button>
-        </div>
+        <button id="export-csv-btn" class="export-btn" type="button">Export CSV</button>
       </div>
-      <div id="multi-open-warning" style="display:none; padding:8px 16px; font-size:12px; color:#ffb74d; background:rgba(255,152,0,.08); border-bottom:1px solid #30363d;">
-        ⚠️ Multiple open positions detected — check cooldown settings
-      </div>
-      <div style="overflow-x:auto; max-height:300px; overflow-y:auto;">
-        <table style="width:100%; border-collapse:collapse; font-size:12px; font-family:'JetBrains Mono',monospace;">
+      <div class="trade-history-wrap">
+        <table class="trade-history-table">
           <thead>
-            <tr style="color:#8b949e; border-bottom:1px solid #30363d;">
-              <th style="padding:8px; text-align:left">#</th>
-              <th style="padding:8px; text-align:left">Time</th>
-              <th style="padding:8px; text-align:left">Ticker</th>
-              <th style="padding:8px; text-align:left">Type</th>
-              <th style="padding:8px; text-align:left">Signal</th>
-              <th style="padding:8px; text-align:right">Conf</th>
-              <th style="padding:8px; text-align:right">Entry</th>
-              <th style="padding:8px; text-align:right">SL</th>
-              <th style="padding:8px; text-align:right">TP1</th>
-              <th style="padding:8px; text-align:right">R:R</th>
-              <th style="padding:8px; text-align:center">Result</th>
-              <th style="padding:8px; text-align:right">P&L</th>
+            <tr>
+              <th>#</th>
+              <th>Time</th>
+              <th>Ticker</th>
+              <th>Direction</th>
+              <th style="text-align:right">Conf</th>
+              <th style="text-align:right">Entry</th>
+              <th style="text-align:right">Exit</th>
+              <th style="text-align:right">SL</th>
+              <th style="text-align:right">TP1</th>
+              <th style="text-align:right">MFE</th>
+              <th style="text-align:right">MAE</th>
+              <th style="text-align:right">Duration</th>
+              <th style="text-align:center">Result</th>
+              <th style="text-align:right">P&amp;L</th>
+              <th style="text-align:right">RR</th>
             </tr>
           </thead>
           <tbody id="history-tbody">
-            <tr><td colspan="12" style="padding:20px; text-align:center; color:#484f58;">No signals recorded yet</td></tr>
+            <tr><td colspan="15" style="padding:20px; text-align:center; color:#484f58;">No signals recorded yet</td></tr>
           </tbody>
         </table>
       </div>
-      <div class="history-tabs">
-        <button type="button" class="hist-tab-btn" data-type="LONG">LONG History</button>
-        <button type="button" class="hist-tab-btn" data-type="SHORT">SHORT History</button>
-        <button type="button" class="hist-tab-btn active" data-type="ALL">All</button>
+    </div>
+
+    <div class="equity-block">
+      <div id="equity-stats-bar" class="equity-stats">
+        <span>Total: <b id="eq-total">0.00%</b></span>
+        <span>| Win Rate: <b id="eq-win-rate">0.0%</b></span>
+        <span>| Max DD: <b id="eq-max-dd">0.00%</b></span>
+        <span>| Sharpe: <b id="eq-sharpe">0.00</b></span>
+        <span>| Trades: <b id="eq-trades">0</b></span>
+      </div>
+      <div id="equity-curve-chart"></div>
+      <div class="session-grid">
+        <div class="session-card">
+          <div class="session-title">Asia Session</div>
+          <div class="session-line" id="session-asia-trades">Trades: 0</div>
+          <div class="session-line" id="session-asia-win">Win%: 0.0%</div>
+          <div class="session-line" id="session-asia-pnl">P&amp;L: 0.00%</div>
+        </div>
+        <div class="session-card">
+          <div class="session-title">London Session</div>
+          <div class="session-line" id="session-london-trades">Trades: 0</div>
+          <div class="session-line" id="session-london-win">Win%: 0.0%</div>
+          <div class="session-line" id="session-london-pnl">P&amp;L: 0.00%</div>
+        </div>
+        <div class="session-card">
+          <div class="session-title">NY Session</div>
+          <div class="session-line" id="session-ny-trades">Trades: 0</div>
+          <div class="session-line" id="session-ny-win">Win%: 0.0%</div>
+          <div class="session-line" id="session-ny-pnl">P&amp;L: 0.00%</div>
+        </div>
       </div>
     </div>
 
@@ -943,9 +1059,10 @@ let openTradeSignal = "LONG";
 let sessionDayKey = null;
 let sessionHigh = null;
 let sessionLow = null;
-let historyFilter = "ALL";
-let historyTypeTab = "ALL";
 let latestHistorySignals = [];
+let equityChart = null;
+let equitySeries = null;
+let equityDrawdownSeries = null;
 const API_CACHE = new Map();
 const API_INFLIGHT = new Map();
 const sparkPrices = [];
@@ -2104,180 +2221,236 @@ async function loadSignal(){
 }
 
 function historyStatus(sig){
-  return String(sig?.status || sig?.result || "OPEN").toUpperCase();
+  return String(sig?.outcome || sig?.status || sig?.result || "OPEN").toUpperCase();
 }
 
 function historyTicker(sig){
-  return String(sig?.ticker || sig?.asset || "BTCUSDT").toUpperCase();
+  return String(sig?.ticker || "BTCUSDT").toUpperCase();
 }
 
-function historySignalType(sig){
-  const rawType = String(sig?.type || "").toUpperCase();
-  if(rawType === "BLOCKED") return "BLOCKED";
-  const signalType = String(sig?.signal || sig?.requested_signal || "").toUpperCase();
-  if(signalType === "BUY") return "LONG";
-  if(signalType === "SELL") return "SHORT";
-  if(signalType === "SHORT") return "SHORT";
-  if(signalType === "LONG") return "LONG";
-  return "BLOCKED";
+function historyDirection(sig){
+  const raw = String(sig?.direction || sig?.signal || "").toUpperCase();
+  if(raw === "BUY") return "LONG";
+  if(raw === "SELL") return "SHORT";
+  return raw || "HOLD";
 }
 
-function matchesHistoryFilter(sig, filter){
-  const status = historyStatus(sig);
-  if(filter === "ACTIVE") return status === "OPEN";
-  if(filter === "BLOCKED") return status === "BLOCKED";
-  if(filter === "SL") return status === "SL_HIT" || String(sig?.result || "").toUpperCase() === "SL";
-  if(filter === "TP") return status.includes("TP");
-  return true;
+function fmtNum(v, digits=2){
+  const n = Number(v);
+  if(!Number.isFinite(n)) return "—";
+  return n.toFixed(digits);
 }
 
-function matchesHistoryType(sig, typeTab){
-  if(typeTab === "ALL") return true;
-  const signalType = String(sig?.signal || sig?.requested_signal || "").toUpperCase();
-  if(signalType === "BUY") return typeTab === "LONG";
-  if(signalType === "SELL") return typeTab === "SHORT";
-  return signalType === typeTab;
+function fmtSignedPct(v, digits=2){
+  const n = Number(v);
+  if(!Number.isFinite(n)) return "—";
+  return `${n >= 0 ? "+" : ""}${n.toFixed(digits)}%`;
+}
+
+function fmtDuration(seconds){
+  const s = Math.max(0, Number(seconds) || 0);
+  if(s < 60) return `${Math.floor(s)}s`;
+  if(s < 3600){
+    const m = Math.floor(s / 60);
+    const rs = Math.floor(s % 60);
+    return `${m}m ${rs}s`;
+  }
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${h}h ${m}m`;
+}
+
+function historyRowClass(sig){
+  const outcome = historyStatus(sig);
+  if(outcome === "OPEN") return "history-row-open";
+  if(outcome.startsWith("TP")) return "history-row-tp";
+  if(outcome === "SL") return "history-row-sl";
+  return "history-row-closed";
+}
+
+function initEquityChart(){
+  const el = document.getElementById("equity-curve-chart");
+  if(!el || !window.LightweightCharts) return;
+  if(equityChart){
+    try{ equityChart.remove(); }catch(_){}
+  }
+  equityChart = LightweightCharts.createChart(el,{
+    layout:{background:{type:"solid",color:"#0d1117"},textColor:"#8b949e"},
+    grid:{vertLines:{color:"#1f2937"},horzLines:{color:"#1f2937"}},
+    rightPriceScale:{borderColor:"#30363d"},
+    timeScale:{borderColor:"#30363d",timeVisible:true,secondsVisible:false},
+    crosshair:{mode:1},
+  });
+  equitySeries = equityChart.addBaselineSeries({
+    baseValue:{type:"price",price:0},
+    topLineColor:"#00c853",
+    topFillColor1:"rgba(0,200,83,0.25)",
+    topFillColor2:"rgba(0,200,83,0.03)",
+    bottomLineColor:"#ff4444",
+    bottomFillColor1:"rgba(255,68,68,0.20)",
+    bottomFillColor2:"rgba(255,68,68,0.03)",
+    lineWidth:2,
+  });
+  equityDrawdownSeries = equityChart.addAreaSeries({
+    lineColor:"rgba(255,159,28,0.45)",
+    topColor:"rgba(255,159,28,0.15)",
+    bottomColor:"rgba(255,159,28,0.03)",
+    lineWidth:1,
+    priceLineVisible:false,
+    lastValueVisible:false,
+  });
 }
 
 function renderSignalHistoryTable(){
   const tbody = document.getElementById('history-tbody');
   if(!tbody) return;
-  const allSignals = Array.isArray(latestHistorySignals) ? [...latestHistorySignals] : [];
-  const visible = allSignals
-    .filter(sig => matchesHistoryType(sig, historyTypeTab))
-    .filter(sig => matchesHistoryFilter(sig, historyFilter))
-    .reverse();
+  const visible = Array.isArray(latestHistorySignals) ? [...latestHistorySignals] : [];
 
   if(!visible.length){
-    tbody.innerHTML = '<tr><td colspan="12" style="padding:20px; text-align:center; color:#484f58;">No signals match current filter</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="15" style="padding:20px; text-align:center; color:#484f58;">No signals found</td></tr>';
     return;
   }
 
-  const resultMap = {
-    TP1_HIT: "TP1",
-    TP2_HIT: "TP2",
-    TP3_HIT: "TP3",
-    SL_HIT: "SL",
-    EXPIRED: "EXP",
-    OPEN: "OPEN",
-    BLOCKED: "BLOCKED",
-  };
-
-  const fmtN = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '—' : Number(v).toLocaleString());
-  const fmtPnl = (v) => (v === null || v === undefined || Number.isNaN(Number(v)) ? '—' : `${Number(v) >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`);
-
   tbody.innerHTML = visible.map(sig => {
-    const signalTypeRaw = String(sig.signal || sig.requested_signal || 'WAIT').toUpperCase();
-    const signalType = signalTypeRaw === "BUY" ? "LONG" : signalTypeRaw === "SELL" ? "SHORT" : signalTypeRaw;
-    const tradeType = historySignalType(sig);
-    const status = historyStatus(sig);
-    const result = resultMap[status] || status;
+    const direction = historyDirection(sig);
+    const outcome = historyStatus(sig);
     const ticker = historyTicker(sig);
-    const isBlocked = status === "BLOCKED";
-    const rowClass = isBlocked ? 'history-row-blocked' : signalType === "SHORT" ? 'history-row-short' : 'history-row-long';
-    const sigColor = signalType === 'LONG' ? '#00c853' : signalType === 'SHORT' ? '#ff1744' : '#ffd60a';
-    const resultColor = isBlocked ? '#ffd60a' : status.includes('TP') ? '#00c853' : status === 'SL_HIT' ? '#ff1744' : '#ff9800';
-    const typeBg = tradeType === "LONG" ? 'rgba(0,200,83,.18)' : tradeType === "SHORT" ? 'rgba(255,68,88,.18)' : 'rgba(255,214,10,.2)';
-    const typeColor = tradeType === "LONG" ? '#00e676' : tradeType === "SHORT" ? '#ff6b7a' : '#ffd60a';
-    const pnl = fmtPnl(sig.pnl_pct);
+    const rowClass = historyRowClass(sig);
+    const conf = Number(sig.confidence ?? 0);
     const pnlNum = Number(sig.pnl_pct);
     const pnlColor = Number.isNaN(pnlNum) ? '#8b949e' : pnlNum > 0 ? '#00c853' : pnlNum < 0 ? '#ff1744' : '#8b949e';
-    const time = sig.time ? String(sig.time).split('T')[1]?.substring(0,8) || sig.time : '—';
-    const reasonTip = isBlocked && sig.reason ? ` title="${escapeHtml(sig.reason)}"` : '';
+    const timeRaw = String(sig.entry_time || sig.time || "");
+    const timeLabel = timeRaw ? timeRaw.replace("T"," ").replace("Z","") : "—";
+    const resultColor = outcome.startsWith("TP") ? "#00c853" : outcome === "SL" ? "#ff4444" : outcome === "OPEN" ? "#58a6ff" : "#9ca3af";
+    const directionColor = direction === "LONG" ? "#00e676" : direction === "SHORT" ? "#ff6b7a" : "#ffd60a";
 
-    return `<tr class="${rowClass}" style="border-bottom:1px solid #21262d;">
-      <td style="padding:6px 8px; color:#8b949e">${sig.id}</td>
-      <td style="padding:6px 8px; color:#8b949e">${time}</td>
+    return `<tr class="history-row-prof ${rowClass}">
+      <td style="color:#8b949e">${escapeHtml(String(sig.signal_id || ""))}</td>
+      <td style="color:#8b949e">${escapeHtml(timeLabel)}</td>
       <td style="padding:6px 8px; color:#e6edf3">${escapeHtml(ticker)}</td>
-      <td style="padding:6px 8px">
-        <span style="display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid rgba(148,163,184,.3);background:${typeBg};color:${typeColor};font-weight:700;font-size:11px">${tradeType}</span>
-      </td>
-      <td style="padding:6px 8px; color:${sigColor}; font-weight:600">${signalType}</td>
-      <td style="padding:6px 8px; text-align:right">${Number(sig.confidence ?? 0).toFixed(1)}%</td>
-      <td style="padding:6px 8px; text-align:right">${fmtN(sig.entry)}</td>
-      <td style="padding:6px 8px; text-align:right; color:#ff5252">${fmtN(sig.stop_loss)}</td>
-      <td style="padding:6px 8px; text-align:right; color:#00e676">${fmtN(sig.tp1)}</td>
-      <td style="padding:6px 8px; text-align:right">${sig.risk_reward ?? '—'}</td>
-      <td style="padding:6px 8px; text-align:center; color:${resultColor}"${reasonTip}>${result}</td>
-      <td style="padding:6px 8px; text-align:right; color:${pnlColor}; font-weight:600">${pnl}</td>
+      <td style="color:${directionColor}; font-weight:700">${direction}</td>
+      <td style="text-align:right">${fmtNum(conf,1)}%</td>
+      <td style="text-align:right">${fmtNum(sig.entry_price,2)}</td>
+      <td style="text-align:right">${fmtNum(sig.exit_price,2)}</td>
+      <td style="text-align:right; color:#ff7b72">${fmtNum(sig.sl,2)}</td>
+      <td style="text-align:right; color:#56d364">${fmtNum(sig.tp1,2)}</td>
+      <td style="text-align:right; color:#56d364">${fmtSignedPct(sig.mfe_pct,2)}</td>
+      <td style="text-align:right; color:#ff7b72">${fmtSignedPct(sig.mae_pct,2)}</td>
+      <td style="text-align:right; color:#8b949e">${fmtDuration(sig.duration_seconds)}</td>
+      <td style="text-align:center; color:${resultColor}; font-weight:700">${outcome}</td>
+      <td style="text-align:right; color:${pnlColor}; font-weight:700">${fmtSignedPct(sig.pnl_pct,2)}</td>
+      <td style="text-align:right">${fmtNum(sig.rr_achieved,2)}</td>
     </tr>`;
   }).join('');
 }
 
-function setHistoryFilter(filter){
-  historyFilter = String(filter || "ALL").toUpperCase();
-  document.querySelectorAll('.hist-filter-btn').forEach(btn => {
-    btn.classList.toggle('active', String(btn.dataset.filter || '').toUpperCase() === historyFilter);
-  });
-  renderSignalHistoryTable();
+function renderEquityCurve(eq){
+  if(!eq || !equitySeries || !equityDrawdownSeries || !equityChart) return;
+  const timestamps = Array.isArray(eq.timestamps) ? eq.timestamps : [];
+  const cumulative = Array.isArray(eq.cumulative_pnl) ? eq.cumulative_pnl : [];
+  const dd = Array.isArray(eq.drawdown) ? eq.drawdown : [];
+  const curveData = [];
+  const ddData = [];
+  for(let i=0;i<timestamps.length;i++){
+    const ts = toChartTsSec(timestamps[i]);
+    const cumVal = Number(cumulative[i]);
+    const ddVal = Number(dd[i]);
+    if(!Number.isFinite(ts) || !Number.isFinite(cumVal)) continue;
+    curveData.push({time: ts, value: cumVal});
+    ddData.push({time: ts, value: Number.isFinite(ddVal) ? ddVal : 0});
+  }
+  equitySeries.setData(curveData);
+  equityDrawdownSeries.setData(ddData);
+  if(curveData.length > 1){
+    equityChart.timeScale().fitContent();
+  }
 }
 
-function setHistoryTypeTab(typeTab){
-  historyTypeTab = String(typeTab || "ALL").toUpperCase();
-  document.querySelectorAll('.hist-tab-btn').forEach(btn => {
-    btn.classList.toggle('active', String(btn.dataset.type || '').toUpperCase() === historyTypeTab);
-  });
-  renderSignalHistoryTable();
+function updateTradeStats(eq){
+  if(!eq) return;
+  const el = (id) => document.getElementById(id);
+  const pct = (v, d=2) => `${Number(v || 0) >= 0 ? "+" : ""}${Number(v || 0).toFixed(d)}%`;
+  const ratioPct = (v) => `${(Number(v || 0) * 100).toFixed(1)}%`;
+
+  if(el("eq-total")) el("eq-total").textContent = pct(eq.total_pnl, 2);
+  if(el("eq-win-rate")) el("eq-win-rate").textContent = ratioPct(eq.win_rate);
+  if(el("eq-max-dd")) el("eq-max-dd").textContent = pct(eq.max_drawdown, 2);
+  if(el("eq-sharpe")) el("eq-sharpe").textContent = fmtNum(eq.sharpe_ratio, 2);
+  if(el("eq-trades")) el("eq-trades").textContent = String(eq.total_trades || 0);
+
+  if(el("stat-total-trades")) el("stat-total-trades").textContent = String(eq.total_trades || 0);
+  if(el("stat-win-rate")) el("stat-win-rate").textContent = ratioPct(eq.win_rate);
+  if(el("stat-total-pnl")) el("stat-total-pnl").textContent = pct(eq.total_pnl, 2);
+  if(el("stat-avg-win")) el("stat-avg-win").textContent = pct(eq.avg_win, 2);
+  if(el("stat-max-dd")) el("stat-max-dd").textContent = pct(eq.max_drawdown, 2);
+  if(el("stat-avg-loss")) el("stat-avg-loss").textContent = pct(eq.avg_loss, 2);
+  if(el("stat-sharpe")) el("stat-sharpe").textContent = fmtNum(eq.sharpe_ratio, 2);
+  if(el("stat-profit-factor")) el("stat-profit-factor").textContent = fmtNum(eq.profit_factor, 2);
+  if(el("stat-best-trade")) el("stat-best-trade").textContent = pct(eq.best_trade, 2);
+  if(el("stat-worst-trade")) el("stat-worst-trade").textContent = pct(eq.worst_trade, 2);
+  if(el("stat-avg-duration")) el("stat-avg-duration").textContent = fmtDuration(eq.avg_duration_seconds || 0);
+  if(el("stat-open-positions")) el("stat-open-positions").textContent = String(eq.open_positions || 0);
+
+  const sessions = eq.sessions || {};
+  const setSession = (key, prefix) => {
+    const row = sessions[key] || {};
+    if(el(`session-${prefix}-trades`)) el(`session-${prefix}-trades`).textContent = `Trades: ${Number(row.trades || 0)}`;
+    if(el(`session-${prefix}-win`)) el(`session-${prefix}-win`).textContent = `Win%: ${(Number(row.win_rate || 0) * 100).toFixed(1)}%`;
+    if(el(`session-${prefix}-pnl`)) el(`session-${prefix}-pnl`).textContent = `P&L: ${pct(row.pnl_pct, 2)}`;
+  };
+  setSession("asia", "asia");
+  setSession("london", "london");
+  setSession("ny", "ny");
 }
 
-function bindHistoryFilters(){
-  document.querySelectorAll('.hist-filter-btn').forEach(btn => {
-    btn.addEventListener('click', () => setHistoryFilter(btn.dataset.filter || "ALL"));
-  });
+function exportHistoryCsv(){
+  if(!Array.isArray(latestHistorySignals) || !latestHistorySignals.length) return;
+  const headers = [
+    "signal_id","ticker","direction","entry_time","exit_time",
+    "entry_price","exit_price","sl","tp1","confidence","outcome",
+    "pnl_pct","mfe_pct","mae_pct","duration_seconds","rr_achieved"
+  ];
+  const esc = (value) => {
+    const s = String(value ?? "");
+    if(s.includes(",") || s.includes("\"") || s.includes("\n")){
+      return `"${s.replace(/\"/g, "\"\"")}"`;
+    }
+    return s;
+  };
+  const lines = [headers.join(",")];
+  for(const row of latestHistorySignals){
+    lines.push(headers.map(h => esc(row[h])).join(","));
+  }
+  const csvContent = lines.join("\n");
+  const blob = new Blob([csvContent], {type: "text/csv"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `trade_history_${new Date().toISOString().replace(/[:.]/g,'-')}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
-function bindHistoryTabs(){
-  document.querySelectorAll('.hist-tab-btn').forEach(btn => {
-    btn.addEventListener('click', () => setHistoryTypeTab(btn.dataset.type || "ALL"));
-  });
+function bindExportCsv(){
+  const btn = document.getElementById("export-csv-btn");
+  if(!btn) return;
+  btn.addEventListener("click", exportHistoryCsv);
 }
 
 async function loadSignalHistory(){
   try{
-    const [historyData, signalsData] = await Promise.all([
+    const [historyData, equityData] = await Promise.all([
       fetchJSON('/api/history?limit=200', { ttlMs: 7000, timeoutMs: 9000 }),
-      fetchJSON('/api/signals?limit=500', { ttlMs: 7000, timeoutMs: 9000 }),
+      fetchJSON('/api/equity-curve', { ttlMs: 15000, timeoutMs: 9000 }),
     ]);
-    const historyRows = Array.isArray(historyData) ? historyData : [];
-    const allSignals = Array.isArray(signalsData) ? signalsData : [];
-    if(!historyRows.length && !allSignals.length) return;
-
-    const normalizedSignal = (sig) => {
-      const raw = String(sig?.signal || sig?.requested_signal || '').toUpperCase();
-      if(raw === 'BUY') return 'LONG';
-      if(raw === 'SELL') return 'SHORT';
-      return raw;
-    };
-    const normalizedStatus = (sig) => String(sig?.status || sig?.result || sig?.outcome || 'OPEN').toUpperCase();
-    const closedRows = allSignals.filter(sig => !['OPEN', 'BLOCKED'].includes(normalizedStatus(sig)));
-    const longClosed = closedRows.filter(sig => normalizedSignal(sig) === 'LONG');
-    const shortClosed = closedRows.filter(sig => normalizedSignal(sig) === 'SHORT');
-    const longWins = longClosed.filter(sig => Number(sig?.pnl_pct) > 0);
-    const shortWins = shortClosed.filter(sig => Number(sig?.pnl_pct) > 0);
-    const totalPnl = closedRows.reduce((acc, sig) => acc + (Number(sig?.pnl_pct) || 0), 0);
-
-    const el = (id) => document.getElementById(id);
-    if (el('stat-total')) el('stat-total').textContent = allSignals.length || 0;
-    if (el('stat-long-count')) el('stat-long-count').textContent = longClosed.length || 0;
-    if (el('stat-short-count')) el('stat-short-count').textContent = shortClosed.length || 0;
-    if (el('stat-long-wr')) el('stat-long-wr').textContent = `${longClosed.length ? ((longWins.length / longClosed.length) * 100).toFixed(1) : '0.0'}%`;
-    if (el('stat-short-wr')) el('stat-short-wr').textContent = `${shortClosed.length ? ((shortWins.length / shortClosed.length) * 100).toFixed(1) : '0.0'}%`;
-    if (el('stat-blocked')) el('stat-blocked').textContent = allSignals.filter(sig => normalizedStatus(sig) === 'BLOCKED').length || 0;
-    if (el('stat-pnl')) {
-      const pnl = Number(totalPnl || 0);
-      el('stat-pnl').textContent = (pnl >= 0 ? '+' : '') + pnl.toFixed(2) + '%';
-      el('stat-pnl').style.color = pnl >= 0 ? '#00c853' : '#ff1744';
-    }
-    if (el('stat-open')) el('stat-open').textContent = allSignals.filter(sig => normalizedStatus(sig) === 'OPEN').length || 0;
-
-    latestHistorySignals = historyRows;
-    const openSignals = latestHistorySignals.filter(sig => historyStatus(sig) === "OPEN");
-    const multiOpenWarning = document.getElementById('multi-open-warning');
-    if (multiOpenWarning) {
-      multiOpenWarning.style.display = openSignals.length > 2 ? 'block' : 'none';
-    }
-
+    latestHistorySignals = Array.isArray(historyData) ? historyData : [];
     renderSignalHistoryTable();
+    if(equityData && typeof equityData === "object"){
+      renderEquityCurve(equityData);
+      updateTradeStats(equityData);
+    }
   }catch(e){
     console.warn('History fetch failed:', e);
   }
@@ -2400,8 +2573,8 @@ async function switchRange(range){
 
 async function init(){
   initChart();
-  bindHistoryFilters();
-  bindHistoryTabs();
+  initEquityChart();
+  bindExportCsv();
   document.querySelectorAll('.tf-btn').forEach(btn=>{
     btn.addEventListener('click',()=>switchTimeframe(btn.dataset.tf));
   });
