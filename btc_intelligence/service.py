@@ -44,15 +44,32 @@ from btc_intelligence.signals.intelligence import (
 )
 from btc_intelligence.signals.probability_stacker import ProbabilityStacker
 from btc_intelligence.services import (
+    AggregatorConfig,
     AdaptiveLearningConfig,
     AdaptiveLearningEngine,
+    DataDriftEngine,
     DecisionEngine,
     DecisionEngineInput,
+    DrawdownConfig,
+    DrawdownController,
     ExecutionPlanInput,
     ExecutionPlanner,
+    KellyConfig,
+    KellyPositionSizer,
+    MetaDecisionEngine,
+    MetaDecisionInput,
+    MetaLabelingConfig,
+    MetaLabelingEngine,
     OrderFlowService,
     ProbabilityInput,
     ProbabilityService,
+    SignalAggregator,
+    StrategyEngine,
+    StrategyEngineConfig,
+    ValidationConfig,
+    ValidationEngine,
+    WalkForwardConfig,
+    WalkForwardValidator,
 )
 from btc_intelligence.state import RedisStateStore
 from btc_intelligence.utils.notifier import TelegramNotifier
@@ -103,6 +120,44 @@ class AppRuntime:
         self.decision_engine = DecisionEngine()
         self.probability_service = ProbabilityService()
         self.execution_planner = ExecutionPlanner()
+        self.validation_engine = ValidationEngine(ValidationConfig())
+        self.meta_labeling_engine = MetaLabelingEngine(MetaLabelingConfig())
+        try:
+            self.walk_forward_validator = WalkForwardValidator(WalkForwardConfig())
+        except Exception:
+            self.walk_forward_validator = WalkForwardValidator()
+        self.strategy_engine = StrategyEngine(
+            state_path="btc_intelligence/logs/strategy_engine_state.json",
+            config=StrategyEngineConfig(
+                min_trades_required=30,
+                update_frequency=20,
+                learning_rate=0.01,
+            ),
+            walk_forward_validator=self.walk_forward_validator,
+        )
+        self.data_drift_engine = DataDriftEngine(
+            baseline_window=240,
+            recent_window=60,
+            state_path="btc_intelligence/logs/data_drift_baseline.json",
+        )
+        try:
+            self.signal_aggregator = SignalAggregator(AggregatorConfig())
+        except Exception:
+            self.signal_aggregator = SignalAggregator()
+        try:
+            self.kelly_position_sizer = KellyPositionSizer(KellyConfig())
+        except Exception:
+            self.kelly_position_sizer = KellyPositionSizer()
+        try:
+            self.drawdown_controller = DrawdownController(
+                state_path="btc_intelligence/logs/drawdown_state.json",
+                config=DrawdownConfig(),
+            )
+        except Exception:
+            self.drawdown_controller = DrawdownController(
+                state_path="btc_intelligence/logs/drawdown_state.json",
+            )
+        self.meta_decision_engine = MetaDecisionEngine()
         self.adaptive_learning = AdaptiveLearningEngine(
             state_path="btc_intelligence/logs/adaptive_learning_state.json",
             config=AdaptiveLearningConfig(
@@ -186,8 +241,38 @@ class AppRuntime:
                 pause = self.auto_pause_manager.evaluate(self.performance_tracker.stats(portfolio_heat_pct=monitoring['portfolio_heat_pct']))
                 monitoring['auto_pause'] = pause.paused
                 monitoring['auto_pause_reason'] = pause.reason
+                now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+                try:
+                    current_equity = float(self.performance_tracker.equity_curve[-1]) if self.performance_tracker.equity_curve else 0.0
+                    drawdown_status = self.drawdown_controller.update(current_equity=current_equity, timestamp_utc=now_iso)
+                except Exception as exc:
+                    logger.debug('Drawdown controller update fallback: %s', exc)
+                    fallback_dd = max(float(monitoring.get('current_drawdown_pct', 0.0)) / 100.0, 0.0)
+                    fallback_action = "HALT" if fallback_dd >= 0.08 else "REDUCE_SIZE" if fallback_dd >= 0.04 else "NORMAL"
+                    drawdown_status = {
+                        "current_drawdown_pct": fallback_dd,
+                        "daily_loss_pct": 0.0,
+                        "halted": bool(fallback_action == "HALT"),
+                        "halt_reason": "fallback_monitoring_drawdown" if fallback_action == "HALT" else None,
+                        "action": fallback_action,
+                        "size_multiplier": 0.0 if fallback_action == "HALT" else 0.5 if fallback_action == "REDUCE_SIZE" else 1.0,
+                        "trades_since_halt": 0,
+                        "equity_peak": float(current_equity if 'current_equity' in locals() else 0.0),
+                    }
+                monitoring['drawdown_status'] = drawdown_status
+                monitoring['drawdown_action'] = str(drawdown_status.get('action', 'NORMAL')).upper()
+                monitoring['drawdown_size_multiplier'] = float(drawdown_status.get('size_multiplier', 1.0))
+                monitoring['current_equity'] = float(current_equity if 'current_equity' in locals() else 0.0)
+                monitoring['current_drawdown_ratio'] = float(drawdown_status.get('current_drawdown_pct', 0.0))
                 await self.buffer.set_monitoring(monitoring)
                 await self.buffer.set_edge_stats(self.stacker.current_edges())
+                snapshot['monitoring_stats'] = monitoring
+
+                if str(drawdown_status.get('action', 'NORMAL')).upper() == 'HALT':
+                    logger.info('Drawdown circuit breaker active; skipping signal generation cycle')
+                    await asyncio.to_thread(self._refresh_btc_open_signals, self._extract_current_price(snapshot))
+                    await asyncio.sleep(settings.feature_eval_interval_sec)
+                    continue
 
                 if not self._has_required_candles(snapshot):
                     await asyncio.sleep(settings.feature_eval_interval_sec)
@@ -521,6 +606,13 @@ class AppRuntime:
 
         vol_payload = volatility_tradeability(state.volatility)
         vol_payload["regime"] = vol_payload.get("volatility_regime", "NORMAL")
+        monitoring_stats = snapshot.get("monitoring_stats", {}) if isinstance(snapshot.get("monitoring_stats", {}), dict) else {}
+        drawdown_status = monitoring_stats.get("drawdown_status", {}) if isinstance(monitoring_stats.get("drawdown_status", {}), dict) else {}
+        volume_profile_payload = trade_based_volume_profile(
+            agg_trades=snapshot.get('agg_trades', []),
+            window_minutes=45,
+            n_bins=24,
+        )
 
         preferred_direction = "LONG"
         if str(orderflow_payload.get("decision_state", "")).upper() == "FAVOR_SHORT":
@@ -572,6 +664,52 @@ class AppRuntime:
             "cost_score": round(cost_score, 6),
             "as_of_utc": now_iso,
         }
+        signal_aggregation_payload: dict[str, Any] = {
+            "direction": str(decision_payload.get("decision", "HOLD")).upper(),
+            "raw_score": 0.0,
+            "confidence": float(decision_payload.get("confidence", 0.0)),
+            "agreement_ratio": 0.0,
+            "sources_used": 0,
+            "sources_available": 0,
+            "source_contributions": {},
+            "rejected": True,
+            "reject_reason": "fallback_decision_engine",
+        }
+        try:
+            regime_upper = str(normalized_regime or "").upper()
+            if "BULL" in regime_upper:
+                regime_dir, regime_strength = "LONG", 0.70
+            elif "BEAR" in regime_upper or "PANIC" in regime_upper:
+                regime_dir, regime_strength = "SHORT", 0.70
+            else:
+                regime_dir, regime_strength = "NEUTRAL", 0.0
+
+            flow_decision = str(orderflow_payload.get("decision_state", "NO_TRADE")).upper()
+            flow_dir = "LONG" if flow_decision == "FAVOR_LONG" else "SHORT" if flow_decision == "FAVOR_SHORT" else "NEUTRAL"
+            flow_strength = float(np.clip(abs(float(orderflow_payload.get("obi_imbalance", 0.0))), 0.0, 1.0))
+
+            vp_decision = str(volume_profile_payload.get("decision_state", "NO_TRADE")).upper()
+            vp_dir = "LONG" if vp_decision == "FAVOR_LONG" else "SHORT" if vp_decision == "FAVOR_SHORT" else "NEUTRAL"
+            vp_strength = float(np.clip(abs(float(volume_profile_payload.get("price_to_poc_pct", 0.0))) / 0.5, 0.0, 1.0))
+
+            momentum_dir = "LONG" if momentum_score > 0 else "SHORT" if momentum_score < 0 else "NEUTRAL"
+            momentum_strength = float(np.clip(abs(momentum_score), 0.0, 1.0))
+
+            vol_tradeability = str(vol_payload.get("tradeability", "ALLOW")).upper()
+            vol_dir = preferred_direction if vol_tradeability in {"ALLOW", "CAUTION"} else "NEUTRAL"
+            vol_strength = 0.5 if vol_tradeability == "ALLOW" else 0.35 if vol_tradeability == "CAUTION" else 0.0
+
+            signal_aggregation_payload = self.signal_aggregator.aggregate(
+                {
+                    "order_flow": {"direction": flow_dir, "strength": flow_strength, "available": True},
+                    "volume_profile": {"direction": vp_dir, "strength": vp_strength, "available": True},
+                    "regime": {"direction": regime_dir, "strength": regime_strength, "available": True},
+                    "momentum": {"direction": momentum_dir, "strength": momentum_strength, "available": True},
+                    "volatility": {"direction": vol_dir, "strength": vol_strength, "available": True},
+                }
+            )
+        except Exception as exc:
+            logger.debug("Signal aggregation fallback to decision engine: %s", exc)
 
         probability_payload = self.probability_service.estimate(
             ProbabilityInput(
@@ -584,6 +722,12 @@ class AppRuntime:
         probability_payload["as_of_utc"] = now_iso
 
         base_decision = str(decision_payload.get("decision", "HOLD")).upper()
+        base_confidence = float(decision_payload.get("confidence", 0.0))
+        if not bool(signal_aggregation_payload.get("rejected", True)):
+            agg_dir = str(signal_aggregation_payload.get("direction", base_decision)).upper()
+            if agg_dir in {"LONG", "SHORT", "HOLD"}:
+                base_decision = agg_dir
+            base_confidence = float(signal_aggregation_payload.get("confidence", base_confidence))
         up_prob = float(probability_payload.get("up_prob", 0.0)) / 100.0
         down_prob = float(probability_payload.get("down_prob", 0.0)) / 100.0
         raw_prob = up_prob if base_decision == "LONG" else down_prob if base_decision == "SHORT" else max(up_prob, down_prob)
@@ -593,26 +737,32 @@ class AppRuntime:
             volatility_state=str(vol_payload.get("volatility_regime", "NORMAL")),
             flow_state=str(orderflow_payload.get("cvd_trend", orderflow_payload.get("decision_state", "FLAT"))),
             base_decision=base_decision,
-            base_confidence=float(decision_payload.get("confidence", 0.0)),
+            base_confidence=base_confidence,
             factor_values=factor_values,
             raw_prob=raw_prob,
             blockers=list(decision_payload.get("blockers", [])),
         )
 
-        decision_payload["base_decision"] = base_decision
-        decision_payload["decision"] = str(adaptive_meta.get("final_decision", base_decision))
-        decision_payload["confidence"] = float(adaptive_meta.get("adjusted_confidence", decision_payload.get("confidence", 0.0)))
-        decision_payload["adaptive_reasons"] = list(adaptive_meta.get("reasons", []))
-        decision_payload["calibrated_probability"] = round(float(adaptive_meta.get("calibration", {}).get("calibrated_prob", raw_prob)) * 100.0, 2)
-        decision_payload["adaptive_score"] = float(adaptive_meta.get("adaptive_score", 0.0))
-        decision_payload["edge_decay"] = adaptive_meta.get("edge_decay", {})
-
-        verdict_payload = dict(decision_payload.get("trade_verdict", {}))
-        verdict_payload["final_verdict"] = "TRADE" if decision_payload["decision"] in {"LONG", "SHORT"} else "AVOID"
-        decision_payload["trade_verdict"] = verdict_payload
+        calibrated_prob = float(adaptive_meta.get("calibration", {}).get("calibrated_prob", raw_prob))
+        strategy_payload = self.strategy_engine.select_strategy(
+            regime=normalized_regime,
+            volatility_regime=str(vol_payload.get("volatility_regime", "NORMAL")),
+            momentum_score=momentum_score,
+            flow_score=float(orderflow_payload.get("flow_score", 0.0)),
+            cost_score=cost_score,
+        )
+        drift_payload = self.data_drift_engine.update_and_detect(
+            {
+                "momentum": momentum_score,
+                "flow": float(orderflow_payload.get("flow_score", 0.0)),
+                "cost": cost_score,
+                "volatility": float(vol_payload.get("atr_pct", 0.0)),
+                "probability": calibrated_prob,
+            }
+        )
 
         liquidity_score = self._derive_liquidity_score(snapshot.get("depth", {}))
-        planned_direction = str(decision_payload.get("decision", "HOLD")).upper()
+        planned_direction = str(adaptive_meta.get("final_decision", base_decision)).upper()
         if planned_direction not in {"LONG", "SHORT"}:
             planned_direction = preferred_direction
         execution_plan_payload = self.execution_planner.plan(
@@ -625,6 +775,125 @@ class AppRuntime:
             )
         )
         execution_plan_payload["as_of_utc"] = now_iso
+
+        validation_meta = adaptive_meta.get("validation", {}) if isinstance(adaptive_meta.get("validation", {}), dict) else {}
+        val_samples = validation_meta.get("samples", {}) if isinstance(validation_meta.get("samples", {}), dict) else {}
+        baseline_metric = float(validation_meta.get("baseline", {}).get("metric", 0.0)) if isinstance(validation_meta.get("baseline", {}), dict) else 0.0
+        candidate_metric = float(validation_meta.get("candidate", {}).get("metric", baseline_metric)) if isinstance(validation_meta.get("candidate", {}), dict) else baseline_metric
+        expected_edge = abs(float(decision_breakdown.get("final_score", 0.0))) / 100.0
+        validation_payload = self.validation_engine.validate_step(
+            "meta_decision",
+            {
+                "sample_size": int(val_samples.get("train", 0)) + int(val_samples.get("test", 0)),
+                "expected_edge": expected_edge,
+                "robustness_gain": candidate_metric - baseline_metric,
+                "drawdown_delta": 0.05 if bool(adaptive_meta.get("edge_decay", {}).get("decay_detected", False)) else -0.01,
+                "overfit_risk": float(adaptive_meta.get("calibration", {}).get("calibration_error", 0.0)) * 1.4,
+                "brier_score": float(adaptive_meta.get("calibration", {}).get("brier_score", 0.25)),
+                "calibration_error": float(adaptive_meta.get("calibration", {}).get("calibration_error", 0.15)),
+            },
+        )
+        meta_label_payload = self.meta_labeling_engine.label_trade(
+            base_decision=str(adaptive_meta.get("final_decision", base_decision)),
+            confidence=float(adaptive_meta.get("adjusted_confidence", decision_payload.get("confidence", 0.0))),
+            calibrated_prob=calibrated_prob,
+            blockers=list(decision_payload.get("blockers", [])),
+            calibration_error=float(adaptive_meta.get("calibration", {}).get("calibration_error", 0.0)),
+            drift_level=str(drift_payload.get("drift_level", "LOW")),
+            edge_decay=bool(adaptive_meta.get("edge_decay", {}).get("decay_detected", False)),
+        )
+        drawdown_action = str(drawdown_status.get("action", monitoring_stats.get("drawdown_action", ""))).upper()
+        if drawdown_action not in {"NORMAL", "REDUCE_SIZE", "HALT"}:
+            current_dd_ratio = float(drawdown_status.get("current_drawdown_pct", monitoring_stats.get("current_drawdown_ratio", 0.0)))
+            if current_dd_ratio <= 0.0:
+                current_dd_ratio = max(float(monitoring_stats.get("current_drawdown_pct", 0.0)) / 100.0, 0.0)
+            if current_dd_ratio >= 0.08:
+                drawdown_action = "HALT"
+            elif current_dd_ratio >= 0.04:
+                drawdown_action = "REDUCE_SIZE"
+            else:
+                drawdown_action = "NORMAL"
+        meta_output = self.meta_decision_engine.evaluate(
+            MetaDecisionInput(
+                base_decision=base_decision,
+                base_confidence=base_confidence,
+                calibrated_probability=calibrated_prob,
+                strategy_used=str(strategy_payload.get("strategy_used", "trend_following")),
+                blockers=list(decision_payload.get("blockers", [])),
+                validation=validation_payload,
+                meta_label=meta_label_payload,
+                drift=drift_payload,
+                edge_decay=adaptive_meta.get("edge_decay", {}),
+                execution_plan=execution_plan_payload,
+                adaptive_meta=adaptive_meta,
+                drawdown_action=drawdown_action,
+            )
+        )
+        kelly_sizing_payload: dict[str, Any] = {
+            "kelly_full": 0.0,
+            "kelly_fraction": 0.0,
+            "position_pct": 0.0,
+            "position_size_usd": 0.0,
+            "size_reduction_reason": ["fallback"],
+            "halted": bool(drawdown_action == "HALT"),
+            "halt_reason": "drawdown_circuit_breaker" if drawdown_action == "HALT" else None,
+        }
+        try:
+            all_strategy_rows = []
+            for rows in self.strategy_engine.history.values():
+                if isinstance(rows, list):
+                    all_strategy_rows.extend(rows[-80:])
+            pnl_vals = [float(r.get("pnl_pct", 0.0)) for r in all_strategy_rows if isinstance(r, dict)]
+            wins = [x for x in pnl_vals if x > 0.0]
+            losses = [abs(x) for x in pnl_vals if x < 0.0]
+            win_rate = float(len(wins) / max(len(pnl_vals), 1)) if pnl_vals else float(monitoring_stats.get("recent_win_rate", 0.0))
+            avg_win_pct = float((sum(wins) / len(wins)) / 100.0) if wins else 0.015
+            avg_loss_pct = float((sum(losses) / len(losses)) / 100.0) if losses else 0.010
+
+            drawdown_ratio = float(drawdown_status.get("current_drawdown_pct", monitoring_stats.get("current_drawdown_ratio", 0.0)))
+            if drawdown_ratio <= 0.0:
+                drawdown_ratio = max(float(monitoring_stats.get("current_drawdown_pct", 0.0)) / 100.0, 0.0)
+            drawdown_size_multiplier = float(drawdown_status.get("size_multiplier", monitoring_stats.get("drawdown_size_multiplier", 1.0)))
+            portfolio_value = float(monitoring_stats.get("current_equity", 0.0))
+            if portfolio_value <= 0.0:
+                portfolio_value = float(self.performance_tracker.equity_curve[-1]) if self.performance_tracker.equity_curve else 0.0
+
+            kelly_sizing_payload = self.kelly_position_sizer.compute(
+                win_rate=win_rate,
+                avg_win_pct=avg_win_pct,
+                avg_loss_pct=avg_loss_pct,
+                confidence=float(meta_output.get("confidence", base_confidence)),
+                drift_level=str(drift_payload.get("drift_level", "LOW")),
+                edge_decay=bool(adaptive_meta.get("edge_decay", {}).get("decay_detected", False)),
+                current_drawdown_pct=drawdown_ratio,
+                volatility_regime=str(vol_payload.get("volatility_regime", "NORMAL")),
+                portfolio_value=portfolio_value,
+                size_multiplier=drawdown_size_multiplier,
+            )
+        except Exception as exc:
+            logger.debug("Kelly sizing fallback applied: %s", exc)
+
+        execution_plan_payload["kelly_sizing"] = kelly_sizing_payload
+        execution_plan_payload["position_size_pct"] = float(kelly_sizing_payload.get("position_pct", 0.0))
+        execution_plan_payload["position_size_usd"] = float(kelly_sizing_payload.get("position_size_usd", 0.0))
+        execution_plan_payload["drawdown_size_multiplier"] = float(drawdown_status.get("size_multiplier", 1.0))
+
+        decision_payload["base_decision"] = base_decision
+        decision_payload["decision"] = str(meta_output.get("decision", adaptive_meta.get("final_decision", base_decision)))
+        decision_payload["confidence"] = float(meta_output.get("confidence", adaptive_meta.get("adjusted_confidence", 0.0)))
+        decision_payload["probability"] = float(meta_output.get("probability", calibrated_prob * 100.0))
+        decision_payload["strategy_used"] = str(meta_output.get("strategy_used", strategy_payload.get("strategy_used", "trend_following")))
+        decision_payload["risk_score"] = float(meta_output.get("risk_score", 0.0))
+        decision_payload["validation_status"] = str(meta_output.get("validation_status", "REJECTED"))
+        decision_payload["adaptive_adjustments"] = list(meta_output.get("adaptive_adjustments", []))
+        decision_payload["adaptive_reasons"] = list(adaptive_meta.get("reasons", []))
+        decision_payload["calibrated_probability"] = round(calibrated_prob * 100.0, 2)
+        decision_payload["adaptive_score"] = float(adaptive_meta.get("adaptive_score", 0.0))
+        decision_payload["edge_decay"] = adaptive_meta.get("edge_decay", {})
+
+        verdict_payload = dict(decision_payload.get("trade_verdict", {}))
+        verdict_payload["final_verdict"] = "TRADE" if decision_payload["decision"] in {"LONG", "SHORT"} else "AVOID"
+        decision_payload["trade_verdict"] = verdict_payload
 
         if signal_payload is not None and isinstance(signal_payload, dict):
             net_alpha = float(signal_payload.get("net_alpha", signal_payload.get("net_alpha_score", 0.0)) or 0.0)
@@ -642,6 +911,23 @@ class AppRuntime:
             "factor_contributions": decision_payload.get("factor_contributions", []),
             "trade_triggers": decision_payload.get("trade_triggers", []),
             "meta_decision": adaptive_meta,
+            "meta_labeling": meta_label_payload,
+            "validation_engine": validation_payload,
+            "strategy_selection": strategy_payload,
+            "data_drift": drift_payload,
+            "signal_aggregation": signal_aggregation_payload,
+            "kelly_sizing": kelly_sizing_payload,
+            "drawdown_status": drawdown_status,
+            "meta_output": {
+                "decision": meta_output.get("decision", "HOLD"),
+                "confidence": meta_output.get("confidence", 0.0),
+                "probability": meta_output.get("probability", 0.0),
+                "strategy_used": meta_output.get("strategy_used", strategy_payload.get("strategy_used", "trend_following")),
+                "execution_plan": execution_plan_payload,
+                "risk_score": meta_output.get("risk_score", 100.0),
+                "validation_status": meta_output.get("validation_status", "REJECTED"),
+                "adaptive_adjustments": meta_output.get("adaptive_adjustments", []),
+            },
             "adaptive_learning": {
                 "regime_bucket": self._regime_bucket(normalized_regime),
                 "weights": adaptive_meta.get("weights", {}),
@@ -951,6 +1237,15 @@ class AppRuntime:
                             )
                         except Exception as exc:
                             logger.debug('Adaptive learning trade record skipped: %s', exc)
+                        try:
+                            self.strategy_engine.record_trade(
+                                strategy=str(learn_state.get('strategy_used', 'trend_following')),
+                                pnl_pct=float(pnl_pct),
+                                regime=str(learn_state.get('regime', 'SIDEWAYS')),
+                                timestamp_utc=str(datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')),
+                            )
+                        except Exception as exc:
+                            logger.debug('Strategy performance record skipped: %s', exc)
                         self._open_signal_state = None
                         self._last_open_signal_id = None
                         self._last_saved_btc_signal = 'HOLD'
@@ -1053,6 +1348,15 @@ class AppRuntime:
                         )
                     except Exception as exc:
                         logger.debug('Adaptive learning trade record skipped: %s', exc)
+                    try:
+                        self.strategy_engine.record_trade(
+                            strategy=str(learn_state.get('strategy_used', 'trend_following')),
+                            pnl_pct=float(pnl),
+                            regime=str(learn_state.get('regime', 'SIDEWAYS')),
+                            timestamp_utc=str(datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')),
+                        )
+                    except Exception as exc:
+                        logger.debug('Strategy performance record skipped: %s', exc)
                     self._open_signal_state = None
                     self._last_open_signal_id = None
                     self._last_saved_btc_signal = 'HOLD'
@@ -1375,6 +1679,8 @@ class AppRuntime:
             decision_block = data.get('decision_engine', {}) if isinstance(data.get('decision_engine', {}), dict) else {}
             prob_block = data.get('probability', {}) if isinstance(data.get('probability', {}), dict) else {}
             meta_block = data.get('meta_decision', {}) if isinstance(data.get('meta_decision', {}), dict) else {}
+            meta_output = data.get('meta_output', {}) if isinstance(data.get('meta_output', {}), dict) else {}
+            strategy_block = data.get('strategy_selection', {}) if isinstance(data.get('strategy_selection', {}), dict) else {}
             breakdown_block = decision_block.get('decision_breakdown', {}) if isinstance(decision_block.get('decision_breakdown', {}), dict) else {}
             raw_prob = float(prob_block.get('up_prob', 0.0)) / 100.0 if signal == 'LONG' else float(prob_block.get('down_prob', 0.0)) / 100.0
             factor_values = {
@@ -1400,6 +1706,7 @@ class AppRuntime:
                 'raw_prob': float(max(0.0, min(1.0, raw_prob))),
                 'calibrated_prob': float(max(0.0, min(1.0, meta_block.get('calibration', {}).get('calibrated_prob', raw_prob) if isinstance(meta_block.get('calibration', {}), dict) else raw_prob))),
                 'factor_values': factor_values,
+                'strategy_used': str(meta_output.get('strategy_used', strategy_block.get('strategy_used', 'trend_following'))),
             }
             self._last_open_signal_id = str(insert_meta.get('signal_ref', ''))
             self._last_saved_btc_signal = signal
@@ -1483,13 +1790,37 @@ class AppRuntime:
         combined_payload["execution_plan"] = intelligence_bundle.get("execution_plan", {})
         combined_payload["trade_triggers"] = intelligence_bundle.get("trade_triggers", [])
         combined_payload["meta_decision"] = intelligence_bundle.get("meta_decision", {})
+        combined_payload["meta_labeling"] = intelligence_bundle.get("meta_labeling", {})
+        combined_payload["validation_engine"] = intelligence_bundle.get("validation_engine", {})
+        combined_payload["strategy_selection"] = intelligence_bundle.get("strategy_selection", {})
+        combined_payload["data_drift"] = intelligence_bundle.get("data_drift", {})
+        combined_payload["signal_aggregation"] = intelligence_bundle.get("signal_aggregation", {})
+        combined_payload["kelly_sizing"] = intelligence_bundle.get("kelly_sizing", {})
+        combined_payload["drawdown_status"] = intelligence_bundle.get("drawdown_status", {})
+        combined_payload["meta_output"] = intelligence_bundle.get("meta_output", {})
         combined_payload["adaptive_learning"] = intelligence_bundle.get("adaptive_learning", {})
+        try:
+            kelly_payload = intelligence_bundle.get("kelly_sizing", {})
+            if isinstance(kelly_payload, dict) and kelly_payload:
+                position_pct = float(kelly_payload.get("position_pct", 0.0))
+                position_usd = float(kelly_payload.get("position_size_usd", 0.0))
+                combined_payload["position_size_pct"] = position_pct
+                combined_payload["position_size_usd"] = position_usd
+                max_pct = float(self.kelly_position_sizer.config.max_position_pct)
+                if max_pct > 0:
+                    combined_payload["size_multiplier"] = float(np.clip(position_pct / max_pct, 0.0, 1.0))
+        except Exception as exc:
+            logger.debug("Kelly payload publish fallback: %s", exc)
 
-        meta_final = str(combined_payload.get("meta_decision", {}).get("final_decision", "")).upper()
+        meta_final = str(combined_payload.get("meta_output", {}).get("decision", "")).upper()
+        if not meta_final:
+            meta_final = str(combined_payload.get("meta_decision", {}).get("final_decision", "")).upper()
         if meta_final == "HOLD":
             combined_payload["signal"] = "HOLD"
             combined_payload["confidence"] = min(float(combined_payload.get("confidence", 0.0)), 49.0)
-            meta_reasons = combined_payload.get("meta_decision", {}).get("reasons", [])
+            meta_reasons = combined_payload.get("meta_output", {}).get("adaptive_adjustments", [])
+            if not meta_reasons:
+                meta_reasons = combined_payload.get("meta_decision", {}).get("reasons", [])
             if isinstance(meta_reasons, list) and meta_reasons:
                 combined_payload["signal_note"] = f"meta_hold:{str(meta_reasons[0])[:80]}"
             else:
@@ -1819,6 +2150,11 @@ class AppRuntime:
         payload["factor_contributions"] = bundle.get("factor_contributions", [])
         payload["trade_verdict"] = bundle.get("trade_verdict", {})
         payload["meta_decision"] = bundle.get("meta_decision", {})
+        payload["meta_labeling"] = bundle.get("meta_labeling", {})
+        payload["validation_engine"] = bundle.get("validation_engine", {})
+        payload["strategy_selection"] = bundle.get("strategy_selection", {})
+        payload["data_drift"] = bundle.get("data_drift", {})
+        payload["meta_output"] = bundle.get("meta_output", {})
         payload["adaptive_learning"] = bundle.get("adaptive_learning", {})
         payload["as_of_utc"] = bundle.get("as_of_utc")
         if settings.redis_state_enabled and self.redis_state.connected:
