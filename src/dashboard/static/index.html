@@ -74,8 +74,9 @@ body{
 .v{font-size:24px;font-weight:800;font-family:"JetBrains Mono",monospace}
 .v.small{font-size:15px;font-weight:700}
 
-.layout{display:grid;grid-template-columns:2fr 1fr;gap:10px}
+.layout{display:grid;grid-template-columns:2fr 1fr;gap:10px;align-items:start}
 #chart-panel,.side{background:var(--panel);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:0 8px 24px rgba(2,6,23,.35)}
+#chart-panel{display:flex;flex-direction:column}
 .head{padding:10px 14px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:8px}
 .head-title{font-size:14px;font-weight:700}
 .sub{font-size:12px;color:var(--muted);font-family:"JetBrains Mono",monospace}
@@ -597,15 +598,14 @@ body{
 <style>
 /* ── Under-Chart Intelligence Panel ─────────────────────── */
 .intel-panel{
-  margin:0 12px 10px;
+  margin:0;
   background:#0d1117;
-  border:1px solid rgba(148,163,184,.2);
-  border-radius:12px;
+  border-top:1px solid var(--line);
   color:#e2e8f0;
-  box-shadow:0 8px 24px rgba(2,6,23,.35);
+  padding:10px 14px;
 }
 .intel-header{
-  padding:10px 14px;
+  padding:0 0 10px;
   border-bottom:1px solid rgba(148,163,184,.2);
   display:flex;
   justify-content:space-between;
@@ -625,7 +625,7 @@ body{
 .intel-tabs{
   display:flex;
   gap:12px;
-  padding:0 14px;
+  padding:0;
   border-bottom:1px solid rgba(148,163,184,.18);
 }
 .intel-tab{
@@ -644,7 +644,7 @@ body{
   border-bottom-color:#f7931a;
 }
 .intel-body{
-  padding:12px 14px 14px;
+  padding:12px 0 0;
 }
 .intel-pane{display:none;}
 .intel-pane.intel-pane-active{display:block;}
@@ -684,12 +684,9 @@ body{
 
 /* ── System Intelligence Gauges ───────────────────────────── */
 .sys-gauges-panel{
-  margin:0 12px 10px;
   background:#0d1117;
-  border-top:1px solid #1e2a3a;
-  border-radius:10px;
-  padding:8px 14px;
-  max-height:120px;
+  border-top:1px solid var(--line);
+  padding:8px 14px 10px;
   overflow:hidden;
 }
 .sys-gauges-label{
@@ -987,6 +984,113 @@ body{
           <div id="chart"></div>
           <div id="marker-tooltip"></div>
         </div>
+        <div id="system-gauges-panel" class="sys-gauges-panel">
+          <div class="sys-gauges-label">⚡ SYSTEM INTELLIGENCE</div>
+          <div class="sys-gauges-row">
+            <div class="sys-gauge-card">
+              <div class="sys-card-label">SIGNAL QUALITY</div>
+              <div class="sys-half-wrap">
+                <svg class="sys-half-svg" viewBox="0 0 120 70" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+                  <path class="sys-half-track" d="M 10 60 A 50 50 0 0 1 110 60"></path>
+                  <path id="sys-quality-arc" class="sys-half-fill" d="M 10 60 A 50 50 0 0 1 110 60" pathLength="100"></path>
+                </svg>
+                <div class="sys-half-center">
+                  <span id="sys-quality-value" class="sys-center-value">—</span>
+                  <span class="sys-center-sub">/ 100</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="sys-gauge-card">
+              <div class="sys-card-label">ORDER FLOW</div>
+              <div class="sys-flow-wrap">
+                <div class="sys-flow-track">
+                  <div id="sys-flow-fill" class="sys-flow-fill"></div>
+                  <div class="sys-flow-mid"></div>
+                </div>
+                <div id="sys-flow-text" class="sys-flow-text">—</div>
+                <div id="sys-flow-sub" class="sys-flow-sub">OBI —</div>
+              </div>
+            </div>
+
+            <div class="sys-gauge-card">
+              <div class="sys-card-label">REGIME</div>
+              <div class="sys-reg-segments">
+                <span id="sys-reg-trending" class="sys-reg-seg">TRENDING</span>
+                <span id="sys-reg-sideways" class="sys-reg-seg">SIDEWAYS</span>
+                <span id="sys-reg-squeeze" class="sys-reg-seg">SQUEEZE</span>
+                <span id="sys-reg-volatile" class="sys-reg-seg">VOLATILE</span>
+              </div>
+              <div id="sys-regime-text" class="sys-regime-text">—</div>
+            </div>
+
+            <div class="sys-gauge-card">
+              <div class="sys-card-label">VOLATILITY</div>
+              <div class="sys-vol-stack">
+                <div id="sys-vol-low" class="sys-vol-bar">LOW</div>
+                <div id="sys-vol-normal" class="sys-vol-bar">NORMAL</div>
+                <div id="sys-vol-expansion" class="sys-vol-bar">EXPANSION</div>
+              </div>
+            </div>
+
+            <div class="sys-gauge-card">
+              <div class="sys-card-label">META CONFIDENCE</div>
+              <div class="sys-ring-wrap">
+                <svg class="sys-ring-svg" viewBox="0 0 80 80" aria-hidden="true">
+                  <circle class="sys-ring-track" cx="40" cy="40" r="30"></circle>
+                  <circle id="sys-meta-ring" class="sys-ring-fill" cx="40" cy="40" r="30"></circle>
+                  <line class="sys-ring-tick" x1="40" y1="6" x2="40" y2="12" transform="rotate(144 40 40)"></line>
+                </svg>
+                <div class="sys-ring-center">
+                  <div id="sys-meta-value" class="sys-meta-value">—</div>
+                  <div class="sys-meta-sub">AI Sure</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div id="intel-panel" class="intel-panel">
+          <div class="intel-header">
+            <div class="intel-title">Under-Chart Intelligence</div>
+            <div id="intel-status" class="intel-status">refresh: 15s</div>
+          </div>
+          <div class="intel-tabs">
+            <button id="intel-tab-flow" class="intel-tab intel-tab-active" type="button">Flow</button>
+            <button id="intel-tab-volume" class="intel-tab" type="button">Volume</button>
+            <button id="intel-tab-volatility" class="intel-tab" type="button">Volatility</button>
+          </div>
+          <div class="intel-body">
+            <div id="intel-pane-flow" class="intel-pane intel-pane-active">
+              <div id="intel-msg-flow" class="intel-msg">Connecting to intelligence service...</div>
+              <div id="intel-data-flow" style="display:none;">
+                <div class="intel-row"><span class="intel-key">decision</span><span id="intel-flow-decision" class="intel-val">—</span></div>
+                <div class="intel-row"><span class="intel-key">reason</span><span id="intel-flow-reason" class="intel-val">—</span></div>
+                <div class="intel-row"><span class="intel-key">obi</span><span id="intel-flow-obi" class="intel-val">—</span></div>
+                <div class="intel-row"><span class="intel-key">cvd_slope</span><span id="intel-flow-cvd" class="intel-val">—</span></div>
+              </div>
+            </div>
+            <div id="intel-pane-volume" class="intel-pane">
+              <div id="intel-msg-volume" class="intel-msg">Connecting to intelligence service...</div>
+              <div id="intel-data-volume" style="display:none;">
+                <div class="intel-row"><span class="intel-key">decision</span><span id="intel-volume-decision" class="intel-val">—</span></div>
+                <div class="intel-row"><span class="intel-key">poc_price</span><span id="intel-volume-poc" class="intel-val">—</span></div>
+                <div class="intel-row"><span class="intel-key">hvn</span><span id="intel-volume-hvn" class="intel-val">—</span></div>
+                <div class="intel-row"><span class="intel-key">lvn</span><span id="intel-volume-lvn" class="intel-val">—</span></div>
+                <div class="intel-row"><span class="intel-key">distance_from_poc_pct</span><span id="intel-volume-dist" class="intel-val">—</span></div>
+                <div class="intel-row"><span class="intel-key">window_minutes</span><span id="intel-volume-window" class="intel-val">—</span></div>
+              </div>
+            </div>
+            <div id="intel-pane-volatility" class="intel-pane">
+              <div id="intel-msg-volatility" class="intel-msg">Connecting to intelligence service...</div>
+              <div id="intel-data-volatility" style="display:none;">
+                <div class="intel-row"><span class="intel-key">tradeability</span><span id="intel-vol-tradeability" class="intel-val">—</span></div>
+                <div class="intel-row"><span class="intel-key">regime</span><span id="intel-vol-regime" class="intel-val">—</span></div>
+                <div class="intel-row"><span class="intel-key">atr_pct</span><span id="intel-vol-atr" class="intel-val">—</span></div>
+                <div class="intel-row"><span class="intel-key">Position Size Adjustment</span><span id="intel-vol-size-adj" class="intel-val">—</span></div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
       <div class="side">
         <div class="head">
@@ -1059,115 +1163,6 @@ body{
 
           <div class="signal"><div class="sig-row"><span>Algo</span><span id="algo" class="sig-val">--</span></div></div>
           <div class="signal"><div class="sig-row"><span>As Of UTC</span><span id="asof" class="sig-val">--</span></div></div>
-        </div>
-      </div>
-    </div>
-
-    <div id="system-gauges-panel" class="sys-gauges-panel">
-      <div class="sys-gauges-label">⚡ SYSTEM INTELLIGENCE</div>
-      <div class="sys-gauges-row">
-        <div class="sys-gauge-card">
-          <div class="sys-card-label">SIGNAL QUALITY</div>
-          <div class="sys-half-wrap">
-            <svg class="sys-half-svg" viewBox="0 0 120 70" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
-              <path class="sys-half-track" d="M 10 60 A 50 50 0 0 1 110 60"></path>
-              <path id="sys-quality-arc" class="sys-half-fill" d="M 10 60 A 50 50 0 0 1 110 60" pathLength="100"></path>
-            </svg>
-            <div class="sys-half-center">
-              <span id="sys-quality-value" class="sys-center-value">—</span>
-              <span class="sys-center-sub">/ 100</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="sys-gauge-card">
-          <div class="sys-card-label">ORDER FLOW</div>
-          <div class="sys-flow-wrap">
-            <div class="sys-flow-track">
-              <div id="sys-flow-fill" class="sys-flow-fill"></div>
-              <div class="sys-flow-mid"></div>
-            </div>
-            <div id="sys-flow-text" class="sys-flow-text">—</div>
-            <div id="sys-flow-sub" class="sys-flow-sub">OBI —</div>
-          </div>
-        </div>
-
-        <div class="sys-gauge-card">
-          <div class="sys-card-label">REGIME</div>
-          <div class="sys-reg-segments">
-            <span id="sys-reg-trending" class="sys-reg-seg">TRENDING</span>
-            <span id="sys-reg-sideways" class="sys-reg-seg">SIDEWAYS</span>
-            <span id="sys-reg-squeeze" class="sys-reg-seg">SQUEEZE</span>
-            <span id="sys-reg-volatile" class="sys-reg-seg">VOLATILE</span>
-          </div>
-          <div id="sys-regime-text" class="sys-regime-text">—</div>
-        </div>
-
-        <div class="sys-gauge-card">
-          <div class="sys-card-label">VOLATILITY</div>
-          <div class="sys-vol-stack">
-            <div id="sys-vol-low" class="sys-vol-bar">LOW</div>
-            <div id="sys-vol-normal" class="sys-vol-bar">NORMAL</div>
-            <div id="sys-vol-expansion" class="sys-vol-bar">EXPANSION</div>
-          </div>
-        </div>
-
-        <div class="sys-gauge-card">
-          <div class="sys-card-label">META CONFIDENCE</div>
-          <div class="sys-ring-wrap">
-            <svg class="sys-ring-svg" viewBox="0 0 80 80" aria-hidden="true">
-              <circle class="sys-ring-track" cx="40" cy="40" r="30"></circle>
-              <circle id="sys-meta-ring" class="sys-ring-fill" cx="40" cy="40" r="30"></circle>
-              <line class="sys-ring-tick" x1="40" y1="6" x2="40" y2="12" transform="rotate(144 40 40)"></line>
-            </svg>
-            <div class="sys-ring-center">
-              <div id="sys-meta-value" class="sys-meta-value">—</div>
-              <div class="sys-meta-sub">AI Sure</div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <div id="intel-panel" class="intel-panel">
-      <div class="intel-header">
-        <div class="intel-title">Under-Chart Intelligence</div>
-        <div id="intel-status" class="intel-status">refresh: 15s</div>
-      </div>
-      <div class="intel-tabs">
-        <button id="intel-tab-flow" class="intel-tab intel-tab-active" type="button">Flow</button>
-        <button id="intel-tab-volume" class="intel-tab" type="button">Volume</button>
-        <button id="intel-tab-volatility" class="intel-tab" type="button">Volatility</button>
-      </div>
-      <div class="intel-body">
-        <div id="intel-pane-flow" class="intel-pane intel-pane-active">
-          <div id="intel-msg-flow" class="intel-msg">Connecting to intelligence service...</div>
-          <div id="intel-data-flow" style="display:none;">
-            <div class="intel-row"><span class="intel-key">decision</span><span id="intel-flow-decision" class="intel-val">—</span></div>
-            <div class="intel-row"><span class="intel-key">reason</span><span id="intel-flow-reason" class="intel-val">—</span></div>
-            <div class="intel-row"><span class="intel-key">obi</span><span id="intel-flow-obi" class="intel-val">—</span></div>
-            <div class="intel-row"><span class="intel-key">cvd_slope</span><span id="intel-flow-cvd" class="intel-val">—</span></div>
-          </div>
-        </div>
-        <div id="intel-pane-volume" class="intel-pane">
-          <div id="intel-msg-volume" class="intel-msg">Connecting to intelligence service...</div>
-          <div id="intel-data-volume" style="display:none;">
-            <div class="intel-row"><span class="intel-key">decision</span><span id="intel-volume-decision" class="intel-val">—</span></div>
-            <div class="intel-row"><span class="intel-key">poc_price</span><span id="intel-volume-poc" class="intel-val">—</span></div>
-            <div class="intel-row"><span class="intel-key">hvn</span><span id="intel-volume-hvn" class="intel-val">—</span></div>
-            <div class="intel-row"><span class="intel-key">lvn</span><span id="intel-volume-lvn" class="intel-val">—</span></div>
-            <div class="intel-row"><span class="intel-key">distance_from_poc_pct</span><span id="intel-volume-dist" class="intel-val">—</span></div>
-            <div class="intel-row"><span class="intel-key">window_minutes</span><span id="intel-volume-window" class="intel-val">—</span></div>
-          </div>
-        </div>
-        <div id="intel-pane-volatility" class="intel-pane">
-          <div id="intel-msg-volatility" class="intel-msg">Connecting to intelligence service...</div>
-          <div id="intel-data-volatility" style="display:none;">
-            <div class="intel-row"><span class="intel-key">tradeability</span><span id="intel-vol-tradeability" class="intel-val">—</span></div>
-            <div class="intel-row"><span class="intel-key">regime</span><span id="intel-vol-regime" class="intel-val">—</span></div>
-            <div class="intel-row"><span class="intel-key">atr_pct</span><span id="intel-vol-atr" class="intel-val">—</span></div>
-            <div class="intel-row"><span class="intel-key">Position Size Adjustment</span><span id="intel-vol-size-adj" class="intel-val">—</span></div>
-          </div>
         </div>
       </div>
     </div>
@@ -1955,9 +1950,11 @@ function _applySystemGauges(signalData){
   const decision = intel.decision_engine && typeof intel.decision_engine === "object" ? intel.decision_engine : {};
   const metaOutput = intel.meta_output && typeof intel.meta_output === "object" ? intel.meta_output : {};
   const orderFlow = (
-    s.orderflow && typeof s.orderflow === "object"
-      ? s.orderflow
-      : (s.order_flow && typeof s.order_flow === "object" ? s.order_flow : {})
+    s.orderflow && typeof s.orderflow === "object" ? s.orderflow
+    : s.order_flow && typeof s.order_flow === "object" ? s.order_flow
+    : intel.orderflow && typeof intel.orderflow === "object" ? intel.orderflow
+    : intel.order_flow && typeof intel.order_flow === "object" ? intel.order_flow
+    : {}
   );
 
   const qualityArc = document.getElementById("sys-quality-arc");
@@ -1987,6 +1984,7 @@ function _applySystemGauges(signalData){
     orderFlow.decision
     ?? orderFlow.decision_state
     ?? s.flow_decision
+    ?? intel.flow_decision
     ?? decision.flow_decision;
   const hasFlowDecision = flowDecisionSource !== null && flowDecisionSource !== undefined && String(flowDecisionSource).trim() !== "";
   const flowRaw = hasFlowDecision ? String(flowDecisionSource).toUpperCase() : "";
@@ -2026,7 +2024,7 @@ function _applySystemGauges(signalData){
     flowTextEl.textContent = flowState;
     flowTextEl.style.color = flowColor;
   }
-  const obiScore = _pickNum(orderFlow.obi, s.obi, orderFlow.obi_imbalance);
+  const obiScore = _pickNum(orderFlow.obi, s.obi, intel.obi, orderFlow.obi_imbalance);
   if(flowSubEl){
     flowSubEl.textContent = obiScore === null ? "OBI —" : `OBI ${Number(obiScore).toFixed(3)}`;
   }
