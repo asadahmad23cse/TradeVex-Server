@@ -1877,6 +1877,13 @@ class AppRuntime:
         combined_payload["drawdown_status"] = intelligence_bundle.get("drawdown_status", {})
         combined_payload["meta_output"] = intelligence_bundle.get("meta_output", {})
         combined_payload["adaptive_learning"] = intelligence_bundle.get("adaptive_learning", {})
+        combined_payload["orderflow"] = orderflow_payload
+        combined_payload["flow_decision"] = str(
+            orderflow_payload.get("decision_state", "NO_TRADE")
+        ).upper()
+        combined_payload["obi"] = float(
+            orderflow_payload.get("obi", 0.5)
+        )
         combined_payload["raw_confidence"] = float(combined_payload.get("confidence", 0.0))
         try:
             kelly_payload = intelligence_bundle.get("kelly_sizing", {})
