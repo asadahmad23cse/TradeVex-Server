@@ -2569,17 +2569,17 @@ function calcEMA(data, period) {
 }
 
 function computeVWAP(candles){
-  let cumPV = 0;
-  let cumVol = 0;
-  return candles.map((c)=>{
-    const typicalPrice = (c.high + c.low + c.close) / 3;
+  let cumPV = 0, cumVol = 0, lastDay = null;
+  return candles.map((c) => {
+    const day = new Date(c.time * 1000).toISOString().slice(0, 10);
+    if(day !== lastDay){          // new UTC day → reset
+      cumPV = 0; cumVol = 0; lastDay = day;
+    }
+    const tp = (c.high + c.low + c.close) / 3;
     const vol = Number(c.volume || 0);
-    cumPV += typicalPrice * vol;
+    cumPV += tp * vol;
     cumVol += vol;
-    return {
-      time: c.time,
-      value: cumVol > 0 ? (cumPV / cumVol) : c.close,
-    };
+    return { time: c.time, value: cumVol > 0 ? parseFloat((cumPV / cumVol).toFixed(2)) : c.close };
   });
 }
 
