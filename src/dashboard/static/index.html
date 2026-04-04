@@ -2092,6 +2092,7 @@ function _applySystemGauges(signalData){
   if(volTextEl){
     volTextEl.textContent = volState || "—";
     volTextEl.style.color = volState ? volColor : "#7f8da3";
+    volTextEl.style.display = volState ? "none" : "";
   }
   const atrPct = _pickNum(
     s.atr_pct,
@@ -2105,9 +2106,15 @@ function _applySystemGauges(signalData){
 
   const metaRingEl = document.getElementById("sys-meta-ring");
   const metaValEl = document.getElementById("sys-meta-value");
-  let metaConfidence = _pickNum(s.meta_confidence, metaOutput.confidence, s.confidence, decision.confidence);
+  let metaConfidence = s?.meta_confidence ?? s?.confidence ?? null;
   if(metaConfidence !== null){
-    metaConfidence = _toPctOrNull(metaConfidence);
+    metaConfidence = Number.parseFloat(metaConfidence);
+    if(Number.isFinite(metaConfidence)){
+      if(metaConfidence <= 1.0) metaConfidence = metaConfidence * 100;
+      metaConfidence = Math.min(100, Math.max(0, metaConfidence));
+    }else{
+      metaConfidence = null;
+    }
   }
   let metaColor = "#4a5068";
   if(metaConfidence !== null){
@@ -2128,6 +2135,17 @@ function _applySystemGauges(signalData){
 }
 
 function updateSystemGauges(signalData){
+  console.log('ORDERFLOW_DEBUG', {
+    top_level_keys: Object.keys(signalData || {}),
+    orderflow: signalData?.orderflow,
+    flow: signalData?.flow,
+    under_chart: signalData?.under_chart,
+    intel: signalData?.intel,
+    obi: signalData?.obi,
+    flow_decision: signalData?.flow_decision,
+    decision_flow: signalData?.decision_flow,
+  });
+
   _pendingGaugeSignal = signalData || null;
   if(!_gaugeBootReady){
     if(!_gaugeBootStarted){
