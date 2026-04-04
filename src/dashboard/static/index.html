@@ -1430,11 +1430,11 @@ const RANGE_DAYS_MAP = {
   "1Y": 365,
 };
 const LIMIT_MAP = {
-  "5m": 288,
-  "15m": 200,
-  "1h": 168,
-  "4h": 120,
-  "1d": 365,
+  "5m":  288,   // AUTO → ~24h of 5m bars
+  "15m": 200,   // AUTO → ~50h of 15m bars
+  "1h":  168,   // AUTO → 7 days of 1h bars
+  "4h":  180,   // AUTO → 30 days of 4h bars (was 120=20d, too short)
+  "1d":  365,   // AUTO → 1 year of daily bars
 };
 const INTERVAL_SECONDS = {"5m":300,"15m":900,"1h":3600,"4h":14400,"1d":86400};
 const DISPLAY_TZ = "Asia/Kolkata";
@@ -2281,9 +2281,10 @@ function resolveRange(range, tf){
 
 function computeCandleLimit(tf, range){
   const resolved = resolveRange(range, tf);
-  if(resolved === "ALL") return Math.min(1000, Math.max(50, LIMIT_MAP[tf] || 300));
+  if(resolved === "ALL") return 1000;                        // max bars always
   const days = RANGE_DAYS_MAP[resolved];
   if(!days){
+    // AUTO or unknown — use sensible TF default
     return Math.min(1000, Math.max(50, LIMIT_MAP[tf] || 200));
   }
   const step = INTERVAL_SECONDS[tf] || 900;
