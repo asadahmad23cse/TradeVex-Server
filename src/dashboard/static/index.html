@@ -681,6 +681,252 @@ body{
   color:#94a3b8;
   padding:10px 0 4px;
 }
+
+/* ── System Intelligence Gauges ───────────────────────────── */
+.sys-gauges-panel{
+  margin:0 12px 10px;
+  background:#0d1117;
+  border-top:1px solid #1e2a3a;
+  border-radius:10px;
+  padding:12px 16px;
+  max-height:130px;
+  overflow-y:auto;
+}
+.sys-gauges-label{
+  font-size:10px;
+  letter-spacing:.1em;
+  color:#4a5068;
+  text-transform:uppercase;
+  margin-bottom:8px;
+}
+.sys-gauges-row{
+  display:flex;
+  gap:8px;
+  flex-wrap:nowrap;
+}
+.sys-gauge-card{
+  width:20%;
+  min-width:0;
+  background:#0a0f1a;
+  border:1px solid #1a2332;
+  border-radius:6px;
+  padding:10px;
+  text-align:center;
+}
+.sys-card-label{
+  color:#7f8da3;
+  font-size:10px;
+  letter-spacing:.08em;
+  text-transform:uppercase;
+  margin-bottom:6px;
+}
+.sys-center-value{
+  font-family:"JetBrains Mono",monospace;
+  font-size:22px;
+  font-weight:800;
+  line-height:1;
+  color:#e6edf3;
+}
+.sys-center-sub{
+  font-family:"JetBrains Mono",monospace;
+  font-size:10px;
+  color:#7f8da3;
+  line-height:1.2;
+}
+.sys-half-wrap{
+  position:relative;
+  height:58px;
+}
+.sys-half-svg{
+  width:100%;
+  height:58px;
+}
+.sys-half-track{
+  fill:none;
+  stroke:rgba(74,80,104,.35);
+  stroke-width:8;
+}
+.sys-half-fill{
+  fill:none;
+  stroke:#4a5068;
+  stroke-width:8;
+  stroke-linecap:round;
+  stroke-dasharray:0 100;
+  transition:stroke-dasharray .6s ease, stroke .6s ease;
+}
+.sys-half-center{
+  position:absolute;
+  left:0;
+  right:0;
+  bottom:0;
+  display:flex;
+  justify-content:center;
+  align-items:flex-end;
+  gap:4px;
+}
+.sys-flow-wrap{
+  display:grid;
+  gap:6px;
+}
+.sys-flow-track{
+  position:relative;
+  width:100%;
+  height:10px;
+  border-radius:999px;
+  border:1px solid #1f2a3a;
+  background:linear-gradient(90deg, rgba(255,77,77,.12) 0%, rgba(74,80,104,.16) 50%, rgba(0,212,164,.12) 100%);
+  overflow:hidden;
+}
+.sys-flow-fill{
+  position:absolute;
+  top:0;
+  left:50%;
+  width:0%;
+  height:100%;
+  background:#4a5068;
+  transition:left .6s ease, width .6s ease, background .6s ease;
+}
+.sys-flow-mid{
+  position:absolute;
+  top:-1px;
+  bottom:-1px;
+  left:50%;
+  width:1px;
+  background:#4a5068;
+  opacity:.65;
+}
+.sys-flow-text{
+  font-family:"JetBrains Mono",monospace;
+  font-size:12px;
+  font-weight:700;
+  color:#9aa6bb;
+}
+.sys-flow-sub{
+  font-family:"JetBrains Mono",monospace;
+  font-size:10px;
+  color:#7f8da3;
+}
+.sys-reg-segments{
+  display:grid;
+  grid-template-columns:repeat(4,1fr);
+  gap:4px;
+}
+.sys-reg-seg{
+  border:1px solid #1f2a3a;
+  border-radius:999px;
+  font-size:8px;
+  padding:3px 0;
+  color:#5f6d84;
+  background:#0d1422;
+  transition:all .6s ease;
+}
+.sys-reg-seg.active{
+  color:#e6edf3;
+  border-color:var(--seg-color,#4a5068);
+  box-shadow:0 0 10px var(--seg-color,#4a5068);
+  background:var(--seg-color,#4a5068);
+}
+.sys-regime-text{
+  margin-top:6px;
+  font-family:"JetBrains Mono",monospace;
+  font-size:12px;
+  font-weight:700;
+  color:#4a5068;
+}
+.sys-vol-stack{
+  display:flex;
+  flex-direction:column;
+  gap:4px;
+  height:54px;
+}
+.sys-vol-bar{
+  border:1px solid #1f2a3a;
+  border-radius:6px;
+  font-size:9px;
+  flex:1;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  color:#5f6d84;
+  background:#0d1422;
+  transition:all .6s ease;
+}
+.sys-vol-bar.active{
+  color:#e6edf3;
+  border-color:var(--vol-color,#4a5068);
+  box-shadow:0 0 10px var(--vol-color,#4a5068);
+  background:var(--vol-color,#4a5068);
+}
+.sys-vol-text{
+  margin-top:4px;
+  font-family:"JetBrains Mono",monospace;
+  font-size:12px;
+  font-weight:700;
+  color:#9aa6bb;
+}
+.sys-vol-sub{
+  font-family:"JetBrains Mono",monospace;
+  font-size:10px;
+  color:#7f8da3;
+}
+.sys-ring-wrap{
+  position:relative;
+  width:72px;
+  height:72px;
+  margin:0 auto;
+}
+.sys-ring-svg{
+  width:72px;
+  height:72px;
+}
+.sys-ring-track{
+  fill:none;
+  stroke:rgba(74,80,104,.35);
+  stroke-width:7;
+}
+.sys-ring-fill{
+  fill:none;
+  stroke:#4a5068;
+  stroke-width:7;
+  stroke-linecap:round;
+  stroke-dasharray:0 188.5;
+  stroke-dashoffset:0;
+  transform:rotate(-90deg);
+  transform-origin:40px 40px;
+  transition:stroke-dasharray .6s ease, stroke .6s ease;
+}
+.sys-ring-tick{
+  stroke:#ffb347;
+  stroke-width:2.2;
+}
+.sys-ring-center{
+  position:absolute;
+  inset:0;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:center;
+  pointer-events:none;
+}
+.sys-meta-value{
+  font-family:"JetBrains Mono",monospace;
+  font-size:17px;
+  font-weight:800;
+  line-height:1;
+  color:#e6edf3;
+}
+.sys-meta-sub{
+  margin-top:3px;
+  font-size:10px;
+  color:#7f8da3;
+}
+
+@media (max-width: 980px){
+  .sys-gauges-row{flex-wrap:wrap;}
+  .sys-gauge-card{
+    width:calc(50% - 4px);
+  }
+}
 </style>
 </head>
 <body>
@@ -818,6 +1064,74 @@ body{
 
           <div class="signal"><div class="sig-row"><span>Algo</span><span id="algo" class="sig-val">--</span></div></div>
           <div class="signal"><div class="sig-row"><span>As Of UTC</span><span id="asof" class="sig-val">--</span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="system-gauges-panel" class="sys-gauges-panel">
+      <div class="sys-gauges-label">⚡ SYSTEM INTELLIGENCE</div>
+      <div class="sys-gauges-row">
+        <div class="sys-gauge-card">
+          <div class="sys-card-label">SIGNAL QUALITY</div>
+          <div class="sys-half-wrap">
+            <svg class="sys-half-svg" viewBox="0 0 120 70" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+              <path class="sys-half-track" d="M 10 60 A 50 50 0 0 1 110 60"></path>
+              <path id="sys-quality-arc" class="sys-half-fill" d="M 10 60 A 50 50 0 0 1 110 60" pathLength="100"></path>
+            </svg>
+            <div class="sys-half-center">
+              <span id="sys-quality-value" class="sys-center-value">—</span>
+              <span class="sys-center-sub">/ 100</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="sys-gauge-card">
+          <div class="sys-card-label">ORDER FLOW</div>
+          <div class="sys-flow-wrap">
+            <div class="sys-flow-track">
+              <div id="sys-flow-fill" class="sys-flow-fill"></div>
+              <div class="sys-flow-mid"></div>
+            </div>
+            <div id="sys-flow-text" class="sys-flow-text">—</div>
+            <div id="sys-flow-sub" class="sys-flow-sub">OBI —</div>
+          </div>
+        </div>
+
+        <div class="sys-gauge-card">
+          <div class="sys-card-label">REGIME</div>
+          <div class="sys-reg-segments">
+            <span id="sys-reg-trending" class="sys-reg-seg">TRENDING</span>
+            <span id="sys-reg-sideways" class="sys-reg-seg">SIDEWAYS</span>
+            <span id="sys-reg-squeeze" class="sys-reg-seg">SQUEEZE</span>
+            <span id="sys-reg-volatile" class="sys-reg-seg">VOLATILE</span>
+          </div>
+          <div id="sys-regime-text" class="sys-regime-text">—</div>
+        </div>
+
+        <div class="sys-gauge-card">
+          <div class="sys-card-label">VOLATILITY</div>
+          <div class="sys-vol-stack">
+            <div id="sys-vol-low" class="sys-vol-bar">LOW</div>
+            <div id="sys-vol-normal" class="sys-vol-bar">NORMAL</div>
+            <div id="sys-vol-expansion" class="sys-vol-bar">EXPANSION</div>
+          </div>
+          <div id="sys-vol-text" class="sys-vol-text">—</div>
+          <div id="sys-vol-sub" class="sys-vol-sub">ATR —</div>
+        </div>
+
+        <div class="sys-gauge-card">
+          <div class="sys-card-label">META CONFIDENCE</div>
+          <div class="sys-ring-wrap">
+            <svg class="sys-ring-svg" viewBox="0 0 80 80" aria-hidden="true">
+              <circle class="sys-ring-track" cx="40" cy="40" r="30"></circle>
+              <circle id="sys-meta-ring" class="sys-ring-fill" cx="40" cy="40" r="30"></circle>
+              <line class="sys-ring-tick" x1="40" y1="6" x2="40" y2="12" transform="rotate(144 40 40)"></line>
+            </svg>
+            <div class="sys-ring-center">
+              <div id="sys-meta-value" class="sys-meta-value">—</div>
+              <div class="sys-meta-sub">AI Sure</div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1163,6 +1477,9 @@ let sessionHigh = null;
 let sessionLow = null;
 let latestHistorySignals = [];
 let latestDecisionIntel = null;
+let _gaugeBootReady = false;
+let _gaugeBootStarted = false;
+let _pendingGaugeSignal = null;
 const API_CACHE = new Map();
 const API_INFLIGHT = new Map();
 const sparkPrices = [];
@@ -1596,6 +1913,251 @@ function setMiniBar(id, value, color){
   const safe = Math.max(0, Math.min(100, Number(value) || 0));
   el.style.width = `${safe}%`;
   el.style.background = color;
+}
+
+function _numOrNull(value){
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function _pickNum(...values){
+  for(const value of values){
+    const n = _numOrNull(value);
+    if(n !== null) return n;
+  }
+  return null;
+}
+
+function _clampNum(value, min, max){
+  return Math.max(min, Math.min(max, value));
+}
+
+function _toPctOrNull(value){
+  if(value === null) return null;
+  let n = Number(value);
+  if(!Number.isFinite(n)) return null;
+  if(n >= 0 && n <= 1) n *= 100;
+  return _clampNum(n, 0, 100);
+}
+
+function _setActiveClass(ids, activeId, colorVarName, color){
+  ids.forEach((id)=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.classList.remove("active");
+    el.style.removeProperty(colorVarName);
+  });
+  if(!activeId) return;
+  const activeEl = document.getElementById(activeId);
+  if(!activeEl) return;
+  activeEl.classList.add("active");
+  if(color){
+    activeEl.style.setProperty(colorVarName, color);
+  }
+}
+
+function _applySystemGauges(signalData){
+  const s = signalData && typeof signalData === "object" ? signalData : {};
+  const intel = latestDecisionIntel && typeof latestDecisionIntel === "object" ? latestDecisionIntel : {};
+  const decision = intel.decision_engine && typeof intel.decision_engine === "object" ? intel.decision_engine : {};
+  const metaOutput = intel.meta_output && typeof intel.meta_output === "object" ? intel.meta_output : {};
+  const orderFlow = (
+    s.orderflow && typeof s.orderflow === "object"
+      ? s.orderflow
+      : (s.order_flow && typeof s.order_flow === "object" ? s.order_flow : {})
+  );
+
+  const qualityArc = document.getElementById("sys-quality-arc");
+  const qualityValueEl = document.getElementById("sys-quality-value");
+  let quality = _pickNum(s.signal_strength, s.quality_score, decision.quality_score);
+  if(quality !== null){
+    quality = _toPctOrNull(quality);
+  }
+  let qualityColor = "#4a5068";
+  if(quality !== null){
+    if(quality <= 30) qualityColor = "#ff4d4d";
+    else if(quality <= 60) qualityColor = "#ffb347";
+    else qualityColor = "#00d4a4";
+  }
+  if(qualityArc){
+    qualityArc.style.strokeDasharray = `${quality === null ? 0 : quality.toFixed(2)} 100`;
+    qualityArc.style.stroke = qualityColor;
+  }
+  if(qualityValueEl){
+    qualityValueEl.textContent = quality === null ? "—" : String(Math.round(quality));
+  }
+
+  const flowFillEl = document.getElementById("sys-flow-fill");
+  const flowTextEl = document.getElementById("sys-flow-text");
+  const flowSubEl = document.getElementById("sys-flow-sub");
+  const flowDecisionSource =
+    orderFlow.decision
+    ?? orderFlow.decision_state
+    ?? s.flow_decision
+    ?? decision.flow_decision;
+  const hasFlowDecision = flowDecisionSource !== null && flowDecisionSource !== undefined && String(flowDecisionSource).trim() !== "";
+  const flowRaw = hasFlowDecision ? String(flowDecisionSource).toUpperCase() : "";
+  let flowState = "NEUTRAL";
+  if(flowRaw.includes("LONG") || flowRaw.includes("BULL")) flowState = "FAVOR LONG";
+  else if(flowRaw.includes("SHORT") || flowRaw.includes("BEAR")) flowState = "FAVOR SHORT";
+
+  let flowStrength = _pickNum(orderFlow.flow_strength, orderFlow.strength, orderFlow.bias_strength);
+  if(flowStrength === null){
+    const obiAbs = _pickNum(orderFlow.obi, s.obi, orderFlow.obi_imbalance);
+    flowStrength = obiAbs === null ? null : Math.abs(obiAbs);
+  }
+  if(flowStrength === null) flowStrength = 0;
+  if(flowStrength > 1) flowStrength = flowStrength > 100 ? 1 : flowStrength / 100;
+  flowStrength = _clampNum(Math.abs(flowStrength), 0, 1);
+
+  let flowColor = "#7f8da3";
+  let flowWidth = 0;
+  let flowLeft = 50;
+  if(!hasFlowDecision){
+    flowState = "—";
+  }else if(flowState === "FAVOR LONG"){
+    flowColor = "#00d4a4";
+    flowWidth = flowStrength * 50;
+    flowLeft = 50;
+  }else if(flowState === "FAVOR SHORT"){
+    flowColor = "#ff4d4d";
+    flowWidth = flowStrength * 50;
+    flowLeft = 50 - flowWidth;
+  }
+  if(flowFillEl){
+    flowFillEl.style.width = `${flowWidth.toFixed(2)}%`;
+    flowFillEl.style.left = `${flowLeft.toFixed(2)}%`;
+    flowFillEl.style.background = flowColor;
+  }
+  if(flowTextEl){
+    flowTextEl.textContent = flowState;
+    flowTextEl.style.color = flowColor;
+  }
+  const obiScore = _pickNum(orderFlow.obi, s.obi, orderFlow.obi_imbalance);
+  if(flowSubEl){
+    flowSubEl.textContent = obiScore === null ? "OBI —" : `OBI ${Number(obiScore).toFixed(3)}`;
+  }
+
+  const regimeRaw = String(
+    s.regime || s.market_regime || (s.market_overview && s.market_overview.regime) || decision.regime || ""
+  ).toUpperCase();
+  const regimeTextEl = document.getElementById("sys-regime-text");
+  let regimeDisplay = "—";
+  let regimeSegment = null;
+  if(regimeRaw){
+    regimeDisplay = regimeRaw.replaceAll("_", " ");
+    if(regimeRaw.includes("SQUEEZE") || regimeRaw.includes("COMPRESSION")) regimeSegment = "squeeze";
+    else if(regimeRaw.includes("VOLATILE") || regimeRaw.includes("HIGH_VOL") || regimeRaw.includes("EXPANSION")) regimeSegment = "volatile";
+    else if(regimeRaw.includes("SIDEWAYS") || regimeRaw.includes("RANGE") || regimeRaw.includes("CHOP")) regimeSegment = "sideways";
+    else regimeSegment = "trending";
+  }
+  let regimeColor = "#4a5068";
+  if(regimeRaw.includes("BULL")) regimeColor = "#00d4a4";
+  else if(regimeSegment === "trending") regimeColor = "#1a6fff";
+  else if(regimeSegment === "sideways") regimeColor = "#4a5068";
+  else if(regimeSegment === "squeeze") regimeColor = "#ffb347";
+  else if(regimeSegment === "volatile") regimeColor = "#ff4d4d";
+  _setActiveClass(
+    ["sys-reg-trending", "sys-reg-sideways", "sys-reg-squeeze", "sys-reg-volatile"],
+    regimeSegment ? `sys-reg-${regimeSegment}` : null,
+    "--seg-color",
+    regimeColor,
+  );
+  if(regimeTextEl){
+    regimeTextEl.textContent = regimeDisplay;
+    regimeTextEl.style.color = regimeRaw ? regimeColor : "#7f8da3";
+  }
+
+  const volRaw = String(
+    (s.volatility && s.volatility.volatility_regime)
+    || s.volatility_regime
+    || (s.market_overview && s.market_overview.volatility)
+    || decision.volatility_state
+    || ""
+  ).toUpperCase();
+  let volState = null;
+  if(volRaw){
+    if(volRaw.includes("LOW") || volRaw.includes("COMPRESSION")) volState = "LOW";
+    else if(volRaw.includes("EXPANSION") || volRaw.includes("HIGH") || volRaw.includes("VOLATILE")) volState = "EXPANSION";
+    else volState = "NORMAL";
+  }
+  const volColor = volState === "LOW" ? "#00d4a4" : volState === "EXPANSION" ? "#ff4d4d" : volState === "NORMAL" ? "#1a6fff" : "#4a5068";
+  _setActiveClass(
+    ["sys-vol-low", "sys-vol-normal", "sys-vol-expansion"],
+    volState ? `sys-vol-${volState.toLowerCase()}` : null,
+    "--vol-color",
+    volColor,
+  );
+  const volTextEl = document.getElementById("sys-vol-text");
+  if(volTextEl){
+    volTextEl.textContent = volState || "—";
+    volTextEl.style.color = volState ? volColor : "#7f8da3";
+    volTextEl.style.display = volState ? "none" : "";
+  }
+  const atrPct = _pickNum(
+    s.atr_pct,
+    s.volatility && s.volatility.atr_pct,
+    s.market_overview && s.market_overview.atr_pct,
+  );
+  const volSubEl = document.getElementById("sys-vol-sub");
+  if(volSubEl){
+    volSubEl.textContent = atrPct === null ? "ATR —" : `ATR ${Number(atrPct).toFixed(2)}%`;
+  }
+
+  const metaRingEl = document.getElementById("sys-meta-ring");
+  const metaValEl = document.getElementById("sys-meta-value");
+  let metaConfidence = s?.meta_confidence ?? s?.confidence ?? null;
+  if(metaConfidence !== null){
+    metaConfidence = Number.parseFloat(metaConfidence);
+    if(Number.isFinite(metaConfidence)){
+      if(metaConfidence <= 1.0) metaConfidence = metaConfidence * 100;
+      metaConfidence = Math.min(100, Math.max(0, metaConfidence));
+    }else{
+      metaConfidence = null;
+    }
+  }
+  let metaColor = "#4a5068";
+  if(metaConfidence !== null){
+    if(metaConfidence < 55) metaColor = "#ff4d4d";
+    else if(metaConfidence < 65) metaColor = "#ffb347";
+    else metaColor = "#00d4a4";
+  }
+  const ringCircumference = 2 * Math.PI * 30;
+  const ringFill = metaConfidence === null ? 0 : (ringCircumference * metaConfidence / 100.0);
+  if(metaRingEl){
+    metaRingEl.style.strokeDasharray = `${ringFill.toFixed(2)} ${ringCircumference.toFixed(2)}`;
+    metaRingEl.style.stroke = metaColor;
+  }
+  if(metaValEl){
+    metaValEl.textContent = metaConfidence === null ? "—" : `${Math.round(metaConfidence)}%`;
+    metaValEl.style.color = metaConfidence === null ? "#e6edf3" : metaColor;
+  }
+}
+
+function updateSystemGauges(signalData){
+  console.log('ORDERFLOW_DEBUG', {
+    top_level_keys: Object.keys(signalData || {}),
+    orderflow: signalData?.orderflow,
+    flow: signalData?.flow,
+    under_chart: signalData?.under_chart,
+    intel: signalData?.intel,
+    obi: signalData?.obi,
+    flow_decision: signalData?.flow_decision,
+    decision_flow: signalData?.decision_flow,
+  });
+
+  _pendingGaugeSignal = signalData || null;
+  if(!_gaugeBootReady){
+    if(!_gaugeBootStarted){
+      _gaugeBootStarted = true;
+      setTimeout(()=>{
+        _gaugeBootReady = true;
+        _applySystemGauges(_pendingGaugeSignal);
+      }, 800);
+    }
+    return;
+  }
+  _applySystemGauges(_pendingGaugeSignal);
 }
 
 function updateDecisionIntelPanels(intel, fallbackSignal, intelJson){
@@ -2426,6 +2988,7 @@ async function loadSignal(){
     latestDecisionIntel = (intelJson && typeof intelJson === "object" && !intelJson.error) ? intelJson : null;
     applySignalPayload(s, "btc_service");
     updateDecisionIntelPanels(latestDecisionIntel, s, intelJson);
+    updateSystemGauges(s);
     setPill("sig-pill","Signal API: /api/btc/signal",true);
   }catch(err){
     setPill("sig-pill","Signal API: offline",false);
@@ -2433,6 +2996,7 @@ async function loadSignal(){
     document.getElementById("sig-source").textContent=`source: unavailable (${err.message})`;
     latestDecisionIntel = null;
     updateDecisionIntelPanels(null, null, { error: err?.message || "fetch_failed" });
+    updateSystemGauges(null);
     updatePipelineTrace(null);
     updateConstraintFlags(null);
     updateOnChainSqsPanel(null);
