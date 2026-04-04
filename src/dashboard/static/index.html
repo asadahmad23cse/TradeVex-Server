@@ -1430,11 +1430,11 @@ const RANGE_DAYS_MAP = {
   "1Y": 365,
 };
 const LIMIT_MAP = {
-  "5m": 288,
-  "15m": 200,
-  "1h": 168,
-  "4h": 120,
-  "1d": 365,
+  "5m":  288,   // AUTO → ~24h of 5m bars
+  "15m": 200,   // AUTO → ~50h of 15m bars
+  "1h":  168,   // AUTO → 7 days of 1h bars
+  "4h":  180,   // AUTO → 30 days of 4h bars (was 120=20d, too short)
+  "1d":  365,   // AUTO → 1 year of daily bars
 };
 const INTERVAL_SECONDS = {"5m":300,"15m":900,"1h":3600,"4h":14400,"1d":86400};
 const DISPLAY_TZ = "Asia/Kolkata";
@@ -1456,6 +1456,7 @@ let reconnectTimer = null;
 let lastPrice = null;
 let lastSignalPayload = null;
 let activeTF = "15m";
+let _tfSwitchId = 0;
 let activeRange = "AUTO";
 let markerSourceInterval = "15m";
 let hasOpenTrade = false;
@@ -1465,6 +1466,7 @@ let sessionHigh = null;
 let sessionLow = null;
 let latestHistorySignals = [];
 let latestDecisionIntel = null;
+let latestOrderflow = null;
 let _gaugeBootReady = false;
 let _gaugeBootStarted = false;
 let _pendingGaugeSignal = null;
@@ -1950,7 +1952,8 @@ function _applySystemGauges(signalData){
   const decision = intel.decision_engine && typeof intel.decision_engine === "object" ? intel.decision_engine : {};
   const metaOutput = intel.meta_output && typeof intel.meta_output === "object" ? intel.meta_output : {};
   const orderFlow = (
-    s.orderflow && typeof s.orderflow === "object" ? s.orderflow
+    (latestOrderflow && typeof latestOrderflow === "object") ? latestOrderflow
+    : s.orderflow && typeof s.orderflow === "object" ? s.orderflow
     : s.order_flow && typeof s.order_flow === "object" ? s.order_flow
     : intel.orderflow && typeof intel.orderflow === "object" ? intel.orderflow
     : intel.order_flow && typeof intel.order_flow === "object" ? intel.order_flow
@@ -2110,17 +2113,6 @@ function _applySystemGauges(signalData){
 }
 
 function updateSystemGauges(signalData){
-  console.log('ORDERFLOW_DEBUG', {
-    top_level_keys: Object.keys(signalData || {}),
-    orderflow: signalData?.orderflow,
-    flow: signalData?.flow,
-    under_chart: signalData?.under_chart,
-    intel: signalData?.intel,
-    obi: signalData?.obi,
-    flow_decision: signalData?.flow_decision,
-    decision_flow: signalData?.decision_flow,
-  });
-
   _pendingGaugeSignal = signalData || null;
   if(!_gaugeBootReady){
     if(!_gaugeBootStarted){
@@ -2289,9 +2281,10 @@ function resolveRange(range, tf){
 
 function computeCandleLimit(tf, range){
   const resolved = resolveRange(range, tf);
-  if(resolved === "ALL") return Math.min(1000, Math.max(50, LIMIT_MAP[tf] || 300));
+  if(resolved === "ALL") return 1000;                        // max bars always
   const days = RANGE_DAYS_MAP[resolved];
   if(!days){
+    // AUTO or unknown — use sensible TF default
     return Math.min(1000, Math.max(50, LIMIT_MAP[tf] || 200));
   }
   const step = INTERVAL_SECONDS[tf] || 900;
@@ -2445,6 +2438,12 @@ function initChart(){
     priceFormat: { type: 'volume' },
     priceScaleId: 'volume',
     scaleMargins: { top: 0.85, bottom: 0 },
+    lastValueVisible: false,
+    priceLineVisible: false,
+  });
+  chart.priceScale('volume').applyOptions({
+    visible: false,
+    scaleMargins: { top: 0.85, bottom: 0 },
   });
   ema21Series = chart.addLineSeries({ color: '#ffeb3b', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
   ema50Series = chart.addLineSeries({ color: '#2196f3', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
@@ -2577,17 +2576,17 @@ function calcEMA(data, period) {
 }
 
 function computeVWAP(candles){
-  let cumPV = 0;
-  let cumVol = 0;
-  return candles.map((c)=>{
-    const typicalPrice = (c.high + c.low + c.close) / 3;
+  let cumPV = 0, cumVol = 0, lastDay = null;
+  return candles.map((c) => {
+    const day = new Date(c.time * 1000).toISOString().slice(0, 10);
+    if(day !== lastDay){          // new UTC day → reset
+      cumPV = 0; cumVol = 0; lastDay = day;
+    }
+    const tp = (c.high + c.low + c.close) / 3;
     const vol = Number(c.volume || 0);
-    cumPV += typicalPrice * vol;
+    cumPV += tp * vol;
     cumVol += vol;
-    return {
-      time: c.time,
-      value: cumVol > 0 ? (cumPV / cumVol) : c.close,
-    };
+    return { time: c.time, value: cumVol > 0 ? parseFloat((cumPV / cumVol).toFixed(2)) : c.close };
   });
 }
 
@@ -2704,6 +2703,7 @@ function clearSignalLines(){
 }
 
 function buildSessionMarkers(){
+  if(activeTF === "1d") return [];
   if(!Array.isArray(points) || !points.length) return [];
   const markers = [];
   const seen = new Set();
@@ -2795,10 +2795,11 @@ function updateLiveSignalMarker(signalPayload){
   applyMarkers();
 }
 
-async function loadCandles(){
+async function loadCandles(noCache = false){
   const limit = computeCandleLimit(activeTF, activeRange);
   const resolvedRange = resolveRange(activeRange, activeTF);
-  const json = await fetchJSON(`/api/btc/candles?interval=${encodeURIComponent(activeTF)}&limit=${limit}`, { ttlMs: 15000, timeoutMs: 9000 });
+  const url = `/api/btc/candles?interval=${encodeURIComponent(activeTF)}&limit=${limit}`;
+  const json = await fetchJSON(url, { ttlMs: 15000, timeoutMs: 9000, noCache });
   if(!json) throw new Error("candles fetch failed");
   const data=(json.data||[]).map(d=>({
     time:Number(d.time),
@@ -3416,8 +3417,10 @@ function connectWebSocket(){
 }
 
 async function switchTimeframe(tf){
-  activeTF=tf;
+  activeTF = tf;
+  const myId = ++_tfSwitchId;          // snapshot this switch's ID
   setTfActive();
+  activeRange = "AUTO";                // ← reset range to default for new TF
   applyRangeButtonsAvailability();
   setRangeActive();
   applyChartTimeScaleForTF();
@@ -3436,17 +3439,22 @@ async function switchTimeframe(tf){
   applyMarkers();
   clearSignalLines();
   try{
-    await loadCandles();
+    await loadCandles(true);   // true = force fresh fetch, skip cache
+    if(myId !== _tfSwitchId) return;   // ← stale: user already switched again
     await loadSignalMarkers();
+    if(myId !== _tfSwitchId) return;
     await loadSignal();
+    if(myId !== _tfSwitchId) return;
     chart.timeScale().fitContent();
   }catch(err){
-    document.getElementById("status").textContent=`Load failed (${err.message})`;
+    if(myId === _tfSwitchId)
+      document.getElementById("status").textContent = `Load failed (${err.message})`;
   }
 }
 
 async function switchRange(range){
   activeRange = String(range || "AUTO").toUpperCase();
+  const myId = ++_tfSwitchId;
   applyRangeButtonsAvailability();
   setRangeActive();
   points = [];
@@ -3464,11 +3472,14 @@ async function switchRange(range){
   applyMarkers();
   clearSignalLines();
   try{
-    await loadCandles();
+    await loadCandles(true);
+    if(myId !== _tfSwitchId) return;
     await loadSignalMarkers();
+    if(myId !== _tfSwitchId) return;
     chart.timeScale().fitContent();
   }catch(err){
-    document.getElementById("status").textContent=`Load failed (${err.message})`;
+    if(myId === _tfSwitchId)
+      document.getElementById("status").textContent = `Load failed (${err.message})`;
   }
 }
 
@@ -3639,6 +3650,7 @@ init();
         intel_fetch_json(intel_urls.volume),
         intel_fetch_json(intel_urls.volatility),
       ]);
+      if(results[0] && typeof results[0] === "object") latestOrderflow = results[0];
       intel_render_flow(results[0] || {});
       intel_render_volume(results[1] || {});
       intel_render_volatility(results[2] || {});
