@@ -688,9 +688,9 @@ body{
   background:#0d1117;
   border-top:1px solid #1e2a3a;
   border-radius:10px;
-  padding:12px 16px;
-  max-height:130px;
-  overflow-y:auto;
+  padding:8px 14px;
+  max-height:120px;
+  overflow:hidden;
 }
 .sys-gauges-label{
   font-size:10px;
@@ -703,6 +703,8 @@ body{
   display:flex;
   gap:8px;
   flex-wrap:nowrap;
+  align-items:stretch;
+  height:96px;
 }
 .sys-gauge-card{
   width:20%;
@@ -712,6 +714,11 @@ body{
   border-radius:6px;
   padding:10px;
   text-align:center;
+  height:96px;
+  overflow:hidden;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
 }
 .sys-card-label{
   color:#7f8da3;
@@ -857,18 +864,6 @@ body{
   box-shadow:0 0 10px var(--vol-color,#4a5068);
   background:var(--vol-color,#4a5068);
 }
-.sys-vol-text{
-  margin-top:4px;
-  font-family:"JetBrains Mono",monospace;
-  font-size:12px;
-  font-weight:700;
-  color:#9aa6bb;
-}
-.sys-vol-sub{
-  font-family:"JetBrains Mono",monospace;
-  font-size:10px;
-  color:#7f8da3;
-}
 .sys-ring-wrap{
   position:relative;
   width:72px;
@@ -922,9 +917,9 @@ body{
 }
 
 @media (max-width: 980px){
-  .sys-gauges-row{flex-wrap:wrap;}
+  .sys-gauges-row{flex-wrap:nowrap;height:96px;}
   .sys-gauge-card{
-    width:calc(50% - 4px);
+    width:20%;
   }
 }
 </style>
@@ -1115,8 +1110,6 @@ body{
             <div id="sys-vol-normal" class="sys-vol-bar">NORMAL</div>
             <div id="sys-vol-expansion" class="sys-vol-bar">EXPANSION</div>
           </div>
-          <div id="sys-vol-text" class="sys-vol-text">—</div>
-          <div id="sys-vol-sub" class="sys-vol-sub">ATR —</div>
         </div>
 
         <div class="sys-gauge-card">
@@ -1458,7 +1451,7 @@ const MARKER_FETCH_MAP = {
   "1d": { interval: "1d", limit: 365 },
 };
 
-let chart, candleSeries, volumeSeries, ema21Series, ema50Series;
+let chart, candleSeries, volumeSeries, ema21Series, ema50Series, vwapSeries, bbUpperSeries, bbLowerSeries, bbMidSeries;
 let points = [];
 let markersRaw = [];
 let markersMap = new Map();
@@ -2088,30 +2081,14 @@ function _applySystemGauges(signalData){
     "--vol-color",
     volColor,
   );
-  const volTextEl = document.getElementById("sys-vol-text");
-  if(volTextEl){
-    volTextEl.textContent = volState || "—";
-    volTextEl.style.color = volState ? volColor : "#7f8da3";
-    volTextEl.style.display = volState ? "none" : "";
-  }
-  const atrPct = _pickNum(
-    s.atr_pct,
-    s.volatility && s.volatility.atr_pct,
-    s.market_overview && s.market_overview.atr_pct,
-  );
-  const volSubEl = document.getElementById("sys-vol-sub");
-  if(volSubEl){
-    volSubEl.textContent = atrPct === null ? "ATR —" : `ATR ${Number(atrPct).toFixed(2)}%`;
-  }
-
   const metaRingEl = document.getElementById("sys-meta-ring");
   const metaValEl = document.getElementById("sys-meta-value");
   let metaConfidence = s?.meta_confidence ?? s?.confidence ?? null;
   if(metaConfidence !== null){
     metaConfidence = Number.parseFloat(metaConfidence);
     if(Number.isFinite(metaConfidence)){
-      if(metaConfidence <= 1.0) metaConfidence = metaConfidence * 100;
-      metaConfidence = Math.min(100, Math.max(0, metaConfidence));
+      if(metaConfidence > 0 && metaConfidence <= 1.0) metaConfidence = metaConfidence * 100;
+      metaConfidence = Math.round(Math.min(100, Math.max(0, metaConfidence)));
     }else{
       metaConfidence = null;
     }
@@ -2437,7 +2414,22 @@ function initChart(){
     localization:{locale:"en-IN"},
     grid:{vertLines:{color:"rgba(148,163,184,.08)"},horzLines:{color:"rgba(148,163,184,.08)"}},
     rightPriceScale:{borderColor:"rgba(148,163,184,.25)"},
-    timeScale:{borderColor:"rgba(148,163,184,.25)",timeVisible:true,secondsVisible:false}
+    timeScale:{borderColor:"rgba(148,163,184,.25)",timeVisible:true,secondsVisible:false},
+    crosshair:{
+      mode:1,
+      vertLine:{
+        color:"rgba(148,163,184,0.3)",
+        width:1,
+        style:1,
+        labelBackgroundColor:"#1e2a3a",
+      },
+      horzLine:{
+        color:"rgba(148,163,184,0.3)",
+        width:1,
+        style:1,
+        labelBackgroundColor:"#1e2a3a",
+      },
+    },
   });
   candleSeries=chart.addCandlestickSeries({
     upColor: '#00c853',
@@ -2446,6 +2438,10 @@ function initChart(){
     borderUpColor: '#00c853',
     wickDownColor: '#ff1744',
     wickUpColor: '#00c853',
+    borderVisible: false,
+    priceLineVisible: true,
+    priceLineWidth: 1,
+    priceLineColor: 'rgba(255,255,255,0.3)',
   });
   volumeSeries = chart.addHistogramSeries({
     priceFormat: { type: 'volume' },
@@ -2454,6 +2450,38 @@ function initChart(){
   });
   ema21Series = chart.addLineSeries({ color: '#ffeb3b', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
   ema50Series = chart.addLineSeries({ color: '#2196f3', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
+  vwapSeries = chart.addLineSeries({
+    color: '#ff6b35',
+    lineWidth: 1,
+    lineStyle: 2,
+    priceLineVisible: false,
+    lastValueVisible: true,
+    title: 'VWAP',
+  });
+  bbUpperSeries = chart.addLineSeries({
+    color: 'rgba(100,180,255,0.5)',
+    lineWidth: 1,
+    lineStyle: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    title: 'BB Upper',
+  });
+  bbLowerSeries = chart.addLineSeries({
+    color: 'rgba(100,180,255,0.5)',
+    lineWidth: 1,
+    lineStyle: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    title: 'BB Lower',
+  });
+  bbMidSeries = chart.addLineSeries({
+    color: 'rgba(100,180,255,0.25)',
+    lineWidth: 1,
+    lineStyle: 0,
+    priceLineVisible: false,
+    lastValueVisible: false,
+    title: 'BB Mid',
+  });
 
   chart.subscribeCrosshairMove((param)=>{
     const tip=document.getElementById('marker-tooltip');
@@ -2550,6 +2578,36 @@ function calcEMA(data, period) {
   return ema;
 }
 
+function computeVWAP(candles){
+  let cumPV = 0;
+  let cumVol = 0;
+  return candles.map((c)=>{
+    const typicalPrice = (c.high + c.low + c.close) / 3;
+    const vol = Number(c.volume || 0);
+    cumPV += typicalPrice * vol;
+    cumVol += vol;
+    return {
+      time: c.time,
+      value: cumVol > 0 ? (cumPV / cumVol) : c.close,
+    };
+  });
+}
+
+function computeBB(candles, period=20, mult=2){
+  const result = { upper: [], mid: [], lower: [] };
+  for(let i=0; i<candles.length; i++){
+    if(i < period - 1) continue;
+    const slice = candles.slice(i - period + 1, i + 1).map((c)=>c.close);
+    const mean = slice.reduce((a,b)=>a+b, 0) / period;
+    const variance = slice.reduce((a,b)=>a + Math.pow(b - mean, 2), 0) / period;
+    const sd = Math.sqrt(variance);
+    result.upper.push({ time: candles[i].time, value: mean + mult * sd });
+    result.mid.push({ time: candles[i].time, value: mean });
+    result.lower.push({ time: candles[i].time, value: mean - mult * sd });
+  }
+  return result;
+}
+
 function syncChartData(fit=false){
   const candles = points.map(p=>({
     time:Number(p.time),
@@ -2557,8 +2615,22 @@ function syncChartData(fit=false){
     high:Number(p.high),
     low:Number(p.low),
     close:Number(p.close),
+    volume:Number(p.volume || 0),
   }));
   candleSeries.setData(candles);
+
+  if(candles.length >= 20){
+    if(vwapSeries) vwapSeries.setData(computeVWAP(candles));
+    const bb = computeBB(candles);
+    if(bbUpperSeries) bbUpperSeries.setData(bb.upper);
+    if(bbMidSeries) bbMidSeries.setData(bb.mid);
+    if(bbLowerSeries) bbLowerSeries.setData(bb.lower);
+  }else{
+    if(vwapSeries) vwapSeries.setData([]);
+    if(bbUpperSeries) bbUpperSeries.setData([]);
+    if(bbMidSeries) bbMidSeries.setData([]);
+    if(bbLowerSeries) bbLowerSeries.setData([]);
+  }
 
   const volumeData = points.map(c => ({
     time: Number(c.time),
@@ -2633,9 +2705,42 @@ function clearSignalLines(){
   window._sigLines = [];
 }
 
+function buildSessionMarkers(){
+  if(!Array.isArray(points) || !points.length) return [];
+  const markers = [];
+  const seen = new Set();
+  for(const p of points){
+    const tsMs = Number(p.time) * 1000;
+    if(!Number.isFinite(tsMs)) continue;
+    const d = new Date(tsMs);
+    const h = d.getUTCHours();
+    const m = d.getUTCMinutes();
+    let session = null;
+    if(h === 0 && m === 0) session = { text: "A", color: "#4fc3f7" };
+    else if(h === 7 && m === 0) session = { text: "L", color: "#81c784" };
+    else if(h === 13 && m === 30) session = { text: "N", color: "#ffb74d" };
+    if(!session) continue;
+    const key = `${p.time}:${session.text}`;
+    if(seen.has(key)) continue;
+    seen.add(key);
+    markers.push({
+      time: Number(p.time),
+      position: "belowBar",
+      color: session.color,
+      shape: "circle",
+      text: session.text,
+      size: 0.5,
+    });
+  }
+  return markers;
+}
+
 function applyMarkers(){
   if(!candleSeries || typeof candleSeries.setMarkers!=="function") return;
-  const merged = liveSignalMarker ? [...markersRaw, liveSignalMarker] : markersRaw;
+  const sessionMarkers = buildSessionMarkers();
+  const base = [...markersRaw, ...sessionMarkers];
+  const merged = liveSignalMarker ? [...base, liveSignalMarker] : base;
+  merged.sort((a,b)=>Number(a.time)-Number(b.time));
   candleSeries.setMarkers(merged);
 }
 
@@ -3323,6 +3428,10 @@ async function switchTimeframe(tf){
   volumeSeries.setData([]);
   ema21Series.setData([]);
   ema50Series.setData([]);
+  if(vwapSeries) vwapSeries.setData([]);
+  if(bbUpperSeries) bbUpperSeries.setData([]);
+  if(bbMidSeries) bbMidSeries.setData([]);
+  if(bbLowerSeries) bbLowerSeries.setData([]);
   markersRaw = [];
   markersMap.clear();
   liveSignalMarker = null;
@@ -3347,6 +3456,10 @@ async function switchRange(range){
   volumeSeries.setData([]);
   ema21Series.setData([]);
   ema50Series.setData([]);
+  if(vwapSeries) vwapSeries.setData([]);
+  if(bbUpperSeries) bbUpperSeries.setData([]);
+  if(bbMidSeries) bbMidSeries.setData([]);
+  if(bbLowerSeries) bbLowerSeries.setData([]);
   markersRaw = [];
   markersMap.clear();
   liveSignalMarker = null;
