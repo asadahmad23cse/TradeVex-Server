@@ -2438,6 +2438,12 @@ function initChart(){
     priceFormat: { type: 'volume' },
     priceScaleId: 'volume',
     scaleMargins: { top: 0.85, bottom: 0 },
+    lastValueVisible: false,
+    priceLineVisible: false,
+  });
+  chart.priceScale('volume').applyOptions({
+    visible: false,
+    scaleMargins: { top: 0.85, bottom: 0 },
   });
   ema21Series = chart.addLineSeries({ color: '#ffeb3b', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
   ema50Series = chart.addLineSeries({ color: '#2196f3', lineWidth: 1, priceLineVisible: false, lastValueVisible: false });
@@ -2697,6 +2703,7 @@ function clearSignalLines(){
 }
 
 function buildSessionMarkers(){
+  if(activeTF === "1d") return [];
   if(!Array.isArray(points) || !points.length) return [];
   const markers = [];
   const seen = new Set();
@@ -2788,10 +2795,11 @@ function updateLiveSignalMarker(signalPayload){
   applyMarkers();
 }
 
-async function loadCandles(){
+async function loadCandles(noCache = false){
   const limit = computeCandleLimit(activeTF, activeRange);
   const resolvedRange = resolveRange(activeRange, activeTF);
-  const json = await fetchJSON(`/api/btc/candles?interval=${encodeURIComponent(activeTF)}&limit=${limit}`, { ttlMs: 15000, timeoutMs: 9000 });
+  const url = `/api/btc/candles?interval=${encodeURIComponent(activeTF)}&limit=${limit}`;
+  const json = await fetchJSON(url, { ttlMs: 15000, timeoutMs: 9000, noCache });
   if(!json) throw new Error("candles fetch failed");
   const data=(json.data||[]).map(d=>({
     time:Number(d.time),
@@ -3431,7 +3439,7 @@ async function switchTimeframe(tf){
   applyMarkers();
   clearSignalLines();
   try{
-    await loadCandles();
+    await loadCandles(true);   // true = force fresh fetch, skip cache
     if(myId !== _tfSwitchId) return;   // ← stale: user already switched again
     await loadSignalMarkers();
     if(myId !== _tfSwitchId) return;
@@ -3446,6 +3454,7 @@ async function switchTimeframe(tf){
 
 async function switchRange(range){
   activeRange = String(range || "AUTO").toUpperCase();
+  const myId = ++_tfSwitchId;
   applyRangeButtonsAvailability();
   setRangeActive();
   points = [];
@@ -3463,11 +3472,14 @@ async function switchRange(range){
   applyMarkers();
   clearSignalLines();
   try{
-    await loadCandles();
+    await loadCandles(true);
+    if(myId !== _tfSwitchId) return;
     await loadSignalMarkers();
+    if(myId !== _tfSwitchId) return;
     chart.timeScale().fitContent();
   }catch(err){
-    document.getElementById("status").textContent=`Load failed (${err.message})`;
+    if(myId === _tfSwitchId)
+      document.getElementById("status").textContent = `Load failed (${err.message})`;
   }
 }
 
