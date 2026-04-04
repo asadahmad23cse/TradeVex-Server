@@ -1456,6 +1456,7 @@ let reconnectTimer = null;
 let lastPrice = null;
 let lastSignalPayload = null;
 let activeTF = "15m";
+let _tfSwitchId = 0;
 let activeRange = "AUTO";
 let markerSourceInterval = "15m";
 let hasOpenTrade = false;
@@ -1465,6 +1466,7 @@ let sessionHigh = null;
 let sessionLow = null;
 let latestHistorySignals = [];
 let latestDecisionIntel = null;
+let latestOrderflow = null;
 let _gaugeBootReady = false;
 let _gaugeBootStarted = false;
 let _pendingGaugeSignal = null;
@@ -1950,7 +1952,8 @@ function _applySystemGauges(signalData){
   const decision = intel.decision_engine && typeof intel.decision_engine === "object" ? intel.decision_engine : {};
   const metaOutput = intel.meta_output && typeof intel.meta_output === "object" ? intel.meta_output : {};
   const orderFlow = (
-    s.orderflow && typeof s.orderflow === "object" ? s.orderflow
+    (latestOrderflow && typeof latestOrderflow === "object") ? latestOrderflow
+    : s.orderflow && typeof s.orderflow === "object" ? s.orderflow
     : s.order_flow && typeof s.order_flow === "object" ? s.order_flow
     : intel.orderflow && typeof intel.orderflow === "object" ? intel.orderflow
     : intel.order_flow && typeof intel.order_flow === "object" ? intel.order_flow
@@ -2110,17 +2113,6 @@ function _applySystemGauges(signalData){
 }
 
 function updateSystemGauges(signalData){
-  console.log('ORDERFLOW_DEBUG', {
-    top_level_keys: Object.keys(signalData || {}),
-    orderflow: signalData?.orderflow,
-    flow: signalData?.flow,
-    under_chart: signalData?.under_chart,
-    intel: signalData?.intel,
-    obi: signalData?.obi,
-    flow_decision: signalData?.flow_decision,
-    decision_flow: signalData?.decision_flow,
-  });
-
   _pendingGaugeSignal = signalData || null;
   if(!_gaugeBootReady){
     if(!_gaugeBootStarted){
@@ -3416,8 +3408,10 @@ function connectWebSocket(){
 }
 
 async function switchTimeframe(tf){
-  activeTF=tf;
+  activeTF = tf;
+  const myId = ++_tfSwitchId;          // snapshot this switch's ID
   setTfActive();
+  activeRange = "AUTO";                // ← reset range to default for new TF
   applyRangeButtonsAvailability();
   setRangeActive();
   applyChartTimeScaleForTF();
@@ -3437,11 +3431,15 @@ async function switchTimeframe(tf){
   clearSignalLines();
   try{
     await loadCandles();
+    if(myId !== _tfSwitchId) return;   // ← stale: user already switched again
     await loadSignalMarkers();
+    if(myId !== _tfSwitchId) return;
     await loadSignal();
+    if(myId !== _tfSwitchId) return;
     chart.timeScale().fitContent();
   }catch(err){
-    document.getElementById("status").textContent=`Load failed (${err.message})`;
+    if(myId === _tfSwitchId)
+      document.getElementById("status").textContent = `Load failed (${err.message})`;
   }
 }
 
@@ -3639,6 +3637,7 @@ init();
         intel_fetch_json(intel_urls.volume),
         intel_fetch_json(intel_urls.volatility),
       ]);
+      if(results[0] && typeof results[0] === "object") latestOrderflow = results[0];
       intel_render_flow(results[0] || {});
       intel_render_volume(results[1] || {});
       intel_render_volatility(results[2] || {});
