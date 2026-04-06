@@ -45,6 +45,7 @@ body{
   border:1px solid var(--line);background:rgba(15,23,36,.7);color:var(--muted)
 }
 .pill.ok{color:var(--long);background:var(--okbg);border-color:rgba(34,197,94,.35)}
+.pill.warn{color:#fbbf24;background:rgba(251,191,36,.12);border-color:rgba(251,191,36,.45)}
 .pill.bad{color:var(--short);background:var(--badbg);border-color:rgba(239,68,68,.35)}
 .pill.link{
   color:#cdd6e3;
@@ -913,7 +914,50 @@ body{
   color:#7f8da3;
 }
 
+.perf-scoreboard{
+  background:#0d1117;
+  border:1px solid var(--line);
+  border-radius:10px;
+  padding:10px 14px;
+  margin-bottom:10px;
+}
+.perf-title{
+  font-size:10px;
+  letter-spacing:.1em;
+  color:#4a5068;
+  text-transform:uppercase;
+  margin-bottom:8px;
+}
+.perf-grid{
+  display:grid;
+  grid-template-columns:repeat(6,1fr);
+  gap:6px;
+}
+.perf-card{
+  background:#0a0f1a;
+  border:1px solid #1a2332;
+  border-radius:6px;
+  padding:8px 6px;
+  text-align:center;
+}
+.perf-label{
+  font-size:9px;
+  color:#7f8da3;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  margin-bottom:4px;
+}
+.perf-val{
+  font-family:"JetBrains Mono",monospace;
+  font-size:14px;
+  font-weight:800;
+}
+.perf-positive{color:#00d4a4;}
+.perf-negative{color:#ff4d4d;}
+.perf-neutral{color:#e6edf3;}
+
 @media (max-width: 980px){
+  .perf-grid{grid-template-columns:repeat(3,1fr);}
   .sys-gauges-row{flex-wrap:nowrap;height:96px;}
   .sys-gauge-card{
     width:20%;
@@ -1163,6 +1207,36 @@ body{
 
           <div class="signal"><div class="sig-row"><span>Algo</span><span id="algo" class="sig-val">--</span></div></div>
           <div class="signal"><div class="sig-row"><span>As Of UTC</span><span id="asof" class="sig-val">--</span></div></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="perf-scoreboard" class="perf-scoreboard">
+      <div class="perf-title">⚡ TODAY'S PERFORMANCE</div>
+      <div class="perf-grid">
+        <div class="perf-card">
+          <div class="perf-label">P&L Today</div>
+          <div id="perf-pnl" class="perf-val perf-neutral">—</div>
+        </div>
+        <div class="perf-card">
+          <div class="perf-label">Win Rate</div>
+          <div id="perf-wr" class="perf-val perf-neutral">—</div>
+        </div>
+        <div class="perf-card">
+          <div class="perf-label">Trades</div>
+          <div id="perf-trades" class="perf-val perf-neutral">—</div>
+        </div>
+        <div class="perf-card">
+          <div class="perf-label">Streak</div>
+          <div id="perf-streak" class="perf-val perf-neutral">—</div>
+        </div>
+        <div class="perf-card">
+          <div class="perf-label">Sharpe</div>
+          <div id="perf-sharpe" class="perf-val perf-neutral">—</div>
+        </div>
+        <div class="perf-card">
+          <div class="perf-label">Max DD</div>
+          <div id="perf-dd" class="perf-val perf-neutral">—</div>
         </div>
       </div>
     </div>
@@ -1549,13 +1623,19 @@ function setPill(id, text, ok){
   el.textContent = text;
   el.className = "pill " + (ok ? "ok" : "bad");
 }
-function setIntelPill(ok, errorMessage){
+function setIntelPill(ok, errorMessage, degraded){
   const el = document.getElementById("intel-pill");
   if(!el) return;
-  if(ok){
+  if(ok && !degraded){
     el.textContent = "🟢 Intelligence: Live";
     el.className = "pill ok";
     el.removeAttribute("title");
+    return;
+  }
+  if(ok && degraded){
+    el.textContent = "🟡 Intelligence: Degraded";
+    el.className = "pill warn";
+    el.title = "Serving cached or Redis signal data; BTC service on port 9000 unreachable or stale.";
     return;
   }
   el.textContent = "🔴 Intelligence API unavailable";
@@ -1711,6 +1791,32 @@ function updatePositionSizingPanel(s){
   wrEl.textContent = Number.isFinite(p) ? `${Math.round(p * 100)}% (${Number.isFinite(trades) ? trades : 0} trades)` : "--";
   rrEl.textContent = Number.isFinite(b) ? `${b.toFixed(2)}x` : "--";
   bucketEl.textContent = bucket;
+}
+async function updatePerfScoreboard(){
+  try{
+    const stats = await fetchJSON('/api/btc/signal/stats', { ttlMs: 15000 });
+    if(!stats) return;
+    const set = (id, val, isPos) => {
+      const el = document.getElementById(id);
+      if(!el) return;
+      el.textContent = val;
+      el.className = 'perf-val ' + (isPos === null ? 'perf-neutral' : isPos ? 'perf-positive' : 'perf-negative');
+    };
+    const pnl = Number(stats.total_pnl_pct ?? 0);
+    const wr = Number(stats.win_rate_pct ?? 0);
+    const trades = Number(stats.total_trades ?? 0);
+    const streak = Number(stats.current_streak ?? 0);
+    const sharpe = Number(stats.sharpe ?? 0);
+    const dd = Number(stats.max_dd_pct ?? 0);
+    set('perf-pnl', `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`, pnl >= 0);
+    set('perf-wr', `${wr.toFixed(1)}%`, wr >= 52);
+    set('perf-trades', `${trades}`, null);
+    set('perf-streak', streak >= 0 ? `▲${streak}W` : `▼${Math.abs(streak)}L`, streak >= 0);
+    set('perf-sharpe', sharpe.toFixed(2), sharpe >= 1.0);
+    set('perf-dd', `${dd.toFixed(2)}%`, dd > -2.0);
+  }catch(_){
+    // Keep silent; scoreboard should never break the main signal refresh.
+  }
 }
 function fmt(v){return Number(v).toLocaleString("en-US",{maximumFractionDigits:2});}
 function fmtPx(v){if(v===null||v===undefined||Number.isNaN(Number(v))) return "—"; return fmt(v);}
@@ -3076,7 +3182,7 @@ async function loadSignal(){
     const [s, histJson, intelJson] = await Promise.all([
       fetchJSON(`/api/btc/signal?interval=${encodeURIComponent(activeTF)}`, { ttlMs: 5000, timeoutMs: 15000 }),
       fetchJSON('/api/btc/signal/history?limit=20', { ttlMs: 7000, timeoutMs: 8000 }),
-      fetchJSON('/api/btc/decision-intelligence', { ttlMs: 9000, timeoutMs: 10000 }),
+      fetchJSON(`/api/btc/decision-intelligence?interval=${encodeURIComponent(activeTF)}`, { ttlMs: 9000, timeoutMs: 10000 }),
     ]);
     if(histJson){
       const signals = Array.isArray(histJson?.signals) ? histJson.signals : [];
@@ -3087,16 +3193,30 @@ async function loadSignal(){
       }
     }
     if(!s) throw new Error("signal fetch failed");
-    const intelOk = Boolean(intelJson && typeof intelJson === "object" && !intelJson.error);
-    setIntelPill(intelOk, intelJson?.error);
-    latestDecisionIntel = (intelJson && typeof intelJson === "object" && !intelJson.error) ? intelJson : null;
+    const intelHasErr = Boolean(intelJson && intelJson.error);
+    const intelOk = Boolean(intelJson && typeof intelJson === "object" && !intelHasErr);
+    const intelDegraded = Boolean(
+      intelOk && (
+        intelJson.degraded === true
+        || intelJson.stale === true
+        || intelJson.source === "redis_signal_fallback"
+        || intelJson.source === "dashboard_signal_fallback"
+      )
+    );
+    if (!intelOk && s && typeof s === "object" && (s.signal != null || "confidence" in s)) {
+      setIntelPill(true, "", true);
+    } else {
+      setIntelPill(intelOk, intelJson?.error, intelDegraded);
+    }
+    latestDecisionIntel = (intelJson && typeof intelJson === "object" && !intelHasErr) ? intelJson : null;
     applySignalPayload(s, "btc_service");
     updateDecisionIntelPanels(latestDecisionIntel, s, intelJson);
     updateSystemGauges(s);
+    await updatePerfScoreboard();
     setPill("sig-pill","Signal API: /api/btc/signal",true);
   }catch(err){
     setPill("sig-pill","Signal API: offline",false);
-    setIntelPill(false, err?.message);
+    setIntelPill(false, err?.message, false);
     document.getElementById("sig-source").textContent=`source: unavailable (${err.message})`;
     latestDecisionIntel = null;
     updateDecisionIntelPanels(null, null, { error: err?.message || "fetch_failed" });

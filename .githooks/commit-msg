@@ -1,0 +1,17 @@
+#!/usr/bin/env sh
+set -eu
+
+msg_file="$1"
+first_line="$(sed -n '1p' "$msg_file" | tr -d '\r')"
+
+case "$first_line" in
+  feat:\ *|fix:\ *|refactor:\ *|docs:\ *|chore:\ *)
+    exit 0
+    ;;
+  *)
+    echo "Invalid commit message format." >&2
+    echo "Use one of: feat:, fix:, refactor:, docs:, chore:" >&2
+    echo "Example: feat: add orderflow payload to combined signal" >&2
+    exit 1
+    ;;
+esac

@@ -4,6 +4,23 @@
 
 ---
 
+## CI (GitHub Actions)
+
+[![CI](https://github.com/asadahmad23cse/Alpha-Forge/actions/workflows/ci.yml/badge.svg)](https://github.com/asadahmad23cse/Alpha-Forge/actions/workflows/ci.yml)
+
+CI runs on:
+- Pull requests targeting `main`
+- Pushes to non-`main` branches
+
+It performs:
+- Dependency install (if `package.json` exists)
+- Lint (if `lint` script exists)
+- Tests (if `test` script exists)
+
+Pull requests should pass CI checks before merging into `main`.
+
+---
+
 ## Architecture (15 Layers)
 
 ```
@@ -504,6 +521,73 @@ Default: **SQLite** at `data/signals.db`. Set `database.url` to a Postgres conne
 | 5-stage capital ramp | De Prado Ch.14 approach; KS-test catches paper/live distribution drift |
 | Async parallel pipeline | Reduces intraday latency by ~3× via concurrent per-asset processing |
 | SQLite → Postgres option | Zero-ops default; one config change for production DB |
+
+---
+
+## Git Workflow (Protected Main)
+
+Direct push to `main` is blocked by a local Git `pre-push` hook to keep history clean and enforce code review through pull requests.
+
+### Branch Naming
+- `feature/<name>`
+- `fix/<name>`
+- `hotfix/<name>`
+
+### Recommended Flow
+- `feature/*` or `fix/*` -> Pull Request -> `main`
+- Optional release flow: `feature/*` -> `dev` -> `main`
+
+### Commit Message Policy
+Local `commit-msg` hook accepts only:
+- `feat: ...`
+- `fix: ...`
+- `refactor: ...`
+- `docs: ...`
+- `chore: ...`
+
+### Hook Setup
+```bash
+git config core.hooksPath .githooks
+```
+
+### How to Create a Branch
+```bash
+git checkout -b feature/my-change
+```
+
+### How to Test Hooks
+```bash
+# should fail on main
+git checkout main
+git push
+
+# should fail for invalid commit message
+git commit -m "update stuff"
+
+# should pass
+git commit -m "feat: add risk guard"
+```
+
+Hooks path:
+- `.githooks/pre-push`
+- `.githooks/pre-commit`
+- `.githooks/commit-msg`
+
+---
+
+## Strict Git Rules
+
+- `main` is logically protected: direct commit and direct push are blocked by local Git hooks.
+- All changes must follow: `feature/*` (or `fix/*` / `hotfix/*`) -> push branch -> PR -> merge.
+- Direct targets to `main` are rejected with: `Direct push to main is forbidden.`
+
+Recommended start:
+```bash
+git checkout -b feature/my-change
+```
+
+PR rule:
+- Pull requests must pass required checks before merge.
 
 ---
 

@@ -6,7 +6,7 @@ WebSocket at /ws broadcasts new signals in real-time.
 5 pages: Live Signals, Portfolio, History, Factor Analysis, Regime Monitor.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import asyncio
 import json
 import logging
@@ -18,13 +18,20 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 import redis
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect  # type: ignore[import]
+from fastapi import (  # type: ignore[import]
+    FastAPI,
+    HTTPException,
+    Query,
+    Request,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.responses import HTMLResponse, JSONResponse, Response  # type: ignore[import]
 from fastapi.staticfiles import StaticFiles  # type: ignore[import]
 from starlette.middleware.base import BaseHTTPMiddleware  # type: ignore[import]
 from src.data.news_feed import get_btc_news
 from src.data.signal_history import get_history as get_signal_history, get_stats as get_signal_stats
-from src.dashboard.btc_service import BitcoinMarketService
+from src.dashboard.btc_service import INTERVAL_TO_MS, BitcoinMarketService
 from src.dashboard.focus_engine import FocusQuantEngine
 from src.options import ExpiryTracker, OptionsEngine
 from src.compliance import SEBIComplianceEngine
@@ -613,6 +620,99 @@ def _extract_probability_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return block
 
 
+def _btc_redis_payload_is_unusable(payload: dict[str, Any]) -> bool:
+    """
+    True when a Redis JSON blob is only an error/placeholder so we should try
+    the next key (e.g. btc:signal) or upstream instead of treating it as data.
+    """
+    err = payload.get("error")
+    if err is None or err == "":
+        return False
+    if not isinstance(err, str):
+        return False
+    if isinstance(payload.get("decision_engine"), dict) and payload["decision_engine"]:
+        return False
+    if payload.get("signal") is not None:
+        return False
+    if any(k in payload for k in ("up_prob", "down_prob", "probability")):
+        return False
+    return True
+
+
+def _redis_get_json(key: str) -> dict[str, Any] | None:
+    try:
+        raw = r.get(key)
+        if not raw:
+            return None
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
+def _minimal_decision_intelligence_from_signal(
+    sig: dict[str, Any],
+    *,
+    source: str = "redis_signal_fallback",
+) -> dict[str, Any]:
+    """
+    Build a decision-intelligence-shaped dict from btc:signal when upstream is down.
+    Marked stale/degraded for UI.
+    """
+    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    signal = str(sig.get("signal", "HOLD")).upper()
+    conf = float(sig.get("confidence", 0.0) or 0.0)
+    prob_in = sig.get("probability") if isinstance(sig.get("probability"), dict) else {}
+    up = float(prob_in.get("up_prob", 0.0) or 0.0)
+    down = float(prob_in.get("down_prob", 0.0) or 0.0)
+    sw = float(prob_in.get("sideways_prob", max(0.0, 100.0 - up - down)) or 0.0)
+    dom = str(prob_in.get("dominant") or prob_in.get("dominant_state") or "SIDEWAYS").upper()
+    if signal == "LONG":
+        dom = "LONG"
+    elif signal == "SHORT":
+        dom = "SHORT"
+
+    de = (
+        sig.get("decision_engine")
+        if isinstance(sig.get("decision_engine"), dict)
+        else {
+            "final_score": conf,
+            "decision": signal if signal in ("LONG", "SHORT") else "HOLD",
+        }
+    )
+    out: dict[str, Any] = {
+        "decision_engine": dict(de),
+        "decision_breakdown": dict(sig.get("decision_breakdown", {}))
+        if isinstance(sig.get("decision_breakdown"), dict)
+        else {},
+        "probability": {
+            "up_prob": round(up, 2),
+            "down_prob": round(down, 2),
+            "sideways_prob": round(sw, 2),
+            "dominant_state": dom,
+            "dominant": dom,
+            "calibration_score": round(conf, 2),
+        },
+        "execution_plan": dict(sig.get("execution_plan", {}))
+        if isinstance(sig.get("execution_plan"), dict)
+        else {},
+        "trade_verdict": dict(sig.get("trade_verdict", {}))
+        if isinstance(sig.get("trade_verdict"), dict)
+        else {},
+        "meta_decision": dict(sig.get("meta_decision", {}))
+        if isinstance(sig.get("meta_decision"), dict)
+        else {},
+        "meta_labeling": dict(sig.get("meta_labeling", {}))
+        if isinstance(sig.get("meta_labeling"), dict)
+        else {},
+        "as_of_utc": sig.get("as_of_utc") or sig.get("timestamp") or now,
+        "stale": True,
+        "degraded": True,
+        "source": source,
+    }
+    return out
+
+
 def _normalize_decision_intelligence_payload(payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, dict):
         return {}
@@ -685,29 +785,42 @@ async def _btc_proxy_payload(
             if raw:
                 payload = json.loads(raw)
                 if isinstance(payload, dict):
+                    if _btc_redis_payload_is_unusable(payload):
+                        continue
                     payload["stale"] = False
                     _btc_proxy_cache[name] = dict(payload)
                     return payload
         except Exception:
             continue
 
-    # 2) Upstream fallback
+    # 2) Upstream fallback (retry each URL attempt up to 3 times, 1s between tries)
     try:
         async with httpx.AsyncClient(timeout=8.0) as client:
             for url in upstream_urls:
-                try:
-                    resp = await client.get(url)
-                    resp.raise_for_status()
-                    payload = resp.json()
-                    if isinstance(payload, dict):
-                        payload["stale"] = False
-                        _btc_proxy_cache[name] = dict(payload)
-                        return payload
-                    wrapped = {"data": payload, "stale": False}
-                    _btc_proxy_cache[name] = dict(wrapped)
-                    return wrapped
-                except Exception:
-                    continue
+                last_exc: Exception | None = None
+                for attempt in range(3):
+                    try:
+                        resp = await client.get(url)
+                        resp.raise_for_status()
+                        payload = resp.json()
+                        if isinstance(payload, dict):
+                            payload["stale"] = False
+                            _btc_proxy_cache[name] = dict(payload)
+                            return payload
+                        wrapped = {"data": payload, "stale": False}
+                        _btc_proxy_cache[name] = dict(wrapped)
+                        return wrapped
+                    except Exception as exc:
+                        last_exc = exc
+                        if attempt < 2:
+                            await asyncio.sleep(1.0)
+                        continue
+                if last_exc is not None:
+                    logger.debug(
+                        "BTC proxy upstream failed after retries %s: %s",
+                        url,
+                        last_exc,
+                    )
     except Exception:
         pass
 
@@ -1278,7 +1391,8 @@ async def btc_execution_proxy():
 
 
 @app.get("/api/btc/decision-intelligence")
-async def btc_decision_intelligence_proxy():
+async def btc_decision_intelligence_proxy(interval: str = Query("15m")):
+    iv = interval if interval in INTERVAL_TO_MS else "15m"
     payload = await _btc_proxy_payload(
         name="decision_intelligence",
         redis_key=["btc:intelligence", "btc:decision", "btc:signal"],
@@ -1289,11 +1403,41 @@ async def btc_decision_intelligence_proxy():
         ],
     )
     if not isinstance(payload, dict):
+        payload = {}
+
+    if payload.get("error") == "upstream_unavailable":
+        sig_only = _redis_get_json("btc:signal")
+        if sig_only and (
+            sig_only.get("signal") is not None
+            or "confidence" in sig_only
+            or isinstance(sig_only.get("probability"), dict)
+        ):
+            payload = _minimal_decision_intelligence_from_signal(sig_only)
+
+    if payload.get("error") == "upstream_unavailable" and _btc_service is not None:
+        try:
+            live_sig = _btc_service.get_realtime_signal(interval=iv)
+            if isinstance(live_sig, dict) and (
+                live_sig.get("signal") is not None
+                or "confidence" in live_sig
+                or isinstance(live_sig.get("probability"), dict)
+            ):
+                payload = _minimal_decision_intelligence_from_signal(
+                    live_sig,
+                    source="dashboard_signal_fallback",
+                )
+        except Exception as exc:
+            logger.warning("decision-intelligence dashboard signal fallback failed: %s", exc)
+
+    if payload.get("error") == "upstream_unavailable":
         return {"error": "upstream_unavailable", "stale": True}
 
     normalized = _normalize_decision_intelligence_payload(payload)
     if normalized.get("error"):
-        return normalized
+        if isinstance(normalized.get("decision_engine"), dict) and normalized["decision_engine"]:
+            normalized.pop("error", None)
+        else:
+            return normalized
 
     if not normalized.get("probability"):
         prob_payload = await _btc_proxy_payload(
@@ -1326,6 +1470,9 @@ async def btc_decision_intelligence_proxy():
 
     if not isinstance(normalized.get("decision_breakdown"), dict):
         normalized["decision_breakdown"] = {}
+    for meta_k in ("stale", "degraded", "source"):
+        if meta_k in payload:
+            normalized[meta_k] = payload[meta_k]
     return normalized
 
 

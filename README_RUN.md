@@ -37,6 +37,12 @@ python main.py --mode backtest --engine wfo --ticker RELIANCE.NS --train_days 25
 # Full event-driven backtest
 python main.py --mode backtest --engine full --ticker AAPL --config config.runtime.8001.yaml
 
+# Combined project validation (default quick: WFO + full backtest + accuracy report)
+python main.py --mode validate --ticker AAPL --train_days 252 --config config.runtime.8001.yaml --start 2023-01-01 --end 2025-12-31 --output data/validation_aapl.json --validation_profile quick
+
+# Full validation (slower, adds CPCV robustness test)
+python main.py --mode validate --ticker AAPL --train_days 252 --config config.runtime.8001.yaml --start 2023-01-01 --end 2025-12-31 --output data/validation_aapl_full.json --validation_profile full
+
 # Capacity
 python main.py --mode capacity --ticker RELIANCE.NS --config config.runtime.8001.yaml
 python main.py --mode capacity --ticker ALL --config config.runtime.8001.yaml
@@ -86,4 +92,3 @@ If `dashboard.auth.enabled: true`, get token from:
 Use token in:
 - `Authorization: Bearer <token>`
 - or `?token=...` for WebSocket `/ws`
-

@@ -94,7 +94,7 @@ class BacktestResult:
 
         result = {
             "ticker": self.ticker,
-            "period": f"{self.start} → {self.end}",
+            "period": f"{self.start} to {self.end}",
             "total_trades": len(closed),
             "win_rate": round(len(wins) / len(closed) * 100, 2),
             "avg_win_pct": round(avg_win, 3),

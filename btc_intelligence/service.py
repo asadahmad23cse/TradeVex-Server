@@ -68,6 +68,8 @@ from btc_intelligence.services import (
     SignalAggregator,
     StrategyEngine,
     StrategyEngineConfig,
+    TradeThrottle,
+    TradeThrottleConfig,
     ValidationConfig,
     ValidationEngine,
     WalkForwardConfig,
@@ -83,6 +85,7 @@ MAX_OPEN_SIGNALS = 1
 MIN_HOLD_SECONDS = 300
 MIN_PRICE_MOVE_PCT = 0.05
 MAX_HOLD_SECONDS = 14400
+MTF_ALIGNMENT_REQUIRED = True
 
 
 class AppRuntime:
@@ -175,6 +178,7 @@ class AppRuntime:
             ),
         )
         self.paper = PaperTradeBook()
+        self.trade_throttle = TradeThrottle(TradeThrottleConfig())
         self.hub = LiveWebSocketHub()
         self.notifier = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id)
 
@@ -275,10 +279,21 @@ class AppRuntime:
                 await self.buffer.set_monitoring(monitoring)
                 await self.buffer.set_edge_stats(self.stacker.current_edges())
                 snapshot['monitoring_stats'] = monitoring
+                current_price = self._extract_current_price(snapshot)
+                try:
+                    forced_closed = self.paper.check_forced_exits(
+                        current_price=current_price,
+                        now_utc=datetime.now(timezone.utc),
+                    )
+                    if forced_closed:
+                        logger.info('Forced exits closed trades: %s', ', '.join(forced_closed))
+                        await asyncio.to_thread(self._refresh_btc_open_signals, current_price)
+                except Exception as exc:
+                    logger.debug('Forced exit check fallback: %s', exc)
 
                 if str(drawdown_status.get('action', 'NORMAL')).upper() == 'HALT':
                     logger.info('Drawdown circuit breaker active; skipping signal generation cycle')
-                    await asyncio.to_thread(self._refresh_btc_open_signals, self._extract_current_price(snapshot))
+                    await asyncio.to_thread(self._refresh_btc_open_signals, current_price)
                     await asyncio.sleep(settings.feature_eval_interval_sec)
                     continue
 
@@ -288,9 +303,10 @@ class AppRuntime:
 
                 last_close = int(snapshot.get('last_15m_close_time', 0))
                 if last_close <= int(snapshot.get('last_feature_eval_close_time', 0)):
-                    self._mark_to_market(snapshot)
-                    state = build_feature_state(snapshot)
-                    regime = classify_regime(snapshot, state)
+                    with np.errstate(invalid='ignore', divide='ignore'):
+                        self._mark_to_market(snapshot)
+                        state = build_feature_state(snapshot)
+                        regime = classify_regime(snapshot, state)
                     await self._publish_intelligence_state(
                         snapshot,
                         state,
@@ -300,22 +316,23 @@ class AppRuntime:
                     await asyncio.sleep(2)
                     continue
 
-                state = build_feature_state(snapshot)
-                vol_payload = volatility_tradeability(state.volatility)
-                await self.buffer.set_volatility_tradeability(vol_payload)
+                with np.errstate(invalid='ignore', divide='ignore'):
+                    state = build_feature_state(snapshot)
+                    vol_payload = volatility_tradeability(state.volatility)
+                    await self.buffer.set_volatility_tradeability(vol_payload)
 
-                regime = classify_regime(snapshot, state)
-                payload = self.engine.build(
-                    snapshot=snapshot,
-                    state=state,
-                    regime=regime,
-                    sequence_vectors=list(self.feature_seq),
-                    monitoring_stats=monitoring,
-                    auto_pause=bool(monitoring['auto_pause']),
-                )
+                    regime = classify_regime(snapshot, state)
+                    payload = self.engine.build(
+                        snapshot=snapshot,
+                        state=state,
+                        regime=regime,
+                        sequence_vectors=list(self.feature_seq),
+                        monitoring_stats=monitoring,
+                        auto_pause=bool(monitoring['auto_pause']),
+                    )
 
-                vec, _ = state.to_vector(direction='LONG', regime=regime.regime)
-                self.feature_seq.append(vec.squeeze(0))
+                    vec, _ = state.to_vector(direction='LONG', regime=regime.regime)
+                    self.feature_seq.append(vec.squeeze(0))
 
                 await self.buffer.mark_feature_eval(last_close)
                 intelligence_payload = await self._publish_intelligence_state(
@@ -522,6 +539,26 @@ class AppRuntime:
             return float(snapshot.get('binance_rest', {}).get('mark_price', 0.0))
         except Exception:
             return 0.0
+
+    def _check_mtf_alignment(self, signal: str, mtf_bias: dict[str, Any]) -> tuple[bool, str]:
+        """Require 4h and 1h trend to align with proposed trade direction."""
+        if not MTF_ALIGNMENT_REQUIRED:
+            return True, "mtf_check_disabled"
+
+        signal_upper = str(signal or "").upper()
+        bias_4h = str(mtf_bias.get("bias_4h", "NEUTRAL")).upper()
+        bias_1h = str(mtf_bias.get("bias_1h", "NEUTRAL")).upper()
+
+        if signal_upper == "LONG":
+            if "BEARISH" in bias_4h:
+                return False, f"counter_trend_long_blocked_4h_{bias_4h}"
+            if "BEARISH" in bias_1h and "BEARISH" in bias_4h:
+                return False, f"counter_trend_long_blocked_1h_{bias_1h}"
+        elif signal_upper == "SHORT":
+            if "BULLISH" in bias_4h:
+                return False, f"counter_trend_short_blocked_4h_{bias_4h}"
+
+        return True, "mtf_aligned"
 
     @staticmethod
     def _calc_signal_pnl_pct(signal: str, entry_price: float, current_price: float) -> float:
@@ -843,6 +880,7 @@ class AppRuntime:
             blockers=list(decision_payload.get("blockers", [])),
             calibration_error=float(adaptive_meta.get("calibration", {}).get("calibration_error", 0.0)),
             drift_level=str(drift_payload.get("drift_level", "LOW")),
+            regime=normalized_regime,
             edge_decay=bool(adaptive_meta.get("edge_decay", {}).get("decay_detected", False)),
         )
         drawdown_action = str(drawdown_status.get("action", monitoring_stats.get("drawdown_action", ""))).upper()
@@ -1973,35 +2011,86 @@ class AppRuntime:
 
         signal = str(payload.get('signal', 'HOLD'))
         if signal in {'LONG', 'SHORT'} and self.paper.open_position is None:
-            entry_zone = payload.get('entry_zone', [0, 0])
-            entry = (float(entry_zone[0]) + float(entry_zone[1])) / 2.0
-            meta_confidence = float(payload.get('meta_confidence', 0.0))
-            if meta_confidence <= 0.0:
-                meta_output = (
-                    self._latest_intelligence_bundle.get('meta_output', {})
-                    if isinstance(self._latest_intelligence_bundle, dict)
+            now_utc = datetime.now(timezone.utc)
+            mtf_context = (
+                payload.get('mtf_bias')
+                if isinstance(payload.get('mtf_bias'), dict)
+                else {}
+            )
+            if not mtf_context and isinstance(self._latest_intelligence_bundle, dict):
+                mtf_context = (
+                    self._latest_intelligence_bundle.get('mtf_bias')
+                    if isinstance(self._latest_intelligence_bundle.get('mtf_bias'), dict)
                     else {}
                 )
-                if isinstance(meta_output, dict):
-                    meta_confidence = float(meta_output.get('confidence', payload.get('confidence', 0.0)))
-                else:
-                    meta_confidence = float(payload.get('confidence', 0.0))
-            opened = self.paper.open(
-                direction=signal,
-                entry=entry,
-                stop=float(payload.get('stop_loss', 0.0)),
-                tp1=float(payload.get('take_profit', {}).get('TP1', 0.0)),
-                tp2=float(payload.get('take_profit', {}).get('TP2', 0.0)),
-                tp3=float(payload.get('take_profit', {}).get('TP3', 0.0)),
-                size_btc=float(payload.get('position_size_btc', 0.0)),
-                confidence=meta_confidence,
+            bias_4h = str(
+                payload.get('mtf_bias_4h')
+                or mtf_context.get('bias_4h')
+                or self._latest_intelligence_bundle.get('mtf_bias_4h', 'NEUTRAL')
+            ).upper()
+            bias_1h = str(
+                payload.get('mtf_bias_1h')
+                or mtf_context.get('bias_1h')
+                or self._latest_intelligence_bundle.get('mtf_bias_1h', 'NEUTRAL')
+            ).upper()
+            mtf_ok, mtf_reason = self._check_mtf_alignment(
+                signal=signal,
+                mtf_bias={"bias_4h": bias_4h, "bias_1h": bias_1h},
             )
-            if opened:
-                self._open_trade_context = {
-                    'factors': list(payload.get('factors_present', [])),
-                    'confidence': float(meta_confidence),
-                    'strategy': str(payload.get('strategy', 'NONE')),
-                }
+            if not mtf_ok:
+                logger.info(
+                    'Paper trade blocked by MTF alignment gate: signal=%s bias_4h=%s bias_1h=%s reason=%s',
+                    signal,
+                    bias_4h,
+                    bias_1h,
+                    mtf_reason,
+                )
+            else:
+                regime_label = str(
+                    payload.get('regime')
+                    or payload.get('market_regime')
+                    or payload.get('regime_name')
+                    or self._latest_intelligence_bundle.get('regime', 'SIDEWAYS')
+                )
+                can_open, throttle_reason = self.trade_throttle.can_trade(regime=regime_label, now=now_utc)
+                if not can_open:
+                    logger.info(
+                        'Paper trade blocked by throttle: signal=%s regime=%s reason=%s',
+                        signal,
+                        regime_label,
+                        throttle_reason,
+                    )
+                else:
+                    entry_zone = payload.get('entry_zone', [0, 0])
+                    entry = (float(entry_zone[0]) + float(entry_zone[1])) / 2.0
+                    meta_confidence = float(payload.get('meta_confidence', 0.0))
+                    if meta_confidence <= 0.0:
+                        meta_output = (
+                            self._latest_intelligence_bundle.get('meta_output', {})
+                            if isinstance(self._latest_intelligence_bundle, dict)
+                            else {}
+                        )
+                        if isinstance(meta_output, dict):
+                            meta_confidence = float(meta_output.get('confidence', payload.get('confidence', 0.0)))
+                        else:
+                            meta_confidence = float(payload.get('confidence', 0.0))
+                    opened = self.paper.open(
+                        direction=signal,
+                        entry=entry,
+                        stop=float(payload.get('stop_loss', 0.0)),
+                        tp1=float(payload.get('take_profit', {}).get('TP1', 0.0)),
+                        tp2=float(payload.get('take_profit', {}).get('TP2', 0.0)),
+                        tp3=float(payload.get('take_profit', {}).get('TP3', 0.0)),
+                        size_btc=float(payload.get('position_size_btc', 0.0)),
+                        confidence=meta_confidence,
+                        regime=regime_label,
+                    )
+                    if opened:
+                        self._open_trade_context = {
+                            'factors': list(payload.get('factors_present', [])),
+                            'confidence': float(meta_confidence),
+                            'strategy': str(payload.get('strategy', 'NONE')),
+                        }
 
         closed = self._mark_to_market(snapshot)
         if closed:
@@ -2060,7 +2149,22 @@ class AppRuntime:
         if not candles:
             return None
         last_price = float(candles[-1].get('close', 0.0))
-        return self.paper.mark_to_market(last_price)
+        closed = self.paper.mark_to_market(last_price)
+        if closed:
+            direction = str(closed.get('direction', 'LONG')).upper()
+            entry = float(closed.get('entry', 0.0))
+            exit_price = float(closed.get('exit', 0.0))
+            if entry > 0:
+                pnl_pct = ((entry - exit_price) / entry) * 100.0 if direction == 'SHORT' else ((exit_price - entry) / entry) * 100.0
+            else:
+                pnl_pct = 0.0
+            closed_at = str(closed.get('closed_at_utc', '')).strip()
+            try:
+                closed_now = datetime.fromisoformat(closed_at.replace('Z', '+00:00')) if closed_at else datetime.now(timezone.utc)
+            except Exception:
+                closed_now = datetime.now(timezone.utc)
+            self.trade_throttle.record_trade(pnl_pct=pnl_pct, now=closed_now)
+        return closed
 
     @staticmethod
     def _rr_from_reason(reason: str) -> float:
@@ -2189,6 +2293,16 @@ class AppRuntime:
         return await self.retrainer.run(data_path=data_path, out_dir=out)
 
     async def open_paper_trade(self, payload: dict[str, Any]) -> dict[str, Any]:
+        now_utc = datetime.now(timezone.utc)
+        regime_label = str(payload.get('regime', 'SIDEWAYS'))
+        can_open, throttle_reason = self.trade_throttle.can_trade(regime=regime_label, now=now_utc)
+        if not can_open:
+            logger.info(
+                'Manual paper trade blocked by throttle: regime=%s reason=%s',
+                regime_label,
+                throttle_reason,
+            )
+            return {'opened': False, 'open_position': self.paper.open_position is not None, 'reason': throttle_reason}
         opened = self.paper.open(
             direction=str(payload.get('direction', 'LONG')).upper(),
             entry=float(payload.get('entry', 0.0)),
@@ -2198,6 +2312,7 @@ class AppRuntime:
             tp3=float(payload.get('tp3', 0.0)),
             size_btc=float(payload.get('size_btc', 0.0)),
             confidence=float(payload.get('confidence', 100.0)),
+            regime=regime_label,
         )
         return {'opened': opened, 'open_position': self.paper.open_position is not None}
 
@@ -2213,6 +2328,12 @@ class AppRuntime:
                 pnl_pct = ((entry - exit_price) / entry) * 100.0 if direction == 'SHORT' else ((exit_price - entry) / entry) * 100.0
             else:
                 pnl_pct = 0.0
+            closed_at = str(closed.get('closed_at_utc', '')).strip()
+            try:
+                closed_now = datetime.fromisoformat(closed_at.replace('Z', '+00:00')) if closed_at else datetime.now(timezone.utc)
+            except Exception:
+                closed_now = datetime.now(timezone.utc)
+            self.trade_throttle.record_trade(pnl_pct=pnl_pct, now=closed_now)
             reason = str(closed.get('reason', 'timeout')).lower()
             outcome = 'TP' if reason.startswith('tp') else 'SL' if reason in {'stop', 'sl'} else 'TIMEOUT'
             if self._open_signal_state is not None:

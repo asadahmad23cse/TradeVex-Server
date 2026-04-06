@@ -103,7 +103,7 @@ class WFOValidator:
         for alpha_thr in self.alpha_thresholds:
             for ic_win in self.ic_windows:
                 ir = self._run_wfo(df, alpha_thr, ic_win)
-                status = "✓ PASS" if ir >= self.ir_threshold else "✗ FAIL"
+                status = "PASS" if ir >= self.ir_threshold else "FAIL"
                 print(f"  alpha_thr={alpha_thr:.2f} | ic_window={ic_win:3d}d | OOS IR={ir:+.3f}  {status}")
                 all_results.append({
                     "alpha_threshold": alpha_thr,
@@ -122,9 +122,9 @@ class WFOValidator:
         print(f"\n{'='*60}")
         print(f"  Best params: alpha_threshold={best['alpha_threshold']:.2f} | ic_window={best['ic_window']}d | OOS IR={best['oos_ir']:+.3f}")
         if passing:
-            print(f"  ✓ {len(passing)} / {len(all_results)} parameter sets passed IR > {self.ir_threshold}")
+            print(f"  PASS: {len(passing)} / {len(all_results)} parameter sets passed IR > {self.ir_threshold}")
         else:
-            print(f"  ✗ NO parameter sets passed IR > {self.ir_threshold} — system not ready for live trading")
+            print(f"  FAIL: no parameter sets passed IR > {self.ir_threshold}; system not ready for live trading")
         print(f"{'='*60}\n")
 
         result_payload = {

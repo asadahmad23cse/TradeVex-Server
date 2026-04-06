@@ -11,6 +11,7 @@ from .position_sizer import KellyConfig, KellyPositionSizer
 from .probability_service import ProbabilityInput, ProbabilityService
 from .signal_aggregator import AggregatorConfig, SignalAggregator
 from .strategy_engine import StrategyEngine, StrategyEngineConfig
+from .trade_throttle import TradeThrottle, TradeThrottleConfig
 from .validation_engine import ValidationConfig, ValidationEngine
 from .walk_forward import WalkForwardConfig, WalkForwardValidator
 
@@ -39,6 +40,8 @@ __all__ = [
     "SignalAggregator",
     "StrategyEngine",
     "StrategyEngineConfig",
+    "TradeThrottle",
+    "TradeThrottleConfig",
     "ValidationConfig",
     "ValidationEngine",
     "WalkForwardConfig",

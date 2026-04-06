@@ -1,0 +1,32 @@
+#!/usr/bin/env sh
+set -eu
+
+current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+
+if [ "$current_branch" = "main" ]; then
+  echo "WARNING: push blocked from protected branch 'main'." >&2
+  echo "Direct push to main is forbidden." >&2
+  exit 1
+fi
+
+# pre-push receives refs via stdin:
+# <local ref> <local sha> <remote ref> <remote sha>
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "$remote_ref" in
+    refs/heads/main)
+      echo "WARNING: push attempted to protected target 'main'." >&2
+      echo "Direct push to main is forbidden." >&2
+      exit 1
+      ;;
+  esac
+
+  case "$local_ref" in
+    refs/heads/main)
+      echo "WARNING: local ref 'main' cannot be pushed directly." >&2
+      echo "Direct push to main is forbidden." >&2
+      exit 1
+      ;;
+  esac
+done
+
+exit 0

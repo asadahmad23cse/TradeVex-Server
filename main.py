@@ -6,6 +6,7 @@ Modes:
   dashboard  — Dashboard server only (no data fetching)
   signals    — Terminal-only signal printing (no dashboard)
   backtest   — Run Walk-Forward Optimization on a ticker
+  validate   — Run combined WFO + CPCV + full backtest validation report
   btc_backtest — Run BTC walk-forward backtest on Binance history
 """
 
@@ -164,13 +165,39 @@ def run_backtest(ticker: str, train_days: int, config_path: str = "config.yaml")
         )
 
 
+def run_validation_report(
+    ticker: str,
+    train_days: int,
+    config_path: str = "config.yaml",
+    start: str | None = None,
+    end: str | None = None,
+    output: str | None = None,
+    validation_profile: str = "quick",
+) -> None:
+    """Run end-to-end validation and print a compact report."""
+    from src.research.project_validator import ProjectValidator  # type: ignore[import]
+
+    validator = ProjectValidator(config_path=config_path, train_days=train_days)
+    report = validator.run(
+        ticker=ticker,
+        start=start,
+        end=end,
+        include_cpcv=(validation_profile == "full"),
+    )
+    validator.print_report(report)
+
+    if output:
+        out_path = validator.save_report(report, output)
+        logger.info("Saved validation report to %s", out_path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="QuantTrader — Institutional-Grade Signal System"
     )
     parser.add_argument(
         "--mode",
-        choices=["live", "dashboard", "signals", "backtest", "capacity", "btc_backtest"],
+        choices=["live", "dashboard", "signals", "backtest", "validate", "capacity", "btc_backtest"],
         default="live",
         help="Execution mode (default: live)",
     )
@@ -196,6 +223,27 @@ def main() -> None:
         default=200,
         help="Training window in days for backtest mode",
     )
+    parser.add_argument(
+        "--start",
+        default=None,
+        help="Optional start date YYYY-MM-DD for backtest/validate",
+    )
+    parser.add_argument(
+        "--end",
+        default=None,
+        help="Optional end date YYYY-MM-DD for backtest/validate",
+    )
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Optional output file path for validate mode JSON report",
+    )
+    parser.add_argument(
+        "--validation_profile",
+        choices=["quick", "full"],
+        default="quick",
+        help="Validate mode profile: quick (WFO + backtest) or full (WFO + CPCV + backtest)",
+    )
     args = parser.parse_args()
 
     logger.info("=== QuantTrader | Mode: %s ===", args.mode.upper())
@@ -210,9 +258,19 @@ def main() -> None:
         if args.engine == "full":
             from src.backtest.engine import BacktestEngine  # type: ignore[import]
             engine = BacktestEngine(config_path=args.config)
-            engine.run(ticker=args.ticker)
+            engine.run(ticker=args.ticker, start=args.start, end=args.end)
         else:
             run_backtest(args.ticker, args.train_days, args.config)
+    elif args.mode == "validate":
+        run_validation_report(
+            ticker=args.ticker,
+            train_days=args.train_days,
+            config_path=args.config,
+            start=args.start,
+            end=args.end,
+            output=args.output,
+            validation_profile=args.validation_profile,
+        )
     elif args.mode == "capacity":
         from src.backtest.capacity import CapacitySimulator  # type: ignore[import]
         sim = CapacitySimulator(config_path=args.config)
