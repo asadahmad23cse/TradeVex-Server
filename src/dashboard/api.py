@@ -11,12 +11,10 @@ import asyncio
 import json
 import logging
 import math
-import os
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
-from uuid import uuid4
 
 import httpx
 import redis
@@ -32,17 +30,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response  # type: igno
 from fastapi.staticfiles import StaticFiles  # type: ignore[import]
 from starlette.middleware.base import BaseHTTPMiddleware  # type: ignore[import]
 from src.data.news_feed import get_btc_news
-<<<<<<< HEAD
-from src.data.signal_history import (
-    get_history as get_signal_history,
-    get_stats as get_signal_stats,
-    record_signal,
-)
-from src.dashboard.btc_service import INTERVAL_TO_MS
-=======
 from src.data.signal_history import get_history as get_signal_history, get_stats as get_signal_stats
 from src.dashboard.btc_service import INTERVAL_TO_MS, BitcoinMarketService
->>>>>>> origin/main
 from src.dashboard.focus_engine import FocusQuantEngine
 from src.options import ExpiryTracker, OptionsEngine
 from src.compliance import SEBIComplianceEngine
@@ -69,7 +58,7 @@ app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 _store = None
 _portfolio = None
 _focus_engine: FocusQuantEngine | None = None
-_btc_service: Any = None  # deprecated: local BTC engine removed; kept name for backward compat
+_btc_service: BitcoinMarketService | None = None
 _live_runner = None
 _connected_ws: List[WebSocket] = []
 _app_loop: asyncio.AbstractEventLoop | None = None
@@ -84,10 +73,6 @@ _webhook_request_counts: dict[str, list[float]] = {}
 _options_provider: Optional[object] = None
 r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
 _btc_proxy_cache: dict[str, dict[str, Any]] = {}
-_DASHBOARD_STALE_CACHE_PREFIX = "dashboard:stale:"
-_DASHBOARD_STALE_TTL_SEC = 300
-
-BTC_INTEL_BASE = os.environ.get("BTC_INTELLIGENCE_BASE", "http://127.0.0.1:9000").rstrip("/")
 
 
 def init_webhook(
@@ -155,7 +140,7 @@ def init_dashboard(store, portfolio, config: dict | None = None, **kwargs) -> No
     _portfolio = portfolio
     _dashboard_cfg = config or {}
     _focus_engine = FocusQuantEngine(_dashboard_cfg)
-    _btc_service = None
+    _btc_service = BitcoinMarketService(_dashboard_cfg)
     if _options_engine is None:
         _options_engine = OptionsEngine()
     try:
@@ -186,8 +171,8 @@ def init_dashboard(store, portfolio, config: dict | None = None, **kwargs) -> No
         from src.api.options_alt_data import OptionsAltDataProvider
 
         _options_provider = OptionsAltDataProvider(_dashboard_cfg)
-    except Exception as exc:
-        logger.warning("OptionsAltDataProvider init failed: %s", exc)
+    except Exception:
+        pass
 
 
 def set_live_runner(runner) -> None:  # type: ignore[no-untyped-def]
@@ -255,8 +240,6 @@ _response_cache_ttl = {
     "/api/options/expiry": 300,
     "/api/market-overview": 30,
     "/api/btc/candles": 30,
-    "/api/btc/sr-levels": 60,
-    "/api/btc/liquidity-zones": 120,
     "/api/btc/markers": 60,
     "/api/btc/market-context": 10,
     "/api/btc/system-report": 10,
@@ -426,8 +409,7 @@ def _parse_utc(ts: Any) -> datetime | None:
         for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
             try:
                 return datetime.strptime(raw, fmt)
-            except Exception as exc:
-                logger.warning("parse_iso format %r failed for %r: %s", fmt, raw, exc)
+            except Exception:
                 continue
     return None
 
@@ -589,46 +571,7 @@ def _fetch_trade_report_rows(limit: int = 200, ticker: str | None = None) -> lis
     return out
 
 
-def _dashboard_stale_redis_key(name: str) -> str:
-    return f"{_DASHBOARD_STALE_CACHE_PREFIX}{name}"
-
-
-def _proxy_cache_store_stale(
-    name: str,
-    payload: dict[str, Any],
-    *,
-    request_id: str,
-) -> None:
-    data = dict(payload)
-    _btc_proxy_cache[name] = data
-    try:
-        r.setex(_dashboard_stale_redis_key(name), _DASHBOARD_STALE_TTL_SEC, json.dumps(data))
-    except Exception as exc:
-        logger.warning(
-            "dashboard stale cache Redis SET failed name=%r request_id=%s: %s",
-            name,
-            request_id,
-            exc,
-        )
-
-
-def _proxy_cache_get(name: str, *, request_id: str) -> dict[str, Any] | None:
-    key = _dashboard_stale_redis_key(name)
-    try:
-        raw = r.get(key)
-        if raw:
-            obj = json.loads(raw)
-            if isinstance(obj, dict):
-                out = dict(obj)
-                out["stale"] = True
-                return out
-    except Exception as exc:
-        logger.warning(
-            "dashboard stale cache Redis GET failed name=%r request_id=%s: %s",
-            name,
-            request_id,
-            exc,
-        )
+def _proxy_cache_get(name: str) -> dict[str, Any] | None:
     cached = _btc_proxy_cache.get(name)
     if not cached:
         return None
@@ -641,507 +584,6 @@ def _as_key_list(value: Union[str, List[str]]) -> list[str]:
     if isinstance(value, str):
         return [value]
     return [str(v) for v in value if str(v).strip()]
-
-
-def _gate_float(v: Any) -> float | None:
-    if v is None:
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
-
-
-def _normalize_confidence_pct(conf: Any) -> float | None:
-    f = _gate_float(conf)
-    if f is None:
-        return None
-    if 0.0 <= f <= 1.0:
-        f *= 100.0
-    return max(0.0, min(100.0, f))
-
-
-def _decision_engine_cost_blocked(de: dict[str, Any]) -> bool:
-    if not isinstance(de, dict):
-        return False
-    blockers = de.get("blockers")
-    if not isinstance(blockers, list):
-        return False
-    for b in blockers:
-        low = str(b).lower()
-        if "cost gate" in low or "alpha barrier" in low:
-            return True
-    return False
-
-
-def _apply_dashboard_signal_pipeline_fields(out: dict[str, Any]) -> None:
-    """
-    Populate confidence / cost gate fields expected by Decision Pipeline UI
-    (validation_checks.confidence_ok, cost_ok; confidence; adjusted_confidence_threshold;
-    net_alpha_score_raw). Sources: top-level btc:signal, decision_engine, meta_output,
-    meta_decision / meta_decision_details, adaptive_learning.
-    """
-    de = out.get("decision_engine") if isinstance(out.get("decision_engine"), dict) else {}
-    db_top = out.get("decision_breakdown") if isinstance(out.get("decision_breakdown"), dict) else {}
-    meta_dec = out.get("meta_decision") if isinstance(out.get("meta_decision"), dict) else {}
-    meta_out = out.get("meta_output") if isinstance(out.get("meta_output"), dict) else {}
-    meta_details = out.get("meta_decision_details") if isinstance(out.get("meta_decision_details"), dict) else {}
-    adaptive = out.get("adaptive_learning") if isinstance(out.get("adaptive_learning"), dict) else {}
-    de_break = de.get("decision_breakdown") if isinstance(de.get("decision_breakdown"), dict) else {}
-    db = db_top if db_top else de_break
-
-    nc = _normalize_confidence_pct(out.get("confidence"))
-    if nc is None:
-        nc = _normalize_confidence_pct(meta_out.get("confidence"))
-    if nc is None:
-        nc = _normalize_confidence_pct(de.get("confidence"))
-    if nc is None:
-        nc = _normalize_confidence_pct(meta_dec.get("adjusted_confidence"))
-    if nc is not None:
-        out["confidence"] = nc
-
-    th = _gate_float(out.get("adjusted_confidence_threshold"))
-    if th is None:
-        th = _gate_float(de.get("confidence_threshold"))
-    if th is None:
-        th = _gate_float(de.get("adjusted_confidence_threshold"))
-    if th is None:
-        th = _gate_float(meta_out.get("confidence_threshold"))
-    if th is None:
-        th = _gate_float(meta_dec.get("confidence_threshold"))
-    if th is None:
-        th = _gate_float(meta_dec.get("min_confidence"))
-    if th is None:
-        th = _gate_float(meta_details.get("confidence_threshold"))
-    if th is None:
-        th = _gate_float(adaptive.get("min_confidence"))
-    if th is None:
-        th = 55.0
-    out["adjusted_confidence_threshold"] = max(0.0, min(100.0, float(th)))
-
-    nar = _gate_float(out.get("net_alpha_score_raw"))
-    if nar is None:
-        nar = _gate_float(out.get("net_alpha_raw"))
-    if nar is None:
-        nar = _gate_float(out.get("net_alpha"))
-    if nar is None:
-        nar = _gate_float(out.get("net_alpha_score"))
-    if nar is None:
-        nar = _gate_float(meta_out.get("net_alpha"))
-    if nar is None and isinstance(db, dict):
-        nar = _gate_float(db.get("net_alpha"))
-    if nar is not None:
-        out["net_alpha_score_raw"] = nar
-
-    vc_pre = out.get("validation_checks")
-    vc: dict[str, Any] = dict(vc_pre) if isinstance(vc_pre, dict) else {}
-
-    top_checks = out.get("checks")
-    if isinstance(top_checks, dict):
-        for k in (
-            "confidence_ok",
-            "cost_ok",
-            "data_quality_ok",
-            "mtf_ok",
-            "etf_ok",
-            "fear_greed_ok",
-            "liquidation_ok",
-            "oi_ok",
-            "sl_distance_ok",
-        ):
-            if k in top_checks and k not in vc:
-                vc[k] = bool(top_checks[k])
-
-    ve = out.get("validation_engine") if isinstance(out.get("validation_engine"), dict) else {}
-    ve_checks = ve.get("checks") if isinstance(ve.get("checks"), dict) else {}
-    if ve_checks:
-        if "calibration_ok" in ve_checks and "calibration_ok" not in vc:
-            vc["calibration_ok"] = bool(ve_checks.get("calibration_ok"))
-        if "alpha_barrier" in ve_checks and "alpha_barrier_ok" not in vc:
-            vc["alpha_barrier_ok"] = bool(ve_checks.get("alpha_barrier"))
-
-    if isinstance(meta_dec, dict):
-        for k in ("confidence_ok", "cost_ok"):
-            if k in meta_dec and k not in vc:
-                vc[k] = bool(meta_dec[k])
-
-    conf_disp = _gate_float(out.get("confidence")) or 0.0
-    th_disp = float(out["adjusted_confidence_threshold"])
-    if "confidence_ok" not in vc:
-        vc["confidence_ok"] = bool(conf_disp >= th_disp - 1e-9)
-
-    cost_blocked = _decision_engine_cost_blocked(de)
-    if "cost_ok" not in vc:
-        nar_v = out.get("net_alpha_score_raw")
-        if nar_v is not None:
-            vc["cost_ok"] = bool(float(nar_v) >= 0.0) and not cost_blocked
-        else:
-            vc["cost_ok"] = not cost_blocked
-
-    out["validation_checks"] = vc
-
-    if out.get("requested_signal") is None and isinstance(de, dict):
-        rs = de.get("requested_signal") or de.get("raw_signal")
-        if rs is not None:
-            out["requested_signal"] = str(rs).upper()
-
-
-def _normalize_dashboard_signal_payload(raw: dict[str, Any]) -> dict[str, Any]:
-    """Map btc_intelligence /signal payload to fields the vanilla terminal expects."""
-    if not isinstance(raw, dict):
-        return {}
-    out = dict(raw)
-    sig = str(out.get("signal", "HOLD")).upper()
-    val = bool(out.get("validated", False))
-    out["validated_signal"] = sig if val and sig in ("LONG", "SHORT") else "HOLD"
-    tp = out.get("take_profit")
-    if isinstance(tp, dict):
-        out.setdefault("tp1", tp.get("TP1"))
-        out.setdefault("tp2", tp.get("TP2"))
-        out.setdefault("tp3", tp.get("TP3"))
-    ez = out.get("entry_zone")
-    if isinstance(ez, (list, tuple)) and len(ez) >= 2:
-        try:
-            lo, hi = float(ez[0]), float(ez[1])
-            out["entry_zone_low"] = lo
-            out["entry_zone_high"] = hi
-            if not out.get("entry_price"):
-                out["entry_price"] = round((lo + hi) / 2.0, 2)
-        except (TypeError, ValueError):
-            pass
-    if out.get("stop_loss") is not None and out.get("sl") is None:
-        out["sl"] = out["stop_loss"]
-    if out.get("net_alpha_score") is None and out.get("net_alpha") is not None:
-        try:
-            out["net_alpha_score"] = float(out["net_alpha"])
-        except (TypeError, ValueError):
-            out["net_alpha_score"] = 0.0
-    if not out.get("regime"):
-        mr = out.get("market_regime")
-        if mr:
-            out["regime"] = str(mr).replace("_", " ").upper()
-    macro = out.get("macro") if isinstance(out.get("macro"), dict) else {}
-    if out.get("fear_greed") is None and macro.get("fear_greed") is not None:
-        out["fear_greed"] = macro.get("fear_greed")
-    mtf = out.get("mtf")
-    if isinstance(mtf, dict) and not isinstance(out.get("mtf_bias"), dict):
-        b4 = mtf.get("4h") or mtf.get("bias_4h")
-        b1d = mtf.get("1d") or mtf.get("bias_1d")
-        if b4 or b1d:
-            out["mtf_bias"] = {
-                "bias_4h": str(b4 or "NEUTRAL").upper(),
-                "bias_1d": str(b1d or "NEUTRAL").upper(),
-            }
-    if isinstance(out.get("derivatives"), dict) and out.get("funding_rate_pct") is None:
-        d = out["derivatives"]
-        if d.get("funding_rate") is not None:
-            try:
-                out["funding_rate_pct"] = float(d["funding_rate"]) * 100.0
-            except (TypeError, ValueError):
-                pass
-    if isinstance(out.get("kelly_sizing"), dict):
-        ks = out["kelly_sizing"]
-        out["position_sizing"] = {
-            "position_size_pct": ks.get("position_pct"),
-            "position_size_usd": ks.get("position_size_usd"),
-            "raw_kelly": ks.get("raw_kelly"),
-            "p": ks.get("p"),
-            "b": ks.get("b"),
-            "method": ks.get("method", "bayesian_prior"),
-            "bucket_key": ks.get("bucket_key"),
-            "trades_in_bucket": ks.get("trades_in_bucket"),
-        }
-    if isinstance(out.get("execution_plan"), dict):
-        ep = out["execution_plan"]
-        tr = ep.get("tail_risk_sizing")
-        if isinstance(tr, dict):
-            out.setdefault("tail_risk_sizing", tr)
-        if ep.get("expected_rr") is not None and out.get("risk_reward") is None:
-            out["risk_reward"] = ep.get("expected_rr")
-    # --- Signal Quality gauge mapping ---
-    if out.get("signal_strength") is None:
-        _sq = None
-        for _fld in ("quality_score", "alpha_score", "net_alpha_score", "net_alpha"):
-            _v = out.get(_fld)
-            if _v is not None:
-                try:
-                    _f = float(_v)
-                    _sq = abs(_f) * 100.0 if abs(_f) <= 1.0 else abs(_f)
-                    break
-                except (TypeError, ValueError):
-                    pass
-        if _sq is None:
-            _agg = out.get("signal_aggregation")
-            if isinstance(_agg, dict):
-                for _k in ("raw_score", "confidence"):
-                    _av = _agg.get(_k)
-                    if _av is not None:
-                        try:
-                            _f = float(_av)
-                            _sq = abs(_f) * 100.0 if abs(_f) <= 1.0 else abs(_f)
-                            break
-                        except (TypeError, ValueError):
-                            pass
-        if _sq is None:
-            for _fld in ("meta_confidence", "raw_confidence"):
-                _v = out.get(_fld)
-                if _v is not None:
-                    try:
-                        _f = float(_v)
-                        _sq = _f * 100.0 if _f <= 1.0 else _f
-                        break
-                    except (TypeError, ValueError):
-                        pass
-        if _sq is not None:
-            out["signal_strength"] = max(0.0, min(100.0, round(_sq, 1)))
-    if out.get("quality_score") is None and out.get("signal_strength") is not None:
-        out["quality_score"] = out["signal_strength"]
-    # --- Order Flow fields ---
-    _of = out.get("orderflow") or out.get("order_flow") or {}
-    if isinstance(_of, dict):
-        if out.get("flow_decision") is None:
-            out["flow_decision"] = _of.get("decision") or _of.get("decision_state")
-        if out.get("obi") is None:
-            out["obi"] = _of.get("obi") or _of.get("obi_imbalance")
-        if out.get("flow_strength") is None:
-            out["flow_strength"] = _of.get("flow_strength") or _of.get("strength")
-    _apply_dashboard_signal_pipeline_fields(out)
-    return out
-
-
-def _candle_rows_to_chart_data(rows: List[Any]) -> List[dict[str, Any]]:
-    data: List[dict[str, Any]] = []
-    if not isinstance(rows, list):
-        return data
-    for r in rows:
-        if not isinstance(r, dict):
-            continue
-        try:
-            ot = int(r.get("open_time", 0) or 0)
-            t_sec = ot // 1000 if ot > 1_000_000_000_000 else ot
-            data.append(
-                {
-                    "time": int(t_sec),
-                    "open": round(float(r.get("open", 0.0)), 2),
-                    "high": round(float(r.get("high", 0.0)), 2),
-                    "low": round(float(r.get("low", 0.0)), 2),
-                    "close": round(float(r.get("close", 0.0)), 2),
-                    "volume": round(float(r.get("volume", 0.0)), 6),
-                }
-            )
-        except (TypeError, ValueError):
-            continue
-    data.sort(key=lambda x: int(x["time"]))
-    return data
-
-
-def _cluster_price_levels(levels: List[float], band_pct: float = 0.003) -> List[float]:
-    """Merge levels within band_pct (e.g. 0.003 = 0.3%) of cluster mean; return cluster averages."""
-    vals = sorted(float(x) for x in levels if x is not None and math.isfinite(float(x)))
-    if not vals:
-        return []
-    clusters: List[List[float]] = []
-    for x in vals:
-        if not clusters:
-            clusters.append([x])
-            continue
-        m = sum(clusters[-1]) / len(clusters[-1])
-        if m > 0 and abs(x - m) / m <= band_pct:
-            clusters[-1].append(x)
-        else:
-            clusters.append([x])
-    return [round(sum(c) / len(c), 2) for c in clusters]
-
-
-def _nearest_sr_to_price(
-    current: float,
-    supports: List[float],
-    resistances: List[float],
-    n: int = 3,
-) -> tuple[List[float], List[float]]:
-    """Top n supports and resistances nearest to current (prefer below / above)."""
-
-    def pick_side(levels: List[float], prefer_below: bool) -> List[float]:
-        if not levels:
-            return []
-        if prefer_below:
-            below = sorted([p for p in levels if p < current], key=lambda p: current - p)
-            out = below[:n]
-            if len(out) < n:
-                rest = sorted([p for p in levels if p >= current], key=lambda p: abs(p - current))
-                for p in rest:
-                    if len(out) >= n:
-                        break
-                    if p not in out:
-                        out.append(p)
-            return [round(float(x), 2) for x in out[:n]]
-        above = sorted([p for p in levels if p > current], key=lambda p: p - current)
-        out = above[:n]
-        if len(out) < n:
-            rest = sorted([p for p in levels if p <= current], key=lambda p: abs(p - current))
-            for p in rest:
-                if len(out) >= n:
-                    break
-                if p not in out:
-                    out.append(p)
-        return [round(float(x), 2) for x in out[:n]]
-
-    return pick_side(supports, True), pick_side(resistances, False)
-
-
-def _levels_within_pct_of(current: float, levels: List[float], pct: float) -> List[float]:
-    if current <= 0 or not levels:
-        return []
-    return [p for p in levels if abs(float(p) - current) / current <= pct]
-
-
-def _compute_sr_from_ohlc(rows: List[dict[str, Any]]) -> dict[str, Any]:
-    """Pivot S/R from highs/lows, cluster (0.8%), nearest 2+2 within 3% of last close."""
-    if len(rows) < 3:
-        cur = float(rows[-1].get("close", 0.0)) if rows else 0.0
-        return {"support": [], "resistance": [], "current": round(cur, 2)}
-    highs = [float(rows[i]["high"]) for i in range(len(rows))]
-    lows = [float(rows[i]["low"]) for i in range(len(rows))]
-    resistance_raw: List[float] = []
-    support_raw: List[float] = []
-    for i in range(1, len(rows) - 1):
-        if highs[i] > highs[i - 1] and highs[i] > highs[i + 1]:
-            resistance_raw.append(highs[i])
-        if lows[i] < lows[i - 1] and lows[i] < lows[i + 1]:
-            support_raw.append(lows[i])
-    current = float(rows[-1]["close"])
-    resistance = _cluster_price_levels(resistance_raw, band_pct=0.008)
-    support = _cluster_price_levels(support_raw, band_pct=0.008)
-    support = _levels_within_pct_of(current, support, 0.03)
-    resistance = _levels_within_pct_of(current, resistance, 0.03)
-    sup2, res2 = _nearest_sr_to_price(current, support, resistance, 2)
-    return {
-        "support": sup2,
-        "resistance": res2,
-        "current": round(current, 2),
-    }
-
-
-def _compute_liquidity_zones_payload(data: List[dict[str, Any]]) -> dict[str, Any]:
-    """High-volume 15m nodes (vs 20-bar vol MA at 2.0×) + long-wick sweep candidates."""
-    n = len(data)
-    if n < 21:
-        return {"zones": [], "sweep_levels": []}
-
-    vol_mult = 2.0
-    volumes = [float(d.get("volume", 0.0) or 0.0) for d in data]
-    zones: List[dict[str, Any]] = []
-    for i in range(20, n):
-        window = volumes[i - 20 : i]
-        ma = sum(window) / 20.0
-        if ma <= 0:
-            continue
-        v = volumes[i]
-        if v > vol_mult * ma:
-            ratio = v / ma
-            strength = min(1.0, max(0.0, (ratio - vol_mult) / 1.0))
-            hi = round(float(data[i]["high"]), 2)
-            lo = round(float(data[i]["low"]), 2)
-            st = round(strength, 3)
-            zones.append({"price": hi, "type": "high_vol", "strength": st})
-            zones.append({"price": lo, "type": "high_vol", "strength": st})
-
-    sweep_raw: List[float] = []
-    wick_ratios: List[float] = []
-    for d in data:
-        o = float(d["open"])
-        h = float(d["high"])
-        l_ = float(d["low"])
-        c = float(d["close"])
-        tr = h - l_
-        if tr <= 1e-12:
-            continue
-        body = abs(c - o)
-        uw = h - max(o, c)
-        lw = min(o, c) - l_
-        wick_ratios.extend([uw / tr, lw / tr])
-
-    wick_ratios.sort()
-    thr_idx = int(len(wick_ratios) * 0.80) if wick_ratios else 0
-    wick_thr = wick_ratios[thr_idx] if wick_ratios else 0.55
-
-    for d in data:
-        o = float(d["open"])
-        h = float(d["high"])
-        l_ = float(d["low"])
-        c = float(d["close"])
-        tr = h - l_
-        if tr <= 1e-12:
-            continue
-        body = abs(c - o)
-        uw = h - max(o, c)
-        lw = min(o, c) - l_
-        ur = uw / tr
-        lr = lw / tr
-        long_body = max(body, tr * 0.08)
-        if ur >= wick_thr and uw >= 1.2 * long_body:
-            sweep_raw.append(round(h, 2))
-        if lr >= wick_thr and lw >= 1.2 * long_body:
-            sweep_raw.append(round(l_, 2))
-
-    current = float(data[-1]["close"])
-    if current > 0:
-        sweep_raw = [p for p in sweep_raw if abs(float(p) - current) / current <= 0.02]
-    sweep_clustered = _cluster_price_levels(sweep_raw, band_pct=0.005)
-    sweep_levels = sorted(sweep_clustered)
-
-    zones.sort(key=lambda z: float(z.get("strength", 0.0) or 0.0), reverse=True)
-    zones = zones[:4]
-
-    return {"zones": zones, "sweep_levels": sweep_levels}
-
-
-async def _btc_fetch_json(urls: List[str]) -> Any:
-    try:
-        async with httpx.AsyncClient(timeout=12.0) as client:
-            for url in urls:
-                for _ in range(3):
-                    try:
-                        resp = await client.get(url)
-                        resp.raise_for_status()
-                        return resp.json()
-                    except Exception as exc:
-                        logger.warning("_btc_fetch_json attempt failed for %s: %s", url, exc)
-                        await asyncio.sleep(0.75)
-    except Exception as exc:
-        logger.warning("_btc_fetch_json outer failure: %s", exc)
-    return None
-
-
-# Intervals not streamed into the live buffer — fetch full candles from Binance via market/history.
-_BTC_CHART_REST_HISTORY_INTERVALS = frozenset({"3m", "30m", "2h", "6h", "12h", "3d"})
-
-
-async def _btc_history_payload_from_upstream(interval: str, limit: int) -> dict[str, Any]:
-    """Chart: live buffer klines for streamed TFs; REST klines (history route) for the rest; 1d uses daily history."""
-    interval = interval if interval in INTERVAL_TO_MS else "15m"
-    limit = int(max(50, min(limit, 5000)))
-    if interval == "1d":
-        url = f"{BTC_INTEL_BASE}/market/history?timeframe=1d&limit={limit}"
-    elif interval in _BTC_CHART_REST_HISTORY_INTERVALS:
-        url = f"{BTC_INTEL_BASE}/market/history?timeframe={interval}&limit={limit}"
-    else:
-        url = f"{BTC_INTEL_BASE}/market/klines?timeframe={interval}&limit={limit}"
-    payload = await _btc_fetch_json([url])
-    rows: List[Any] = []
-    if isinstance(payload, dict):
-        rows = list(payload.get("rows") or [])
-    data = _candle_rows_to_chart_data(rows)
-    if not data:
-        return {"asset": "BTCUSDT", "interval": interval, "data": [], "error": "No history", "points": 0}
-    return {
-        "asset": "BTCUSDT",
-        "interval": interval,
-        "points": len(data),
-        "start_utc": datetime.utcfromtimestamp(int(data[0]["time"])).isoformat() + "Z",
-        "end_utc": datetime.utcfromtimestamp(int(data[-1]["time"])).isoformat() + "Z",
-        "data": data,
-    }
 
 
 def _extract_probability_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -1178,8 +620,6 @@ def _extract_probability_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return block
 
 
-<<<<<<< HEAD
-=======
 def _btc_redis_payload_is_unusable(payload: dict[str, Any]) -> bool:
     """
     True when a Redis JSON blob is only an error/placeholder so we should try
@@ -1199,7 +639,6 @@ def _btc_redis_payload_is_unusable(payload: dict[str, Any]) -> bool:
     return True
 
 
->>>>>>> origin/main
 def _redis_get_json(key: str) -> dict[str, Any] | None:
     try:
         raw = r.get(key)
@@ -1207,12 +646,7 @@ def _redis_get_json(key: str) -> dict[str, Any] | None:
             return None
         obj = json.loads(raw)
         return obj if isinstance(obj, dict) else None
-<<<<<<< HEAD
-    except Exception as exc:
-        logger.warning("_redis_get_json failed for key %r: %s", key, exc)
-=======
     except Exception:
->>>>>>> origin/main
         return None
 
 
@@ -1276,70 +710,6 @@ def _minimal_decision_intelligence_from_signal(
         "degraded": True,
         "source": source,
     }
-<<<<<<< HEAD
-    for k in ("regime_state_probs", "anti_crowding", "hibernated_factors", "tail_risk_sizing", "validation_engine"):
-        if k in sig and sig[k] is not None:
-            out[k] = sig[k]
-    return out
-
-
-def _enrich_decision_intel(out: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
-    """Lift institutional fields for the vanilla terminal + proxy consumers."""
-    if not isinstance(out, dict):
-        return out
-    src = payload if isinstance(payload, dict) else {}
-    for k in ("regime_state_probs", "anti_crowding", "hibernated_factors"):
-        if k in src and src[k] is not None:
-            out[k] = src[k]
-    ep = out.get("execution_plan")
-    if isinstance(ep, dict) and isinstance(ep.get("tail_risk_sizing"), dict):
-        out["tail_risk_sizing"] = ep["tail_risk_sizing"]
-
-    de = out.get("decision_engine") if isinstance(out.get("decision_engine"), dict) else {}
-    mo = src.get("meta_output") if isinstance(src.get("meta_output"), dict) else {}
-    md = src.get("meta_decision") if isinstance(src.get("meta_decision"), dict) else {}
-    if not mo and isinstance(out.get("meta_output"), dict):
-        mo = out["meta_output"]
-    if not md and isinstance(out.get("meta_decision"), dict):
-        md = out["meta_decision"]
-
-    conf_src = None
-    if mo.get("confidence") is not None:
-        conf_src = mo.get("confidence")
-    elif de.get("confidence") is not None:
-        conf_src = de.get("confidence")
-    elif src.get("confidence") is not None:
-        conf_src = src.get("confidence")
-    nc = _normalize_confidence_pct(conf_src)
-    if nc is not None:
-        out["confidence"] = nc
-
-    adj_c = _gate_float(md.get("adjusted_confidence"))
-    if adj_c is not None:
-        out["adjusted_confidence"] = max(0.0, min(100.0, adj_c))
-        if out.get("confidence") is None:
-            out["confidence"] = out["adjusted_confidence"]
-
-    th = _gate_float(src.get("adjusted_confidence_threshold"))
-    if th is None:
-        th = _gate_float(de.get("confidence_threshold"))
-    if th is None:
-        th = _gate_float(de.get("adjusted_confidence_threshold"))
-    if th is None:
-        th = _gate_float(mo.get("confidence_threshold"))
-    if th is None:
-        th = _gate_float(md.get("confidence_threshold"))
-    if th is not None:
-        out["adjusted_confidence_threshold"] = max(0.0, min(100.0, float(th)))
-
-    nar = _gate_float(src.get("net_alpha_score_raw"))
-    if nar is None:
-        nar = _gate_float(src.get("net_alpha"))
-    if nar is not None:
-        out["net_alpha_score_raw"] = nar
-
-=======
->>>>>>> origin/main
     return out
 
 
@@ -1356,7 +726,7 @@ def _normalize_decision_intelligence_payload(payload: dict[str, Any]) -> dict[st
         )
         out["probability"] = _extract_probability_payload(out)
         out["execution_plan"] = dict(out.get("execution_plan", {})) if isinstance(out.get("execution_plan"), dict) else {}
-        return _enrich_decision_intel(out, payload)
+        return out
 
     decision_engine = dict(payload)
     out: dict[str, Any] = {
@@ -1397,43 +767,7 @@ def _normalize_decision_intelligence_payload(payload: dict[str, Any]) -> dict[st
     }
     out["probability"] = _extract_probability_payload(payload)
     out["execution_plan"] = dict(payload.get("execution_plan", {})) if isinstance(payload.get("execution_plan"), dict) else {}
-    return _enrich_decision_intel(out, payload)
-
-
-def _btc_redis_payload_is_unusable(payload: Any) -> bool:
-    """
-    True when a Redis JSON blob should be skipped for the BTC proxy fast-path:
-    not a dict, missing as_of_utc/timestamp/as_of, unparseable time, or older than 60 seconds.
-    """
-    if not isinstance(payload, dict):
-        return True
-    raw: Any = None
-    for key in ("as_of_utc", "timestamp", "as_of"):
-        v = payload.get(key)
-        if v is not None and str(v).strip() != "":
-            raw = v
-            break
-    if raw is None:
-        return True
-    try:
-        if isinstance(raw, (int, float)):
-            ts = float(raw)
-            if ts > 1e12:
-                ts = ts / 1000.0
-            dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-        else:
-            s = str(raw).strip().replace("Z", "+00:00")
-            dt = datetime.fromisoformat(s)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-        now = datetime.now(timezone.utc)
-        age_sec = (now - dt.astimezone(timezone.utc)).total_seconds()
-        if age_sec > 60.0:
-            return True
-    except Exception as exc:
-        logger.warning("Redis payload timestamp unusable (parse): %s", exc)
-        return True
-    return False
+    return out
 
 
 async def _btc_proxy_payload(
@@ -1441,105 +775,36 @@ async def _btc_proxy_payload(
     redis_key: Union[str, List[str]],
     upstream_url: Union[str, List[str]],
 ) -> dict[str, Any]:
-    request_id = str(uuid4())
     redis_keys = _as_key_list(redis_key)
     upstream_urls = _as_key_list(upstream_url)
-    proxy_headers = {"X-Request-ID": request_id}
 
     # 1) Redis fast-path
-    for btc_key in redis_keys:
+    for key in redis_keys:
         try:
-            raw = r.get(btc_key)
+            raw = r.get(key)
             if raw:
                 payload = json.loads(raw)
                 if isinstance(payload, dict):
                     if _btc_redis_payload_is_unusable(payload):
                         continue
                     payload["stale"] = False
-                    _proxy_cache_store_stale(name, payload, request_id=request_id)
+                    _btc_proxy_cache[name] = dict(payload)
                     return payload
-        except Exception as exc:
-            logger.warning(
-                "_btc_proxy_payload redis key %r read failed request_id=%s: %s",
-                btc_key,
-                request_id,
-                exc,
-            )
+        except Exception:
             continue
 
-<<<<<<< HEAD
-    # 1b) SQLite checkpoint mirror (1h TTL); OK if older than 60s — intentional degraded fallback
-=======
     # 2) Upstream fallback (retry each URL attempt up to 3 times, 1s between tries)
->>>>>>> origin/main
     try:
-        raw_p = r.get("btc:signal:persistent")
-        if raw_p:
-            payload = json.loads(raw_p)
-            if isinstance(payload, dict):
-                payload["stale"] = True
-                payload["degraded"] = True
-                payload["source"] = "sqlite_checkpoint"
-                _proxy_cache_store_stale(name, payload, request_id=request_id)
-                return payload
-    except Exception as exc:
-        logger.warning(
-            "_btc_proxy_payload redis key 'btc:signal:persistent' read failed request_id=%s: %s",
-            request_id,
-            exc,
-        )
-
-    # 2) Upstream fallback — short timeouts so the dashboard browser fetch (15–60s) does not abort
-    #    before we can return Redis/stale data.
-    try:
-        _px_timeout = httpx.Timeout(4.0, connect=2.0)
-        async with httpx.AsyncClient(timeout=_px_timeout) as client:
+        async with httpx.AsyncClient(timeout=8.0) as client:
             for url in upstream_urls:
                 last_exc: Exception | None = None
-<<<<<<< HEAD
-                for attempt in range(2):
-                    try:
-                        resp = await client.get(url, headers=proxy_headers)
-=======
                 for attempt in range(3):
                     try:
                         resp = await client.get(url)
->>>>>>> origin/main
                         resp.raise_for_status()
                         payload = resp.json()
                         if isinstance(payload, dict):
                             payload["stale"] = False
-<<<<<<< HEAD
-                            _proxy_cache_store_stale(name, payload, request_id=request_id)
-                            return payload
-                        wrapped = {"data": payload, "stale": False}
-                        _proxy_cache_store_stale(name, wrapped, request_id=request_id)
-                        return wrapped
-                    except Exception as exc:
-                        last_exc = exc
-                        if attempt < 1:
-                            await asyncio.sleep(0.5)
-                        logger.warning(
-                            "BTC proxy GET %s attempt failed request_id=%s: %s",
-                            url,
-                            request_id,
-                            exc,
-                        )
-                        continue
-                if last_exc is not None:
-                    logger.debug(
-                        "BTC proxy upstream failed after retries %s request_id=%s: %s",
-                        url,
-                        request_id,
-                        last_exc,
-                    )
-    except Exception as exc:
-        logger.warning(
-            "_btc_proxy_payload upstream client failure request_id=%s: %s",
-            request_id,
-            exc,
-        )
-=======
                             _btc_proxy_cache[name] = dict(payload)
                             return payload
                         wrapped = {"data": payload, "stale": False}
@@ -1558,10 +823,9 @@ async def _btc_proxy_payload(
                     )
     except Exception:
         pass
->>>>>>> origin/main
 
     # 3) Last cached stale payload
-    cached = _proxy_cache_get(name, request_id=request_id)
+    cached = _proxy_cache_get(name)
     if cached is not None:
         return cached
     return {"error": "upstream_unavailable", "stale": True}
@@ -1639,8 +903,15 @@ def push_broadcast_threadsafe(data: dict) -> None:
 
 @app.on_event("startup")
 async def _capture_loop() -> None:
-    global _app_loop
+    global _app_loop, _btc_service
     _app_loop = asyncio.get_running_loop()
+    # Auto-init BTC service when running standalone via uvicorn (without main.py)
+    if _btc_service is None:
+        try:
+            _btc_service = BitcoinMarketService(_dashboard_cfg)
+        except Exception as exc:  # pragma: no cover
+            import logging
+            logging.getLogger(__name__).warning("BTC service auto-init failed: %s", exc)
 
 
 @app.on_event("shutdown")
@@ -1704,8 +975,7 @@ def _clean_factor_scores(raw: Any) -> Dict[str, float]:
     for k, v in parsed.items():
         try:
             out[str(k)] = float(v)
-        except Exception as exc:
-            logger.warning("_clean_factor_scores skipped key %r: %s", k, exc)
+        except Exception:
             continue
     return out
 
@@ -1970,199 +1240,41 @@ def get_focus_trades(interval: str = "5m"):
 
 
 @app.get("/api/btc/history")
-async def get_btc_history(interval: str = "1d"):
-    """Historical BTCUSDT candles proxied from btc_intelligence (Binance-aligned)."""
-    return await _btc_history_payload_from_upstream(interval=interval, limit=4000)
+def get_btc_history(interval: str = "1d"):
+    """All-time historical BTCUSDT candles from Binance."""
+    if _btc_service is None:
+        raise HTTPException(503, "BTC service not initialised")
+    return _btc_service.get_all_time_history(interval=interval)
 
 
 @app.get("/api/btc/candles")
-async def get_btc_candles(interval: str = "15m", limit: int = 200):
-    """Recent BTCUSDT candles for the terminal chart (proxied from btc_intelligence)."""
-    limit = max(50, min(limit, 5000))
-    return await _btc_history_payload_from_upstream(interval=interval, limit=limit)
-
-
-@app.get("/api/btc/sr-levels")
-async def get_btc_sr_levels():
-    """Pivot S/R from last 100×1h; 0.8% cluster, ≤3% from spot, nearest 2 support + 2 resistance."""
-    url = f"{BTC_INTEL_BASE}/market/klines?timeframe=1h&limit=100"
-    payload = await _btc_fetch_json([url])
-    rows_in: List[Any] = []
-    if isinstance(payload, dict):
-        rows_in = list(payload.get("rows") or [])
-    data = _candle_rows_to_chart_data(rows_in)
-    if len(data) < 3:
-        return {
-            "support": [],
-            "resistance": [],
-            "current": float(data[-1]["close"]) if data else 0.0,
-            "error": "insufficient_candles" if not data else "need_at_least_3_bars",
-        }
-    return _compute_sr_from_ohlc(data)
-
-
-@app.get("/api/btc/liquidity-zones")
-async def get_btc_liquidity_zones():
-    """High-volume liquidity nodes + sweep wicks from last 50×15m candles."""
-    url = f"{BTC_INTEL_BASE}/market/klines?timeframe=15m&limit=50"
-    payload = await _btc_fetch_json([url])
-    rows_in: List[Any] = []
-    if isinstance(payload, dict):
-        rows_in = list(payload.get("rows") or [])
-    data = _candle_rows_to_chart_data(rows_in)
-    if len(data) < 21:
-        return {
-            "zones": [],
-            "sweep_levels": [],
-            "error": "insufficient_candles" if data else "no_data",
-        }
-    return _compute_liquidity_zones_payload(data)
-
-
-def _btc_signal_placeholder_payload() -> dict[str, Any]:
-    """Degraded HOLD payload so the UI never treats /api/btc/signal as a hard offline error."""
-    now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
-    return {
-        "signal": "HOLD",
-        "confidence": 0.0,
-        "validated": False,
-        "stale": True,
-        "degraded": True,
-        "source": "no_upstream",
-        "as_of_utc": now,
-        "reason": "BTC intelligence unreachable — start btc_intelligence on :9000 (or Redis btc:signal).",
-    }
-
-
-def _parse_signal_utc(value: Any) -> datetime | None:
-    if value is None or str(value).strip() == "":
-        return None
-    try:
-        s = str(value).strip().replace("Z", "+00:00")
-        dt = datetime.fromisoformat(s)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(timezone.utc)
-    except Exception:
-        return None
-
-
-def _maybe_record_btc_signal_to_local_history(normalized: dict[str, Any]) -> None:
-    """Append validated LONG/SHORT to data/signal_history.json if as_of_utc is new vs last entry."""
-    try:
-        sig = str(normalized.get("signal") or "").upper()
-        if sig not in {"LONG", "SHORT"}:
-            return
-        if not bool(normalized.get("validated")):
-            return
-        ts_new = _parse_signal_utc(normalized.get("as_of_utc"))
-        if ts_new is None:
-            return
-        recent = get_signal_history(1)
-        if recent:
-            ts_last = _parse_signal_utc(recent[-1].get("time"))
-            if ts_last is not None and ts_new <= ts_last:
-                return
-        record_signal(normalized)
-    except Exception as exc:
-        logger.warning("local signal_history record skipped: %s", exc)
+def get_btc_candles(interval: str = "15m", limit: int = 200):
+    """Recent BTCUSDT candles for trading chart windows."""
+    if _btc_service is None:
+        raise HTTPException(503, "BTC service not initialised")
+    limit = max(50, min(limit, 1000))
+    return _btc_service.get_recent_candles(interval=interval, limit=limit)
 
 
 @app.get("/api/btc/signal")
-async def get_btc_signal(interval: str = "5m"):
-    """Real-time BTC signal — proxied from btc_intelligence (Redis fast path + HTTP)."""
-    _ = interval
-    payload = await _btc_proxy_payload(
-        name="btc_signal_route",
-        redis_key="btc:signal",
-        upstream_url=f"{BTC_INTEL_BASE}/signal",
-    )
-    raw: dict[str, Any]
-    if isinstance(payload, dict) and payload.get("error") == "upstream_unavailable":
-        sig_only = _redis_get_json("btc:signal")
-        if sig_only and isinstance(sig_only, dict):
-            degraded = dict(sig_only)
-            degraded["stale"] = True
-            degraded["degraded"] = True
-            if not degraded.get("source"):
-                degraded["source"] = "redis_signal_fallback"
-            raw = degraded
-        else:
-            sig_cp = _redis_get_json("btc:signal:persistent")
-            if sig_cp and isinstance(sig_cp, dict):
-                degraded = dict(sig_cp)
-                degraded["stale"] = True
-                degraded["degraded"] = True
-                degraded["source"] = "sqlite_checkpoint"
-                raw = degraded
-            else:
-                raw = _btc_signal_placeholder_payload()
-    elif not isinstance(payload, dict):
-        raw = _btc_signal_placeholder_payload()
-    else:
-        raw = payload
-
-    normalized = _normalize_dashboard_signal_payload(raw)
-    _maybe_record_btc_signal_to_local_history(normalized)
-    return normalized
+def get_btc_signal(interval: str = "5m"):
+    """Real-time BTC signal using the project's quant factor algorithm."""
+    if _btc_service is None:
+        raise HTTPException(503, "BTC service not initialised")
+    return _btc_service.get_realtime_signal(interval=interval)
 
 
 @app.get("/api/btc/market-context")
-async def get_btc_market_context(interval: str = "5m"):
-    """Lightweight context slice derived from the latest institutional signal."""
-    _ = interval
-    try:
-        payload = await _btc_proxy_payload(
-            name="btc_signal_context",
-            redis_key="btc:signal",
-            upstream_url=f"{BTC_INTEL_BASE}/signal",
-        )
-        if not isinstance(payload, dict) or payload.get("error") == "upstream_unavailable":
-            return {}
-        p = _normalize_dashboard_signal_payload(payload)
-        return {
-            "ticker": p.get("ticker", "BTCUSDT"),
-            "regime": p.get("regime") or p.get("market_regime"),
-            "derivatives": p.get("derivatives"),
-            "macro": p.get("macro"),
-            "order_flow": p.get("order_flow"),
-            "as_of_utc": p.get("as_of_utc"),
-        }
-    except Exception:
-        return {}
+def get_btc_market_context(interval: str = "5m"):
+    """Current BTC macro/derivatives context used by the live signal."""
+    if _btc_service is None:
+        raise HTTPException(503, "BTC service not initialised")
+    return _btc_service.get_market_context(interval=interval)
 
 
 @app.get("/api/btc/signal/history")
-async def signal_history(limit: int = Query(50, ge=1, le=200)):
-    lim = int(limit)
-    try:
-        data = await _btc_fetch_json([f"{BTC_INTEL_BASE}/signal/history?limit={lim}"])
-        if isinstance(data, list):
-            signals = [x for x in data if isinstance(x, dict)]
-            return {
-                "signals": signals[:lim],
-                "stats": get_signal_stats(),
-                "source": "btc_intelligence",
-            }
-        if isinstance(data, dict) and isinstance(data.get("signals"), list):
-            sigs_raw = data.get("signals") or []
-            signals = [x for x in sigs_raw if isinstance(x, dict)]
-            return {
-                "signals": signals[:lim],
-                "stats": get_signal_stats(),
-                "source": "btc_intelligence",
-            }
-    except Exception as exc:
-        logger.warning("/api/btc/signal/history upstream failed: %s", exc)
-    try:
-        return {
-            "signals": get_signal_history(lim),
-            "stats": get_signal_stats(),
-            "source": "local_fallback",
-        }
-    except Exception as exc:
-        logger.warning("/api/btc/signal/history local fallback failed: %s", exc)
-        return {"signals": [], "stats": get_signal_stats(), "source": "local_fallback"}
+def signal_history(limit: int = 50):
+    return {"signals": get_signal_history(limit), "stats": get_signal_stats()}
 
 
 @app.get("/api/btc/signal/stats")
@@ -2171,23 +1283,37 @@ def signal_stats():
 
 
 @app.get("/api/btc/system-report")
-async def btc_system_report(interval: str = "5m"):
-    _ = interval
-    report: dict[str, Any] = {
+def btc_system_report(interval: str = "5m"):
+    if _btc_service is None:
+        raise HTTPException(503, "BTC service not initialised")
+
+    report = {
         "timestamp_utc": datetime.utcnow().isoformat() + "Z",
-        "runtime": {"engine": "btc_intelligence", "base": BTC_INTEL_BASE},
-        "known_gaps": [],
+        "runtime": _btc_service.get_runtime_stats(),
+        "known_gaps": [
+            {
+                "key": "btc_replay_backtest",
+                "severity": "high",
+                "status": "missing",
+                "summary": "No dedicated bar-by-bar BTC replay backtest for the live BitcoinMarketService pipeline.",
+            },
+            {
+                "key": "liquidation_heatmap_clusters",
+                "severity": "medium",
+                "status": "missing",
+                "summary": "System detects liquidation events after the move, not pre-positioned heatmap clusters.",
+            },
+            {
+                "key": "llm_transport_live",
+                "severity": "medium",
+                "status": "partial",
+                "summary": "LLM validation logic exists, but the transport is still safe-fallback unless a real provider is wired.",
+            },
+        ],
     }
-    health = await _btc_fetch_json([f"{BTC_INTEL_BASE}/health"])
-    report["upstream_health"] = health if isinstance(health, dict) else {"status": "unknown"}
 
     try:
-        raw = await _btc_proxy_payload(
-            name="btc_signal_report",
-            redis_key="btc:signal",
-            upstream_url=f"{BTC_INTEL_BASE}/signal",
-        )
-        signal = _normalize_dashboard_signal_payload(raw if isinstance(raw, dict) else {})
+        signal = _btc_service.get_realtime_signal(interval=interval)
         report["signal_snapshot"] = {
             "signal": signal.get("signal"),
             "validated_signal": signal.get("validated_signal"),
@@ -2222,55 +1348,12 @@ async def btc_system_report(interval: str = "5m"):
     return report
 
 
-def _markers_from_institutional_history(rows: List[Any], limit: int) -> List[dict[str, Any]]:
-    markers: List[dict[str, Any]] = []
-    if not isinstance(rows, list):
-        return markers
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        sig = str(row.get("signal") or row.get("validated_signal") or "HOLD").upper()
-        if sig not in {"LONG", "SHORT"}:
-            continue
-        raw_ts = row.get("as_of_utc") or row.get("timestamp") or row.get("as_of")
-        t_unix = None
-        if isinstance(raw_ts, (int, float)):
-            t_unix = int(raw_ts) // 1000 if float(raw_ts) > 1e12 else int(raw_ts)
-        elif isinstance(raw_ts, str) and raw_ts.strip():
-            try:
-                iso = raw_ts.replace("Z", "+00:00")
-                t_unix = int(datetime.fromisoformat(iso).timestamp())
-            except Exception as exc:
-                logger.warning("_markers_from_institutional_history bad timestamp %r: %s", raw_ts, exc)
-                continue
-        if t_unix is None:
-            continue
-        conf = float(row.get("confidence") or 0.0)
-        markers.append(
-            {
-                "time": int(t_unix),
-                "position": "belowBar" if sig == "LONG" else "aboveBar",
-                "color": "#34d399" if sig == "LONG" else "#f87171",
-                "shape": "arrowUp" if sig == "LONG" else "arrowDown",
-                "text": "",
-                "signal": sig,
-                "confidence": conf,
-            }
-        )
-    markers.sort(key=lambda m: int(m["time"]))
-    return markers[-limit:]
-
-
 @app.get("/api/btc/markers")
-async def get_btc_markers(interval: str = "1d", limit: int = 1000):
-    """Chart markers from btc_intelligence recent signal history (institutional path)."""
-    _ = interval
-    limit = int(max(50, min(limit, 500)))
-    hist = await _btc_fetch_json([f"{BTC_INTEL_BASE}/signal/history"])
-    rows: List[Any] = []
-    if isinstance(hist, list):
-        rows = hist
-    return _markers_from_institutional_history(rows, limit)
+def get_btc_markers(interval: str = "1d", limit: int = 1000):
+    """Historical LONG/SHORT markers for BTC chart overlay."""
+    if _btc_service is None:
+        raise HTTPException(503, "BTC service not initialised")
+    return _btc_service.get_signal_markers(interval=interval, limit=limit)
 
 
 @app.get("/api/btc/news")
@@ -2283,7 +1366,7 @@ async def btc_orderflow_proxy():
     return await _btc_proxy_payload(
         name="orderflow",
         redis_key="btc:orderflow",
-        upstream_url=f"{BTC_INTEL_BASE}/api/orderflow",
+        upstream_url="http://127.0.0.1:9000/api/orderflow",
     )
 
 
@@ -2292,7 +1375,7 @@ async def btc_volume_proxy():
     return await _btc_proxy_payload(
         name="volume",
         redis_key="btc:volprofile",
-        upstream_url=f"{BTC_INTEL_BASE}/api/volume-profile",
+        upstream_url="http://127.0.0.1:9000/api/volume-profile",
     )
 
 
@@ -2301,7 +1384,7 @@ async def btc_volatility_proxy():
     return await _btc_proxy_payload(
         name="volatility",
         redis_key="btc:volatility",
-        upstream_url=f"{BTC_INTEL_BASE}/api/volatility",
+        upstream_url="http://127.0.0.1:9000/api/volatility",
     )
 
 
@@ -2310,24 +1393,20 @@ async def btc_execution_proxy():
     return await _btc_proxy_payload(
         name="execution",
         redis_key="btc:execution",
-        upstream_url=f"{BTC_INTEL_BASE}/api/execution",
+        upstream_url="http://127.0.0.1:9000/api/execution",
     )
 
 
 @app.get("/api/btc/decision-intelligence")
 async def btc_decision_intelligence_proxy(interval: str = Query("15m")):
-<<<<<<< HEAD
-    _ = interval if interval in INTERVAL_TO_MS else "15m"
-=======
     iv = interval if interval in INTERVAL_TO_MS else "15m"
->>>>>>> origin/main
     payload = await _btc_proxy_payload(
         name="decision_intelligence",
         redis_key=["btc:intelligence", "btc:decision", "btc:signal"],
         upstream_url=[
-            f"{BTC_INTEL_BASE}/api/intelligence",
-            f"{BTC_INTEL_BASE}/api/decision",
-            f"{BTC_INTEL_BASE}/signal",
+            "http://127.0.0.1:9000/api/decision",
+            "http://127.0.0.1:9000/api/intelligence",
+            "http://127.0.0.1:9000/signal",
         ],
     )
     if not isinstance(payload, dict):
@@ -2342,16 +1421,6 @@ async def btc_decision_intelligence_proxy(interval: str = Query("15m")):
         ):
             payload = _minimal_decision_intelligence_from_signal(sig_only)
 
-<<<<<<< HEAD
-    if payload.get("error") == "upstream_unavailable":
-        sig_cp = _redis_get_json("btc:signal:persistent")
-        if sig_cp and (
-            sig_cp.get("signal") is not None
-            or "confidence" in sig_cp
-            or isinstance(sig_cp.get("probability"), dict)
-        ):
-            payload = _minimal_decision_intelligence_from_signal(sig_cp, source="sqlite_checkpoint")
-=======
     if payload.get("error") == "upstream_unavailable" and _btc_service is not None:
         try:
             live_sig = _btc_service.get_realtime_signal(interval=iv)
@@ -2366,7 +1435,6 @@ async def btc_decision_intelligence_proxy(interval: str = Query("15m")):
                 )
         except Exception as exc:
             logger.warning("decision-intelligence dashboard signal fallback failed: %s", exc)
->>>>>>> origin/main
 
     if payload.get("error") == "upstream_unavailable":
         return {"error": "upstream_unavailable", "stale": True}
@@ -2383,10 +1451,10 @@ async def btc_decision_intelligence_proxy(interval: str = Query("15m")):
             name="probability_for_decision",
             redis_key=["btc:probability", "btc:intelligence", "btc:signal"],
             upstream_url=[
-                f"{BTC_INTEL_BASE}/api/probability",
-                f"{BTC_INTEL_BASE}/api/intelligence",
-                f"{BTC_INTEL_BASE}/api/decision",
-                f"{BTC_INTEL_BASE}/signal",
+                "http://127.0.0.1:9000/api/probability",
+                "http://127.0.0.1:9000/api/intelligence",
+                "http://127.0.0.1:9000/api/decision",
+                "http://127.0.0.1:9000/signal",
             ],
         )
         normalized["probability"] = _extract_probability_payload(prob_payload if isinstance(prob_payload, dict) else {})
@@ -2396,9 +1464,9 @@ async def btc_decision_intelligence_proxy(interval: str = Query("15m")):
             name="execution_plan_for_decision",
             redis_key=["btc:execution_plan", "btc:intelligence"],
             upstream_url=[
-                f"{BTC_INTEL_BASE}/api/execution-plan",
-                f"{BTC_INTEL_BASE}/api/intelligence",
-                f"{BTC_INTEL_BASE}/api/execution",
+                "http://127.0.0.1:9000/api/execution-plan",
+                "http://127.0.0.1:9000/api/intelligence",
+                "http://127.0.0.1:9000/api/execution",
             ],
         )
         if isinstance(exec_payload, dict):
@@ -2412,11 +1480,7 @@ async def btc_decision_intelligence_proxy(interval: str = Query("15m")):
     for meta_k in ("stale", "degraded", "source"):
         if meta_k in payload:
             normalized[meta_k] = payload[meta_k]
-<<<<<<< HEAD
-    return _enrich_decision_intel(normalized, payload)
-=======
     return normalized
->>>>>>> origin/main
 
 
 @app.get("/api/btc/probability")
@@ -2425,10 +1489,10 @@ async def btc_probability_proxy():
         name="probability",
         redis_key=["btc:probability", "btc:intelligence", "btc:signal"],
         upstream_url=[
-            f"{BTC_INTEL_BASE}/api/probability",
-            f"{BTC_INTEL_BASE}/api/intelligence",
-            f"{BTC_INTEL_BASE}/api/decision",
-            f"{BTC_INTEL_BASE}/signal",
+            "http://127.0.0.1:9000/api/probability",
+            "http://127.0.0.1:9000/api/intelligence",
+            "http://127.0.0.1:9000/api/decision",
+            "http://127.0.0.1:9000/signal",
         ],
     )
     if not isinstance(payload, dict):
@@ -2449,7 +1513,7 @@ async def btc_execution_plan_proxy():
     return await _btc_proxy_payload(
         name="execution_plan",
         redis_key="btc:execution_plan",
-        upstream_url=f"{BTC_INTEL_BASE}/api/execution-plan",
+        upstream_url="http://127.0.0.1:9000/api/execution-plan",
     )
 
 
@@ -2572,8 +1636,8 @@ async def get_options_chain(symbol: str = "NIFTY", expiry: str = "nearest"):
     finally:
         try:
             session.close()
-        except Exception as exc:
-            logger.warning("NSE session close failed: %s", exc)
+        except Exception:
+            pass
 
 
 @app.get("/api/options/signal")
@@ -2631,8 +1695,7 @@ def get_options_greeks(
                 try:
                     parsed = datetime.strptime(expiry, fmt).date()
                     break
-                except Exception as exc:
-                    logger.warning("options greeks expiry parse %r with %r: %s", expiry, fmt, exc)
+                except Exception:
                     continue
             if parsed is not None:
                 expiry_days = max((parsed - datetime.utcnow().date()).days, 1)
@@ -3742,427 +2805,136 @@ def get_portfolio():
 # Paper Trading Endpoints
 # ------------------------------------------------------------------
 
-_PAPER_DEFAULT_CAPITAL = 10000.0
-
-
-def _paper_fmt_duration(seconds: float) -> str:
-    total = max(0, int(round(_safe_float(seconds, 0.0))))
-    if total < 60:
-        return f"{total}s"
-    mins, sec = divmod(total, 60)
-    if mins < 60:
-        return f"{mins}m {sec}s"
-    hrs, mins = divmod(mins, 60)
-    return f"{hrs}h {mins}m"
-
-
-def _paper_result_label(reason: Any) -> str:
-    r = str(reason or "").strip().lower()
-    if not r:
-        return "CLOSED"
-    if "tp2" in r:
-        return "TP2"
-    if "tp1" in r or "tp_hit" in r or r == "tp":
-        return "TP1"
-    if "timeout" in r:
-        return "TIMEOUT"
-    if "sl" in r or "stop" in r:
-        return "SL"
-    if "close" in r or "manual" in r:
-        return "CLOSED"
-    return str(reason).upper()
-
-
-def _paper_session_bucket(ts_any: Any) -> str:
-    dt = _parse_utc(ts_any)
-    if dt is None:
-        return "asia"
-    if dt.tzinfo is None:
-        dt_utc = dt.replace(tzinfo=timezone.utc)
-    else:
-        dt_utc = dt.astimezone(timezone.utc)
-    hour = int(dt_utc.hour)
-    if 13 <= hour < 21:
-        return "ny"
-    if 8 <= hour < 13:
-        return "london"
-    return "asia"
-
-
-def _paper_extract_price(payload: Any) -> float | None:
-    if not isinstance(payload, dict):
-        return None
-    for key in ("mark_price", "price", "current_price", "last_price", "entry_price"):
-        px = _safe_float(payload.get(key), 0.0)
-        if px > 0:
-            return float(px)
-    deriv = payload.get("derivatives")
-    if isinstance(deriv, dict):
-        px = _safe_float(deriv.get("mark_price"), 0.0)
-        if px > 0:
-            return float(px)
-    return None
-
-
-def _latest_btc_price_for_paper(default: float = 0.0) -> float:
-    # Prefer hot local cache from btc_intelligence redis mirrors.
-    for redis_key in ("btc:signal", "btc:signal:persistent", "btc:execution", "btc:intelligence"):
-        obj = _redis_get_json(redis_key)
-        if not isinstance(obj, dict):
-            continue
-        normalized = _normalize_dashboard_signal_payload(obj) if "signal" in obj else obj
-        px = _paper_extract_price(normalized)
-        if px and px > 0:
-            return float(px)
-
-    # Fallback: best effort from local signal store.
-    try:
-        src = _latest_store_signal_for_ticker("BTCUSDT")
-        px = _paper_extract_price(src)
-        if px and px > 0:
-            return float(px)
-    except Exception:
-        pass
-
-    # Final fallback: direct ticker call.
-    try:
-        resp = httpx.get(
-            "https://api.binance.com/api/v3/ticker/price",
-            params={"symbol": "BTCUSDT"},
-            timeout=4.0,
-        )
-        if resp.status_code == 200:
-            payload = resp.json()
-            px = _safe_float(payload.get("price"), 0.0)
-            if px > 0:
-                return float(px)
-    except Exception:
-        pass
-    return float(default)
-
-
-def _paper_suggested_size() -> float:
-    # Return "size %" from the same kelly/risk signal payload used by terminal.
-    sig = _redis_get_json("btc:signal") or _redis_get_json("btc:signal:persistent")
-    if isinstance(sig, dict):
-        norm = _normalize_dashboard_signal_payload(sig)
-        ps = norm.get("position_sizing")
-        if isinstance(ps, dict):
-            for key in ("size_pct", "position_size_pct", "position_pct"):
-                v = _safe_float(ps.get(key), -1.0)
-                if v >= 0:
-                    return float(round(v, 4))
-    # Fallback to configured cold start risk budget.
-    try:
-        risk_cfg = (_dashboard_cfg.get("risk") or {})
-        cold = _safe_float(risk_cfg.get("cold_start_position_pct"), 1.0)
-        return float(round(max(0.1, cold), 4))
-    except Exception:
-        return 1.0
-
-
-def _paper_portfolio_payload(engine) -> dict[str, Any]:  # type: ignore[no-untyped-def]
-    metrics = engine.get_portfolio_metrics() or {}
-    open_positions = engine.get_open_positions() or []
-    closed = engine.get_closed_trades(5000) or []
-
-    capital = _safe_float(metrics.get("capital"), 0.0)
-    initial = _safe_float(metrics.get("initial_capital"), _PAPER_DEFAULT_CAPITAL)
-    total_pnl = _safe_float(metrics.get("total_pnl"), 0.0)
-    total_pnl_pct = _safe_float(metrics.get("total_pnl_pct"), 0.0)
-    win_rate = _safe_float(metrics.get("win_rate"), 0.0)
-    total_trades = int(metrics.get("total_trades") or len(closed) or 0)
-    sharpe = _safe_float(metrics.get("sharpe_ratio", metrics.get("sharpe")), 0.0)
-    max_drawdown = _safe_float(metrics.get("max_drawdown"), 0.0)
-    profit_factor = _safe_float(metrics.get("profit_factor"), 0.0)
-
-    now_utc = datetime.now(timezone.utc)
-    today_key = now_utc.strftime("%Y-%m-%d")
-    today_pnl = 0.0
-    dur_seconds_list: list[float] = []
-    session_acc = {
-        "asia": {"pnl_pct": 0.0, "trades": 0},
-        "london": {"pnl_pct": 0.0, "trades": 0},
-        "ny": {"pnl_pct": 0.0, "trades": 0},
-    }
-
-    for tr in closed:
-        if not isinstance(tr, dict):
-            continue
-        pnl_val = _safe_float(tr.get("pnl"), 0.0)
-        pnl_pct_val = _safe_float(tr.get("pnl_pct"), 0.0)
-        close_ts = tr.get("closed_at") or tr.get("exit_time") or tr.get("closed_time")
-        close_dt = _parse_utc(close_ts)
-        if close_dt is not None:
-            dt_utc = close_dt.astimezone(timezone.utc) if close_dt.tzinfo else close_dt.replace(tzinfo=timezone.utc)
-            if dt_utc.strftime("%Y-%m-%d") == today_key:
-                today_pnl += pnl_val
-        held_hours = _safe_float(tr.get("held_hours"), 0.0)
-        if held_hours > 0:
-            dur_seconds_list.append(held_hours * 3600.0)
-
-        bucket = _paper_session_bucket(tr.get("opened_at") or tr.get("entry_time") or close_ts)
-        if bucket not in session_acc:
-            bucket = "asia"
-        session_acc[bucket]["trades"] += 1
-        session_acc[bucket]["pnl_pct"] += pnl_pct_val
-
-    avg_duration_sec = (sum(dur_seconds_list) / len(dur_seconds_list)) if dur_seconds_list else 0.0
-    avg_duration = _paper_fmt_duration(avg_duration_sec)
-    today_pnl_pct = (today_pnl / initial * 100.0) if initial > 0 else 0.0
-
-    live_btc_px = _latest_btc_price_for_paper(default=0.0)
-    open_payload: list[dict[str, Any]] = []
-    for pos in open_positions:
-        if not isinstance(pos, dict):
-            continue
-        ticker = str(pos.get("ticker") or "BTCUSDT").upper()
-        direction = _normalize_direction(pos.get("direction") or "LONG")
-        entry = _safe_float(pos.get("entry_price"), 0.0)
-        qty = _safe_float(pos.get("quantity"), 0.0)
-        current = _safe_float(pos.get("current_price"), entry)
-        if ticker in {"BTCUSDT", "BTC-USD", "XBTUSD"} and live_btc_px > 0:
-            current = live_btc_px
-        if current <= 0:
-            current = entry
-        if qty <= 0 and entry > 0:
-            value = _safe_float(pos.get("value"), 0.0)
-            qty = (value / entry) if value > 0 else 0.0
-
-        pnl_usd = (current - entry) * qty if direction == "LONG" else (entry - current) * qty
-        base = entry * qty
-        pnl_pct = (pnl_usd / base * 100.0) if base > 0 else _safe_float(pos.get("unrealized_pnl_pct"), 0.0)
-
-        duration_sec = _safe_float(pos.get("held_hours"), 0.0) * 3600.0
-        if duration_sec <= 0:
-            opened_dt = _parse_utc(pos.get("opened_at"))
-            if opened_dt is not None:
-                opened_utc = opened_dt.astimezone(timezone.utc) if opened_dt.tzinfo else opened_dt.replace(tzinfo=timezone.utc)
-                duration_sec = max(0.0, (now_utc - opened_utc).total_seconds())
-
-        open_payload.append(
-            {
-                "id": str(pos.get("trade_id") or pos.get("id") or ticker),
-                "ticker": ticker,
-                "direction": direction if direction in {"LONG", "SHORT"} else "LONG",
-                "entry_price": float(round(entry, 6)),
-                "current_price": float(round(current, 6)),
-                "pnl_usd": float(round(pnl_usd, 6)),
-                "pnl_pct": float(round(pnl_pct, 6)),
-                "sl": float(round(_safe_float(pos.get("stop_loss"), 0.0), 6)),
-                "tp1": float(round(_safe_float(pos.get("take_profit"), 0.0), 6)),
-                "duration_str": _paper_fmt_duration(duration_sec),
-            }
-        )
-
-    session_payload = {
-        "asia": {
-            "pnl_pct": float(round(session_acc["asia"]["pnl_pct"], 6)),
-            "trades": int(session_acc["asia"]["trades"]),
-        },
-        "london": {
-            "pnl_pct": float(round(session_acc["london"]["pnl_pct"], 6)),
-            "trades": int(session_acc["london"]["trades"]),
-        },
-        "ny": {
-            "pnl_pct": float(round(session_acc["ny"]["pnl_pct"], 6)),
-            "trades": int(session_acc["ny"]["trades"]),
-        },
-    }
-
-    return {
-        "capital": float(round(capital, 6)),
-        "initial_capital": float(round(initial, 6)),
-        "total_pnl": float(round(total_pnl, 6)),
-        "total_pnl_pct": float(round(total_pnl_pct, 6)),
-        "today_pnl": float(round(today_pnl, 6)),
-        "today_pnl_pct": float(round(today_pnl_pct, 6)),
-        "win_rate": float(round(win_rate, 6)),
-        "total_trades": int(total_trades),
-        "avg_duration": avg_duration,
-        "sharpe": float(round(sharpe, 6)),
-        "max_drawdown": float(round(max_drawdown, 6)),
-        "profit_factor": float(round(profit_factor, 6)),
-        "session_pnl": session_payload,
-        "suggested_size": float(round(_paper_suggested_size(), 6)),
-        "open_positions": open_payload,
-    }
-
-
 @app.get("/api/paper/portfolio")
 def paper_portfolio():
-    """Paper account state in terminal-compatible shape."""
+    """Live portfolio metrics + positions."""
     try:
         from src.paper_trading import get_paper_engine
 
         engine = get_paper_engine()
-        return _paper_portfolio_payload(engine)
+        metrics = engine.get_portfolio_metrics()
+        positions = engine.get_open_positions()
+        return {
+            "metrics": metrics,
+            "open_positions": positions,
+            "mode": engine._state.get("mode", "manual"),
+            "success": True,
+        }
     except Exception as e:
         logger.error("Paper portfolio error: %s", e)
         return {
-            "capital": float(_PAPER_DEFAULT_CAPITAL),
-            "initial_capital": float(_PAPER_DEFAULT_CAPITAL),
-            "total_pnl": 0.0,
-            "total_pnl_pct": 0.0,
-            "today_pnl": 0.0,
-            "today_pnl_pct": 0.0,
-            "win_rate": 0.0,
-            "total_trades": 0,
-            "avg_duration": "0s",
-            "sharpe": 0.0,
-            "max_drawdown": 0.0,
-            "profit_factor": 0.0,
-            "session_pnl": {
-                "asia": {"pnl_pct": 0.0, "trades": 0},
-                "london": {"pnl_pct": 0.0, "trades": 0},
-                "ny": {"pnl_pct": 0.0, "trades": 0},
+            "metrics": {
+                "capital": 100000.0,
+                "initial_capital": 100000.0,
+                "portfolio_value": 100000.0,
+                "total_pnl": 0.0,
+                "total_pnl_pct": 0.0,
+                "unrealized_pnl": 0.0,
+                "realized_pnl": 0.0,
+                "total_trades": 0,
+                "open_positions": 0,
+                "wins": 0,
+                "losses": 0,
+                "win_rate": 0.0,
+                "sharpe_ratio": 0.0,
+                "max_drawdown": 0.0,
+                "profit_factor": 0.0,
+                "avg_win_pct": 0.0,
+                "avg_loss_pct": 0.0,
+                "best_trade_pct": 0.0,
+                "worst_trade_pct": 0.0,
+                "mode": "manual",
             },
-            "suggested_size": 1.0,
             "open_positions": [],
+            "mode": "manual",
+            "success": False,
+            "error": str(e),
         }
 
 
 @app.get("/api/paper/trades")
-def paper_trades(limit: int = 10):
-    """Recent closed trades in compact terminal shape."""
+def paper_trades(limit: int = 50):
+    """Closed trade history."""
     from src.paper_trading import get_paper_engine
 
-    lim = max(1, min(int(limit), 200))
-    rows = get_paper_engine().get_closed_trades(lim)
-    out: list[dict[str, Any]] = []
-    for tr in rows:
-        if not isinstance(tr, dict):
-            continue
-        raw_time = tr.get("closed_at") or tr.get("exit_time") or tr.get("closed_time") or tr.get("opened_at")
-        dt = _parse_utc(raw_time)
-        if dt is None:
-            time_str = str(raw_time or "")
-        else:
-            dt_utc = dt.astimezone(timezone.utc) if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
-            time_str = dt_utc.strftime("%Y-%m-%d %H:%M:%S")
-        out.append(
-            {
-                "id": str(tr.get("trade_id") or tr.get("id") or uuid4()),
-                "time": time_str,
-                "ticker": str(tr.get("ticker") or "BTCUSDT").upper(),
-                "direction": _normalize_direction(tr.get("direction")),
-                "entry_price": float(round(_safe_float(tr.get("entry_price"), 0.0), 6)),
-                "exit_price": float(round(_safe_float(tr.get("exit_price"), 0.0), 6)),
-                "pnl_usd": float(round(_safe_float(tr.get("pnl"), 0.0), 6)),
-                "pnl_pct": float(round(_safe_float(tr.get("pnl_pct"), 0.0), 6)),
-                "result": _paper_result_label(tr.get("reason")),
-            }
-        )
-    return out
+    return get_paper_engine().get_closed_trades(limit)
 
 
 @app.post("/api/paper/execute")
 async def paper_execute(payload: dict):
-    """Manual paper execution. Body: { ticker, direction, entry_price, mode }."""
+    """
+    Manually execute a paper trade.
+    Body: { ticker, signal, entry_price, stop_loss,
+            take_profit, confidence, asset_class }
+    """
     from src.paper_trading import get_paper_engine
 
-    body = payload or {}
-    ticker = str(body.get("ticker") or "BTCUSDT").strip().upper()
-    direction = _normalize_direction(body.get("direction") or body.get("signal"))
-    mode = str(body.get("mode") or "manual").strip().lower() or "manual"
-    if direction not in {"LONG", "SHORT"}:
-        raise HTTPException(status_code=400, detail="direction must be LONG or SHORT")
-
-    entry_price = _safe_float(body.get("entry_price"), 0.0)
-    if entry_price <= 0:
-        entry_price = _latest_btc_price_for_paper(default=0.0)
-    if entry_price <= 0:
-        raise HTTPException(status_code=400, detail="Valid entry_price is required")
-
-    atr_pct = 0.0
-    vol_payload = _redis_get_json("btc:volatility")
-    if isinstance(vol_payload, dict):
-        atr_pct = _safe_float(vol_payload.get("atr_pct"), 0.0)
-    if atr_pct <= 0:
-        atr_pct = _safe_float(body.get("atr_pct"), 0.0)
-    if atr_pct <= 0:
-        # fixed fallback if ATR unavailable
-        atr_pct = 1.0
-
-    atr_abs = entry_price * (atr_pct / 100.0)
-    risk_dist = max(entry_price * 0.003, 1.5 * atr_abs)
-    if direction == "LONG":
-        sl = entry_price - risk_dist
-        tp = entry_price + risk_dist
-    else:
-        sl = entry_price + risk_dist
-        tp = entry_price - risk_dist
-    if sl <= 0:
-        raise HTTPException(status_code=400, detail="Could not compute stop loss")
-    if tp <= 0:
-        tp = entry_price * (1.01 if direction == "LONG" else 0.99)
-
-    signal = {
-        "ticker": ticker,
-        "signal": direction,
-        "entry_price": float(round(entry_price, 6)),
-        "stop_loss": float(round(sl, 6)),
-        "take_profit": float(round(tp, 6)),
-        "confidence": _safe_float(body.get("confidence"), 70.0),
-        "asset_class": str(body.get("asset_class") or "crypto"),
-        "strength": str(body.get("strength") or "MODERATE"),
-    }
-
     engine = get_paper_engine()
-    result = engine.execute_trade(signal, mode=mode)
-    if not result.get("success"):
-        raise HTTPException(status_code=400, detail=str(result.get("message") or "Trade rejected"))
-
-    size = _safe_float(result.get("quantity"), 0.0)
-    push_broadcast_threadsafe(
-        {
-            "type": "paper_trade_update",
-            "action": "opened",
-            "ticker": ticker,
-            "pnl_usd": 0.0,
-        }
-    )
-    return {"success": True, "trade": result, "size": float(round(size, 6))}
+    result = engine.execute_trade(payload, mode="manual")
+    if result.get("success"):
+        try:
+            nm = NotificationManager((_dashboard_cfg or {}).get("notifications", {}))
+            nm.notify(
+                "PAPER TRADE EXECUTED",
+                (
+                    f"{result.get('direction')} {result.get('ticker')}\n"
+                    f"Entry: {result.get('entry_price')}\n"
+                    f"Qty: {result.get('quantity')}\n"
+                    f"SL: {result.get('stop_loss')} | TP: {result.get('take_profit')}"
+                ),
+                severity="INFO",
+            )
+        except Exception:
+            pass
+    return result
 
 
 @app.post("/api/paper/close")
 async def paper_close(payload: dict):
-    """Close open paper position. Body: { ticker, exit_price }."""
+    """
+    Close an open position.
+    Body: { ticker, exit_price, reason }
+    """
     from src.paper_trading import get_paper_engine
 
-    body = payload or {}
     engine = get_paper_engine()
-    ticker = str(body.get("ticker", "")).strip().upper()
+    ticker = str(payload.get("ticker", "")).strip().upper()
     if not ticker:
-        raise HTTPException(status_code=400, detail="ticker is required")
+        return {"success": False, "error": "Ticker is required"}
 
-    exit_price = _safe_float(body.get("exit_price"), 0.0)
-    if exit_price <= 0:
-        exit_price = _latest_btc_price_for_paper(default=0.0)
-    if exit_price <= 0:
-        raise HTTPException(status_code=400, detail="Valid exit_price is required")
+    exit_price = payload.get("exit_price")
+    if not exit_price:
+        open_map = {str(p.get("ticker")).upper(): p for p in engine.get_open_positions()}
+        pos = open_map.get(ticker)
+        if pos:
+            exit_price = pos.get("current_price") or pos.get("entry_price")
+        if not exit_price:
+            try:
+                import yfinance as yf  # type: ignore[import]
 
-    result = engine.close_position(ticker, float(exit_price), str(body.get("reason") or "manual"))
-    if not result:
-        raise HTTPException(status_code=404, detail="No open position for ticker")
+                hist = yf.Ticker(ticker).history(period="1d", interval="1m")
+                exit_price = float(hist["Close"].iloc[-1]) if not hist.empty else 0.0
+            except Exception:
+                return {"success": False, "error": "Could not fetch current price"}
 
-    pnl_usd = _safe_float(result.get("pnl"), 0.0)
-    pnl_pct = _safe_float(result.get("pnl_pct"), 0.0)
-    res_label = _paper_result_label(result.get("reason"))
-    push_broadcast_threadsafe(
-        {
-            "type": "paper_trade_update",
-            "action": "closed",
-            "ticker": ticker,
-            "pnl_usd": float(round(pnl_usd, 6)),
-        }
-    )
-    return {
-        "success": True,
-        "pnl_usd": float(round(pnl_usd, 6)),
-        "pnl_pct": float(round(pnl_pct, 6)),
-        "result": res_label,
-    }
+    result = engine.close_position(ticker, float(exit_price), payload.get("reason", "manual"))
+    if result:
+        try:
+            nm = NotificationManager((_dashboard_cfg or {}).get("notifications", {}))
+            pnl = float(result.get("pnl", 0.0))
+            nm.notify(
+                "PAPER TRADE CLOSED",
+                (
+                    f"{result.get('direction')} {ticker}\n"
+                    f"P&L: {pnl:+.2f} ({float(result.get('pnl_pct', 0.0)):+.2f}%)\n"
+                    f"Reason: {result.get('reason')}"
+                ),
+                severity="INFO",
+            )
+        except Exception:
+            pass
+        return {"success": True, **result}
+    return {"success": False, "error": "No open position"}
 
 
 @app.post("/api/paper/mode")
@@ -4191,16 +2963,13 @@ async def paper_set_mode(payload: dict):
 
 
 @app.post("/api/paper/reset")
-async def paper_reset(payload: dict | None = None):
+async def paper_reset(payload: dict):
     """Reset paper account. Body: { capital: float }"""
     from src.paper_trading import get_paper_engine
 
-    body = payload or {}
-    capital = _safe_float(body.get("capital"), _PAPER_DEFAULT_CAPITAL)
-    if capital <= 0:
-        capital = _PAPER_DEFAULT_CAPITAL
+    capital = float(payload.get("capital", 100000))
     get_paper_engine().reset(capital)
-    return {"success": True, "capital": float(round(capital, 6))}
+    return {"success": True, "capital": capital}
 
 
 @app.get("/api/paper/pending")
@@ -4532,15 +3301,14 @@ def get_health():
                         if f_name not in factor_ics:
                             factor_ics[f_name] = []  # type: ignore
                         factor_ics[f_name].append(v_float)  # type: ignore
-                except Exception as exc:
-                    logger.warning("factor_ic row parse skipped: %s", exc)
+                except Exception:
+                    pass
             result["factor_ic"] = {  # type: ignore[call-overload]
                 f: _round4(sum(vals) / max(len(vals), 1))
                 for f, vals in factor_ics.items()
             }
             result["signals_24h"] = len(signals)
-        except Exception as exc:
-            logger.warning("portfolio factor_ic block failed: %s", exc)
+        except Exception:
             result["factor_ic"] = {}
             result["signals_24h"] = 0
 
