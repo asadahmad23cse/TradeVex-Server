@@ -2309,6 +2309,9 @@ let paperPositionsTimer = null;
 let paperPanelInitialized = false;
 let _ptModalAutoPlan = null;
 let _ptModalAutoRaw = null;
+// BTC-only PnL cache — set by refreshPaperPortfolio, stops refreshPaperPositions from overwriting with all-assets value
+let _btcOnlyTotalPnl = 0;
+let _btcOnlyTodayPnl  = 0;
 window._ptModalDirection = "LONG";
 window._ptModalTab = "auto";
 
@@ -2738,12 +2741,15 @@ async function executeModalTrade(){
     const data = await paperPostJSON("/api/paper/execute", payload);
     closeTradeModal();
     showPaperToast("✅", side, `@ $${Number(payload.entry_price).toLocaleString()}`, data?.size !== undefined ? `(size ${data.size})` : "");
-    setTimeout(() => {
-      refreshPaperPortfolio();
-      refreshPaperTrades();
-    }, 1500);
+    // Refresh immediately so open position shows right away
+    await refreshPaperPortfolio();
+    refreshPaperTrades();
+    // Safety second refresh in case first was too fast
+    setTimeout(refreshPaperPortfolio, 2500);
   }catch(err){
-    ptSetModalError(err?.message || "Trade execution failed");
+    const msg = err?.message || "Trade execution failed";
+    ptSetModalError(msg);
+    showPaperToast("❌", "Trade failed:", msg);
   }finally{
     if(execBtn){
       execBtn.disabled = false;
@@ -2821,21 +2827,57 @@ function initPaperTradingPanel(){
 
 async function refreshPaperPortfolio(){
   try{
-    const raw = await fetchJSON("/api/paper/portfolio", { noCache: true, ttlMs: 0, timeoutMs: 10000 });
+    // Fetch portfolio + trades in parallel for BTC-only stats
+    const [raw, tradesRaw] = await Promise.all([
+      fetchJSON("/api/paper/portfolio", { noCache: true, ttlMs: 0, timeoutMs: 10000 }),
+      fetchJSON("/api/paper/trades?limit=200", { noCache: true, ttlMs: 0, timeoutMs: 10000 }),
+    ]);
     if(!raw) throw new Error("Portfolio unavailable");
 
     // Normalize: handle both FLAT {capital:...} and NESTED {metrics:{capital:...}}
     const m = (raw.capital !== undefined) ? raw : (raw.metrics || {});
+    const capital = ptNum(m.capital, ptNum(raw.metrics?.capital, 0));
+
+    // Filter BTC-only closed trades for accurate stats
+    const allTrades = Array.isArray(tradesRaw) ? tradesRaw
+      : Array.isArray(tradesRaw?.trades) ? tradesRaw.trades
+      : Array.isArray(tradesRaw?.closed_trades) ? tradesRaw.closed_trades : [];
+    const btcTrades = allTrades.filter(t =>
+      String(t.ticker || t.asset || "").toUpperCase().includes("BTC")
+    );
+
+    // Recalculate all stats from BTC trades only
+    const btcTotal   = btcTrades.length;
+    const btcWins    = btcTrades.filter(t => ptNum(t.pnl_usd ?? t.pnl, 0) > 0).length;
+    const btcWinRate = btcTotal > 0 ? (btcWins / btcTotal) * 100 : 0;
+    const btcPnl     = btcTrades.reduce((s, t) => s + ptNum(t.pnl_usd ?? t.pnl, 0), 0);
+    const grossWin   = btcTrades.filter(t => ptNum(t.pnl_usd ?? t.pnl, 0) > 0).reduce((s,t)=>s+ptNum(t.pnl_usd??t.pnl,0),0);
+    const grossLoss  = Math.abs(btcTrades.filter(t => ptNum(t.pnl_usd ?? t.pnl, 0) <= 0).reduce((s,t)=>s+ptNum(t.pnl_usd??t.pnl,0),0));
+    const btcPF      = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 999 : 0;
+    let avgDurStr = "—";
+    if(btcTotal > 0){
+      const avgHrs = btcTrades.reduce((s,t)=>s+ptNum(t.held_hours,0),0)/btcTotal;
+      const totalMin = Math.round(avgHrs*60);
+      avgDurStr = totalMin>=60 ? `${Math.floor(totalMin/60)}h ${totalMin%60}m` : `${totalMin}m`;
+    }
+
+    // Cache BTC-only PnL so refreshPaperPositions (every 5s) doesn't overwrite with all-assets value
+    _btcOnlyTotalPnl = btcPnl;
+    const _todayStr  = new Date().toISOString().slice(0,10);
+    _btcOnlyTodayPnl = btcTrades
+      .filter(t => String(t.closed_at || t.time || "").startsWith(_todayStr))
+      .reduce((s,t) => s + ptNum(t.pnl_usd ?? t.pnl, 0), 0);
+
     const data = {
-      capital:       ptNum(m.capital,       ptNum(raw.metrics?.capital,       0)),
-      total_pnl:     ptNum(m.total_pnl,     ptNum(raw.metrics?.total_pnl,     0)),
-      today_pnl:     ptNum(m.today_pnl,     ptNum(raw.metrics?.today_pnl,     0)),
-      win_rate:      ptNum(m.win_rate,       ptNum(raw.metrics?.win_rate,      0)),
-      total_trades:  Number(m.total_trades  ?? raw.metrics?.total_trades      ?? 0),
-      avg_duration:  m.avg_duration         || raw.metrics?.avg_duration      || "—",
+      capital,
+      total_pnl:     btcPnl,
+      today_pnl:     _btcOnlyTodayPnl,
+      win_rate:      btcWinRate,
+      total_trades:  btcTotal,
+      avg_duration:  avgDurStr,
       sharpe:        ptNum(m.sharpe,         ptNum(raw.metrics?.sharpe_ratio,  0)),
       max_drawdown:  ptNum(m.max_drawdown,   ptNum(raw.metrics?.max_drawdown,  0)),
-      profit_factor: ptNum(m.profit_factor,  ptNum(raw.metrics?.profit_factor, 0)),
+      profit_factor: btcPF,
       session_pnl:   m.session_pnl          || {},
       open_positions: Array.isArray(m.open_positions)
                         ? m.open_positions
@@ -2903,7 +2945,7 @@ function renderOpenPositions(positions){
   body.innerHTML = "";
 
   if(!Array.isArray(positions) || positions.length === 0){
-    body.innerHTML = '<tr><td colspan="12" class="pt-empty">No open positions — waiting for signal</td></tr>';
+    body.innerHTML = '<tr><td colspan="12" class="pt-empty">No open positions &nbsp;·&nbsp; Click <strong>▲ LONG</strong> or <strong>▼ SHORT</strong> above to enter a new trade</td></tr>';
     return;
   }
 
@@ -2930,8 +2972,17 @@ function renderOpenPositions(positions){
 
 async function refreshPaperPositions(){
   try{
-    const data = await fetchJSON("/api/paper/portfolio", { noCache: true, ttlMs: 0, timeoutMs: 10000 });
-    if(!data) return;
+    const raw = await fetchJSON("/api/paper/portfolio", { noCache: true, ttlMs: 0, timeoutMs: 10000 });
+    if(!raw) return;
+    const m = (raw.capital !== undefined) ? raw : (raw.metrics || {});
+    const data = {
+      capital:   ptNum(m.capital, ptNum(raw.metrics?.capital, 0)),
+      // Use BTC-only cached values — prevents 5s timer from overwriting correct BTC-only PnL
+      total_pnl: _btcOnlyTotalPnl,
+      today_pnl: _btcOnlyTodayPnl,
+      open_positions: Array.isArray(m.open_positions) ? m.open_positions
+                    : Array.isArray(raw.open_positions) ? raw.open_positions : [],
+    };
     ptUpdateTopbar(data);
 
     const body = ptEl("pt-positions-body");
