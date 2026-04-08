@@ -98,7 +98,11 @@ class PaperTradeBook:
         confidence: float = 0.0,
         regime: str = "DEFAULT",
     ) -> bool:
+<<<<<<< HEAD
+        paper_min_confidence = get_dynamic_confidence_gate(regime, utc_hour=datetime.utcnow().hour)
+=======
         paper_min_confidence = get_dynamic_confidence_gate(regime)
+>>>>>>> origin/main
         conf = float(confidence if confidence is not None else 0.0)
         if conf < paper_min_confidence:
             return False

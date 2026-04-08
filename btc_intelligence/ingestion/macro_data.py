@@ -66,7 +66,8 @@ class MacroDataPoller:
         else:
             vix_regime = 'PANIC'
 
-        spx_btc_corr = 0.5  # fallback without dedicated BTC daily history sync here
+        spx_btc_corr = 0.5  # static fallback; live rolling corr computed in AppRuntime
+        spx_daily_closes = [float(x) for x in spx if x > 0]
 
         return {
             'fear_greed_score': fng,
@@ -76,6 +77,7 @@ class MacroDataPoller:
             'us10y_yield_trend': yield_trend,
             'spx_intraday_direction': spx_dir,
             'spx_btc_correlation': spx_btc_corr,
+            'spx_daily_closes': spx_daily_closes,
             'gold_direction': gold_dir,
             'eth_btc_ratio_trend': 'flat',
             'btc_dominance_trend': 'flat',

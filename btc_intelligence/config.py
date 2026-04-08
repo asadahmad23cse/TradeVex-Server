@@ -100,6 +100,7 @@ class Settings(BaseSettings):
     cryptopanic_poll_sec: int = 300
 
     # Files.
+    data_path: str = 'btc_intelligence/data'
     model_dir: str = 'btc_intelligence/models/artifacts'
     signal_log_path: str = 'btc_intelligence/logs/signals.jsonl'
     app_log_path: str = 'btc_intelligence/logs/app.jsonl'
@@ -111,6 +112,58 @@ class Settings(BaseSettings):
     max_price_spike_pct: float = 5.0
     spread_reject_pct: float = 0.05
     slippage_reject_pct: float = 0.03
+
+    # Adverse selection / fill-quality (tape + book); see signals/execution_adverse_selection.py
+    adverse_selection_window_ms: int = 8000
+    adverse_mid_drift_threshold_pct: float = 0.02
+    adverse_spread_widen_ratio: float = 1.4
+    adverse_min_trades: int = 12
+    adverse_noise_mad_multiplier: float = 1.25
+    adverse_spread_baseline_floor_pct: float = 0.008
+
+    # 3-state Gaussian HMM regime (see regime/hmm_regime.py)
+    hmm_n_states: int = 3
+    hmm_min_bars: int = 80
+    hmm_training_bars: int = 220
+    hmm_max_iter: int = 120
+    hmm_random_state: int = 42
+    hmm_cascade_prob_threshold: float = 0.45
+
+    # Macro BTC–SPX correlation gate (Kelly cap)
+    macro_corr_threshold: float = 0.85
+    macro_corr_kelly_multiplier: float = 0.50
+    macro_corr_lookback_days: int = 60
+    macro_corr_min_samples: int = 30
+
+    # Dynamic IC hibernation (Spearman vs forward daily log return)
+    ic_hibernation_threshold: float = 0.02
+    ic_rolling_days: int = 60
+    ic_min_samples: int = 20
+
+    # Background SHAP / cluster snapshot (not on hot path)
+    shap_cluster_interval_sec: int = 3600
+    shap_cluster_output_path: str = 'btc_intelligence/logs/shap_clusters.json'
+
+    # Probability calibration (Platt + isotonic; optional ElasticNet meta via JSON)
+    calibration_min_trades: int = 25
+    calibration_train_frac: float = 0.65
+    calibration_use_elasticnet_meta: bool = True
+    calibration_meta_fit_enabled: bool = True
+    elasticnet_calibrator_path: str = 'btc_intelligence/logs/elasticnet_calibrator.json'
+
+    # Brier watchdog → observation / auto-pause (raw_prob vs outcomes, per regime)
+    brier_watchdog_threshold: float = 0.25
+    brier_watchdog_rolling_trades: int = 80  # last N trades per regime; 0 = full history in that regime
+
+    # Anti-crowding (HHI on aggressive flow): defer SignalEngine emission after crowded tape
+    crowd_gate_enabled: bool = True
+    crowd_delay_ms: int = 35000
+    crowd_hhi_threshold: float = 0.38
+    crowd_flow_imbalance_min: float = 0.68
+    crowd_score_trigger: float = 72.0  # 0–100 composite (HHI + imbalance)
+    crowd_max_trades: int = 500
+    crowd_min_trades: int = 25
+    crowd_price_tick_bps: float = 2.0
 
     # Event keywords.
     blocking_news_keywords: list[str] = Field(

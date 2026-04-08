@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -16,6 +19,11 @@ class DecisionEngineInput:
     momentum_score: float
     aggression_buy_pct: float
     flow_score: float
+    # Alpha barrier: require E[Ret]*P(win) > spread + slippage (all as fractions of notional).
+    expected_return_frac: float | None = None
+    win_prob: float | None = None
+    spread_frac: float | None = None
+    slippage_frac: float | None = None
 
 
 class DecisionEngine:
@@ -26,7 +34,14 @@ class DecisionEngine:
         vol_raw = str(inp.volatility_regime or "").upper()
 
         momentum = float(np.clip(inp.momentum_score, -1.0, 1.0))
-        flow = float(np.clip(inp.flow_score, -1.0, 1.0))
+        raw_flow = float(inp.flow_score)
+        x = raw_flow
+        if abs(x) > 1.0:
+            x = x / 100.0
+        x = float(np.clip(x, -20.0, 20.0))
+        flow = float(np.clip(x, -1.0, 1.0))
+        if abs(raw_flow - flow) > 1e-6:
+            logger.debug("flow_score raw=%.3f clipped=%.3f", raw_flow, flow)
         cost = float(np.clip(inp.cost_score, -1.0, 1.0))
         obi = float(np.clip(inp.obi_imbalance, -1.0, 1.0))
         cvd_slope = float(inp.cvd_slope)
@@ -66,6 +81,25 @@ class DecisionEngine:
             blockers.append("Cost gate negative: expected edge after costs <= 0")
         if regime_dir != 0 and directional_bias != 0 and np.sign(regime_dir) != np.sign(directional_bias):
             blockers.append("Regime conflict with flow/momentum direction")
+
+        er = inp.expected_return_frac
+        pw = inp.win_prob
+        sf = inp.spread_frac
+        slf = inp.slippage_frac
+        if (
+            er is not None
+            and pw is not None
+            and sf is not None
+            and slf is not None
+            and er >= 0.0
+            and pw >= 0.0
+        ):
+            ev = float(er) * float(pw)
+            cost_line = float(max(sf, 0.0)) + float(max(slf, 0.0))
+            if ev <= cost_line + 1e-12:
+                blockers.append(
+                    f"Alpha barrier: E[Ret]*P(win)={ev:.6f} <= spread+slip={cost_line:.6f}"
+                )
 
         decision = "HOLD"
         if not blockers:

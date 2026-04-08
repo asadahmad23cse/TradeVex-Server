@@ -1,8 +1,11 @@
 ﻿from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 
 from btc_intelligence.config import settings
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -72,15 +75,22 @@ def build_risk_plan(
 
     # Volatility-scaled TP multipliers.
     if vol_regime == 'compression':
-        tp_mult = (1.2, 2.0, 3.0)
+        tp_mult = (0.9, 2.2, 3.5)  # TP1 closer, TP2/3 wider
     elif vol_regime == 'expansion':
-        tp_mult = (2.0, 3.5, 6.0)
+        tp_mult = (1.5, 4.0, 7.0)  # TP1 closer, TP2/3 wider
     else:
-        tp_mult = (1.5, 2.5, 4.0)
+        tp_mult = (1.1, 3.0, 5.0)  # TP1 closer, TP2/3 wider
 
     tp1 = entry_mid + sl_distance * tp_mult[0] if direction == 'LONG' else entry_mid - sl_distance * tp_mult[0]
     tp2 = entry_mid + sl_distance * tp_mult[1] if direction == 'LONG' else entry_mid - sl_distance * tp_mult[1]
     tp3 = entry_mid + sl_distance * tp_mult[2] if direction == 'LONG' else entry_mid - sl_distance * tp_mult[2]
+    logger.debug(
+        'tp_levels tp1=%.2f tp2=%.2f tp3=%.2f vol=%s',
+        tp1,
+        tp2,
+        tp3,
+        vol_regime,
+    )
 
     rr_tp2 = abs(tp2 - entry_mid) / sl_distance
     if rr_tp2 < 2.0:

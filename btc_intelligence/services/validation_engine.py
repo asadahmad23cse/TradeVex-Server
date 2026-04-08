@@ -55,6 +55,21 @@ class ValidationEngine:
         calibration_error = float(data.get("calibration_error", 0.15))
         min_samples_threshold, max_brier_threshold = self.config.thresholds_for_regime(regime)
 
+        e_ret = data.get("expected_return_frac")
+        p_win = data.get("win_prob")
+        s_frac = data.get("spread_frac")
+        slip_frac = data.get("slippage_frac")
+        if (
+            isinstance(e_ret, (int, float))
+            and isinstance(p_win, (int, float))
+            and isinstance(s_frac, (int, float))
+            and isinstance(slip_frac, (int, float))
+        ):
+            ev_gate = float(e_ret) * float(p_win) > float(s_frac) + float(slip_frac) + 1e-12
+            alpha_barrier_ok = bool(ev_gate)
+        else:
+            alpha_barrier_ok = True
+
         checks = {
             "sufficient_data": sample_size >= min_samples_threshold,
             "has_edge": expected_edge >= self.config.min_expected_edge,
@@ -64,6 +79,7 @@ class ValidationEngine:
                 calibration_error <= self.config.max_calibration_error
                 and brier_score <= max_brier_threshold
             ),
+            "alpha_barrier": alpha_barrier_ok,
         }
         approved = all(checks.values())
         if approved:

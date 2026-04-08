@@ -11,9 +11,15 @@ from btc_intelligence.features.feature_vector import FeatureState
 from btc_intelligence.models.inference import ModelInference
 from btc_intelligence.regime.classifier import RegimeResult
 from btc_intelligence.signals.alpha import compute_alpha_score
+from btc_intelligence.signals.anti_crowding import evaluate_anti_crowding_gate
 from btc_intelligence.signals.execution import evaluate_execution
 from btc_intelligence.signals.no_trade_filter import apply_no_trade_filters
-from btc_intelligence.signals.probability_stacker import ProbabilityStacker
+from btc_intelligence.services.ic_monitor import (
+    apply_hibernation_mask,
+    apply_hibernation_to_stack_edges,
+    get_ic_monitor,
+)
+from btc_intelligence.signals.probability_stacker import ProbabilityStacker, StackResult
 from btc_intelligence.signals.risk import build_risk_plan
 from btc_intelligence.utils.validator import utc_now_iso
 
@@ -35,6 +41,7 @@ class SignalEngine:
         self.model = model
         self.stacker = stacker
         self.last_signal_times: dict[str, datetime] = {}
+        self._crowd_suppress_until: datetime | None = None
 
     def build(
         self,
@@ -45,6 +52,40 @@ class SignalEngine:
         monitoring_stats: dict[str, Any],
         auto_pause: bool,
     ) -> dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        if bool(getattr(settings, "crowd_gate_enabled", True)):
+            if self._crowd_suppress_until is not None and now >= self._crowd_suppress_until:
+                self._crowd_suppress_until = None
+            if self._crowd_suppress_until is not None:
+                cu = self._crowd_suppress_until.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                return self._hold(
+                    "Anti-crowding delay: waiting for post-sweep liquidity",
+                    state,
+                    regime.regime,
+                    monitoring_stats,
+                    cooldown_until=cu,
+                )
+            crowd = evaluate_anti_crowding_gate(snapshot.get("agg_trades", []), now=now)
+            if crowd.trigger_delay:
+                delay_ms = int(getattr(settings, "crowd_delay_ms", 30000))
+                self._crowd_suppress_until = now + timedelta(milliseconds=delay_ms)
+                cu = self._crowd_suppress_until.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                ac = {
+                    "hhi": crowd.hhi,
+                    "crowding_score_0_100": crowd.crowding_score_0_100,
+                    "dominant_side": crowd.dominant_side,
+                    "aggressive_buy_share": crowd.aggressive_buy_share,
+                    "delay_ms": delay_ms,
+                }
+                return self._hold(
+                    crowd.reason,
+                    state,
+                    regime.regime,
+                    monitoring_stats,
+                    cooldown_until=cu,
+                    anti_crowding=ac,
+                )
+
         candidate = self._pick_strategy(state, regime.regime)
         if candidate is None:
             return self._hold('No strategy confluence', state, regime.regime, monitoring_stats)
@@ -73,11 +114,18 @@ class SignalEngine:
             return self._hold(risk.reason, state, regime.regime, monitoring_stats)
 
         vector, feature_map = state.to_vector(direction=candidate.direction, regime=regime.regime)
+        hibernated = get_ic_monitor().hibernated_factors
+        feature_map, vector = apply_hibernation_mask(feature_map, vector, hibernated)
+
         seq = np.vstack(sequence_vectors[-24:]) if len(sequence_vectors) >= 24 else None
         ensemble = self.model.infer(candidate.direction, vector, feature_map, sequence_24=seq, regime=regime.regime)
 
         alpha = compute_alpha_score(state, candidate.direction, regime.regime, execution.slippage_pct)
-        stack = self.stacker.stack(candidate.factors)
+        stack_raw = self.stacker.stack(candidate.factors)
+        adj_edges, stacked_p = apply_hibernation_to_stack_edges(
+            stack_raw.independent_edges, candidate.factors, hibernated
+        )
+        stack = StackResult(stacked_probability=stacked_p, independent_edges=adj_edges)
 
         confidence = float(ensemble.confidence)
         if abs(confidence / 100.0 - stack.stacked_probability) > 0.20:
@@ -100,7 +148,6 @@ class SignalEngine:
         if not decision.allow:
             return self._hold(decision.reason, state, regime.regime, monitoring_stats, cooldown_until=decision.cooldown_until)
 
-        now = datetime.now(timezone.utc)
         cooldown_until = now + timedelta(hours=settings.signal_cooldown_hours)
         stale_after = now + timedelta(minutes=settings.signal_stale_minutes)
         self.last_signal_times[candidate.direction] = now
@@ -202,6 +249,8 @@ class SignalEngine:
                 'inference_ms': round(ensemble.inference_ms, 2),
             },
             'feature_state': feature_map,
+            'hibernated_factors': sorted(hibernated),
+            'factor_ic_snapshot': {k: round(v, 6) for k, v in get_ic_monitor().factor_ics.items()},
         }
         return payload
 
@@ -433,10 +482,12 @@ class SignalEngine:
         regime: str,
         monitoring_stats: dict[str, Any],
         cooldown_until: str = '',
+        *,
+        anti_crowding: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         now = datetime.now(timezone.utc)
         stale_after = now + timedelta(minutes=settings.signal_stale_minutes)
-        return {
+        payload: dict[str, Any] = {
             'signal': 'HOLD',
             'validated': 'HOLD',
             'confidence': 0,
@@ -533,6 +584,9 @@ class SignalEngine:
                 'fear_greed': state.macro.fear_greed_score,
             },
         }
+        if anti_crowding:
+            payload["anti_crowding"] = anti_crowding
+        return payload
 
     @staticmethod
     def _nearest_ob_level(state: FeatureState, direction: str) -> float:

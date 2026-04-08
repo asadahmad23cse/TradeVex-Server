@@ -11,24 +11,24 @@ services:
     ports:
       - "9000:9000"
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     volumes:
       - ./:/app
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: btc-intel-frontend
-    environment:
-      - NEXT_PUBLIC_API_BASE=http://localhost:9000
-    ports:
-      - "3000:3000"
-    depends_on:
-      - backend
 
   redis:
     image: redis:7-alpine
     container_name: btc-intel-redis
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  redis_data:

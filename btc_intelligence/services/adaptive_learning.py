@@ -8,6 +8,10 @@ from pathlib import Path
 from statistics import mean, pstdev
 from typing import Any
 
+import numpy as np
+
+from btc_intelligence.config import settings
+
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +57,9 @@ class AdaptiveLearningEngine:
         self.condition_counts: dict[str, int] = {}
         self.last_update_trade_count: dict[str, int] = {k: 0 for k in REGIMES}
         self.last_validation: dict[str, dict[str, Any]] = {}
+        self._enet_cache: dict[str, Any] | None = None
+        self._enet_mtime: float = 0.0
+        self._calibration_brier_refit_requested: bool = False
         self._load()
 
     def _load(self) -> None:
@@ -278,7 +285,7 @@ class AdaptiveLearningEngine:
     def _reliability_stats(self, regime: str) -> dict[str, Any]:
         rows = self.trade_history.get(regime, [])
         if len(rows) < 15:
-            return {"brier": 0.25, "ece": 0.5, "bins": []}
+            return {"brier": 0.25, "ece": 0.12, "bins": []}
 
         bins = [{"n": 0, "sum_prob": 0.0, "sum_outcome": 0.0} for _ in range(10)]
         sq_err = 0.0
@@ -306,12 +313,70 @@ class AdaptiveLearningEngine:
         brier = sq_err / max(total, 1)
         return {"brier": float(brier), "ece": float(ece), "bins": bins_out}
 
-    def calibrate_probability(self, regime: str, raw_prob: float) -> dict[str, Any]:
-        regime_bucket = self._normalize_regime_bucket(regime)
-        p = float(max(0.0, min(1.0, raw_prob)))
+    def worst_regime_brier(self) -> float:
+        """Max Brier across regime buckets (raw_prob vs win/loss), rolling window per regime."""
+        mx = 0.0
+        win = int(getattr(settings, "brier_watchdog_rolling_trades", 0) or 0)
+        for reg in REGIMES:
+            rows = self._sorted_rows(reg, self.trade_history)
+            if win > 0:
+                rows = rows[-win:]
+            if not rows:
+                continue
+            sq_err = 0.0
+            for row in rows:
+                p = float(max(0.0, min(1.0, row.get("raw_prob", 0.5))))
+                y = 1.0 if float(row.get("pnl_pct", 0.0)) > 0 else 0.0
+                sq_err += (p - y) ** 2
+            mx = max(mx, sq_err / len(rows))
+        if mx > 0.25:
+            self._calibration_brier_refit_requested = True
+        else:
+            self._calibration_brier_refit_requested = False
+        return float(mx)
+
+    def _get_enet_state(self) -> dict[str, Any] | None:
+        if not bool(settings.calibration_use_elasticnet_meta):
+            return None
+        path = Path(str(settings.elasticnet_calibrator_path))
+        if not path.is_file():
+            return None
+        try:
+            mtime = float(path.stat().st_mtime)
+            if self._enet_cache is not None and mtime == self._enet_mtime:
+                return self._enet_cache
+            self._enet_cache = json.loads(path.read_text(encoding="utf-8"))
+            self._enet_mtime = mtime
+            return self._enet_cache
+        except Exception as exc:
+            logger.debug("ElasticNet calibrator load failed: %s", exc)
+            return None
+
+    def _enet_pre_prob(self, raw_prob: float, factor_values: dict[str, float] | None, enet: dict[str, Any] | None) -> float:
+        if not enet:
+            return float(max(0.0, min(1.0, raw_prob)))
+        order = list(enet.get("feature_order", ["raw_prob"] + list(FACTOR_KEYS)))
+        mean = np.asarray(enet.get("mean", [0.0] * len(order)), dtype=float)
+        scale = np.asarray(enet.get("scale", [1.0] * len(order)), dtype=float)
+        coef = np.asarray(enet.get("coef", [0.0] * len(order)), dtype=float)
+        intercept = float(enet.get("intercept", 0.0))
+        fv = factor_values or {}
+        vec = [float(max(0.0, min(1.0, raw_prob)))] + [float(max(-1.0, min(1.0, fv.get(k, 0.0)))) for k in FACTOR_KEYS]
+        if len(vec) != len(order):
+            return float(max(0.0, min(1.0, raw_prob)))
+        x = (np.asarray(vec, dtype=float) - mean) / np.clip(scale, 1e-9, None)
+        z = float(x @ coef + intercept)
+        return float(max(0.0, min(1.0, self._sigmoid(z))))
+
+    @staticmethod
+    def _sorted_rows(regime_bucket: str, trade_history: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+        rows = list(trade_history.get(regime_bucket, []))
+        rows.sort(key=lambda r: str(r.get("timestamp", "")))
+        return rows
+
+    def _histogram_calibrate(self, regime_bucket: str, p: float) -> dict[str, Any]:
         stats = self._reliability_stats(regime_bucket)
         bins = stats.get("bins", [])
-
         observed = None
         for row in bins:
             lo = float(row["bin"]) / 10.0
@@ -319,19 +384,125 @@ class AdaptiveLearningEngine:
             if p >= lo and (p < hi or row["bin"] == 9):
                 observed = float(row["accuracy"])
                 break
-
         if observed is None:
             calibrated = p
         else:
-            # Smooth blend to prevent noisy bin overreaction.
             calibrated = (0.6 * p) + (0.4 * observed)
-
         calibrated = float(max(0.0, min(1.0, calibrated)))
         return {
             "raw_prob": p,
             "calibrated_prob": calibrated,
             "brier_score": round(float(stats.get("brier", 0.25)), 6),
-            "calibration_error": round(float(stats.get("ece", 0.5)), 6),
+            "calibration_error": round(float(stats.get("ece", 0.12)), 6),
+            "reliability_curve": stats.get("bins", []),
+            "regime": regime_bucket,
+        }
+
+    def _fit_platt_isotonic(self, meta_inputs: list[float], labels: list[float]):
+        try:
+            from sklearn.isotonic import IsotonicRegression
+            from sklearn.linear_model import LogisticRegression
+        except ImportError:
+            return None, None
+
+        X = np.asarray(meta_inputs, dtype=float).reshape(-1, 1)
+        y = np.asarray(labels, dtype=float)
+        if X.shape[0] < 10 or len(np.unique(y)) < 2:
+            return None, None
+
+        try:
+            platt = LogisticRegression(
+                C=1e6,
+                solver="lbfgs",
+                max_iter=500,
+                random_state=42,
+            )
+            platt.fit(X, y)
+            z = platt.predict_proba(X)[:, 1]
+            iso = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0)
+            iso.fit(z, y)
+            return platt, iso
+        except Exception as exc:
+            logger.debug("Platt/isotonic fit failed: %s", exc)
+            return None, None
+
+    def _apply_platt_iso(self, p0: float, platt: Any, iso: Any) -> float:
+        if platt is None or iso is None:
+            return float(max(0.0, min(1.0, p0)))
+        try:
+            p1 = float(platt.predict_proba(np.asarray([[p0]], dtype=float))[0, 1])
+            p2 = float(iso.predict([p1])[0])
+            return float(max(0.0, min(1.0, p2)))
+        except Exception:
+            return float(max(0.0, min(1.0, p0)))
+
+    def calibrate_probability(
+        self, regime: str, raw_prob: float, factor_values: dict[str, float] | None = None
+    ) -> dict[str, Any]:
+        regime_bucket = self._normalize_regime_bucket(regime)
+        p = float(max(0.0, min(1.0, raw_prob)))
+        stats = self._reliability_stats(regime_bucket)
+        rows = self._sorted_rows(regime_bucket, self.trade_history)
+        min_tr_raw = int(getattr(settings, "calibration_min_trades", 0) or 0)
+        if min_tr_raw == 0 or min_tr_raw > 50:
+            min_tr = 30
+        else:
+            min_tr = min_tr_raw
+        force_recal = bool(self._calibration_brier_refit_requested)
+        min_tr_effective = min(min_tr, 15) if force_recal else min_tr
+
+        if len(rows) < min_tr_effective:
+            return self._histogram_calibrate(regime_bucket, p)
+
+        enet = self._get_enet_state()
+        frac = float(settings.calibration_train_frac)
+        split = max(10, int(frac * len(rows)))
+        split = min(split, len(rows) - max(5, min_tr_effective // 3))
+        if split >= len(rows) - 2:
+            split = max(10, len(rows) - 5)
+
+        train_rows = rows[:split]
+        val_rows = rows[split:]
+
+        def _meta_inputs(batch: list[dict[str, Any]]) -> list[float]:
+            return [
+                self._enet_pre_prob(float(r.get("raw_prob", 0.5)), r.get("factors"), enet)
+                for r in batch
+            ]
+
+        def _labels(batch: list[dict[str, Any]]) -> list[float]:
+            return [1.0 if float(r.get("pnl_pct", 0.0)) > 0 else 0.0 for r in batch]
+
+        mi_train = _meta_inputs(train_rows)
+        y_train = _labels(train_rows)
+        platt_tr, iso_tr = self._fit_platt_isotonic(mi_train, y_train)
+
+        brier_oos = float(stats.get("brier", 0.25))
+        if platt_tr is not None and iso_tr is not None and len(val_rows) >= 5:
+            y_val = np.asarray(_labels(val_rows), dtype=float)
+            preds = np.asarray(
+                [self._apply_platt_iso(x, platt_tr, iso_tr) for x in _meta_inputs(val_rows)],
+                dtype=float,
+            )
+            brier_oos = float(np.mean((preds - y_val) ** 2))
+
+        mi_all = _meta_inputs(rows)
+        y_all = _labels(rows)
+        platt_full, iso_full = self._fit_platt_isotonic(mi_all, y_all)
+        if platt_full is None or iso_full is None:
+            out = self._histogram_calibrate(regime_bucket, p)
+            out["brier_score"] = round(brier_oos, 6)
+            return out
+
+        p0_live = self._enet_pre_prob(p, factor_values, enet)
+        calibrated = self._apply_platt_iso(p0_live, platt_full, iso_full)
+
+        ece = float(stats.get("ece", 0.12))
+        return {
+            "raw_prob": p,
+            "calibrated_prob": calibrated,
+            "brier_score": round(brier_oos, 6),
+            "calibration_error": round(ece, 6),
             "reliability_curve": stats.get("bins", []),
             "regime": regime_bucket,
         }
@@ -421,7 +592,7 @@ class AdaptiveLearningEngine:
         base_conf = float(max(0.0, min(100.0, base_confidence)))
         blockers_list = list(blockers or [])
 
-        calibration = self.calibrate_probability(regime_bucket, raw_prob)
+        calibration = self.calibrate_probability(regime_bucket, raw_prob, factor_values=factor_values)
         calibrated_prob = float(calibration.get("calibrated_prob", raw_prob))
         weights = self.weights.get(regime_bucket, self.base_weights[regime_bucket])
 
@@ -449,10 +620,13 @@ class AdaptiveLearningEngine:
             reasons.append("Edge decay active: stricter trade gate enabled")
             if calibrated_prob < 0.60 or adaptive_score < 0.10:
                 final_decision = "HOLD"
-        if decision in {"LONG", "SHORT"} and calibrated_prob < 0.53:
+        _platt = getattr(self, "_platt_full", None)
+        _is_fitted = bool(_platt and getattr(_platt, "fitted", False))
+        _prob_min = 0.53 if _is_fitted else 0.38
+        if decision in {"LONG", "SHORT"} and calibrated_prob < _prob_min:
             reasons.append(f"Calibrated probability too low ({calibrated_prob:.2f})")
             final_decision = "HOLD"
-        if decision in {"LONG", "SHORT"} and adaptive_score < 0.05:
+        if decision in {"LONG", "SHORT"} and adaptive_score < 0.02:
             reasons.append(f"Adaptive score too weak ({adaptive_score:.3f})")
             final_decision = "HOLD"
 

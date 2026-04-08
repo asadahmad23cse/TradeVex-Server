@@ -35,6 +35,7 @@ from btc_intelligence.monitoring.performance_tracker import PerformanceTracker
 from btc_intelligence.regime.classifier import classify_regime
 from btc_intelligence.signals.engine import SignalEngine
 from btc_intelligence.signals.execution import evaluate_execution, recommended_max_position_btc
+from btc_intelligence.signals.execution_adverse_selection import compute_adverse_selection
 from btc_intelligence.signals.intelligence import (
     combined_btc_signal,
     execution_rejection_code,
@@ -43,6 +44,9 @@ from btc_intelligence.signals.intelligence import (
     volatility_tradeability,
 )
 from btc_intelligence.signals.probability_stacker import ProbabilityStacker
+from btc_intelligence.services.ic_monitor import apply_hibernation_mask, get_ic_monitor
+from btc_intelligence.services.calibration_meta_job import run_elasticnet_calibration_fit
+from btc_intelligence.services.shap_cluster_job import run_shap_cluster_snapshot
 from btc_intelligence.services import (
     AggregatorConfig,
     AdaptiveLearningConfig,
@@ -188,11 +192,13 @@ class AppRuntime:
         self.retrainer = ModelRetrainer(self.model)
 
         self._signal_task: asyncio.Task | None = None
+        self._shap_cluster_task: asyncio.Task | None = None
         self._running = False
         self.feature_seq: deque[np.ndarray] = deque(maxlen=200)
         self._open_trade_context: dict[str, Any] = {}
         self._shared_signals_db = Path('data/signals.db')
         self._shared_signals_db.parent.mkdir(parents=True, exist_ok=True)
+        self._sqlite_seed_count: int = 0
         self._last_saved_btc_signal = 'HOLD'
         self._last_open_signal_id: str | None = None
         self._open_signal_state: dict[str, Any] | None = None
@@ -200,6 +206,7 @@ class AppRuntime:
         self._last_btc_signal_time: float = 0.0
         self._last_btc_signal_direction: str | None = None
         self._latest_intelligence_bundle: dict[str, Any] = {}
+        self._brier_observation_mode: bool = False
 
         self.signal_log_path = Path(settings.signal_log_path)
         self.signal_log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -213,6 +220,9 @@ class AppRuntime:
         self._running = True
         if settings.redis_state_enabled:
             await self.redis_state.connect()
+            await self._maybe_warm_start_redis_signal_from_sqlite()
+
+        await self._seed_calibration_from_sqlite()
 
         await self.ws_manager.start()
         await self.rest_poller.start()
@@ -225,6 +235,7 @@ class AppRuntime:
         await self.cryptopanic.start()
 
         self._signal_task = asyncio.create_task(self._signal_loop(), name='signal_loop')
+        self._shap_cluster_task = asyncio.create_task(self._shap_cluster_background_loop(), name='shap_clusters')
         logger.info('Runtime started')
 
     async def stop(self) -> None:
@@ -232,6 +243,9 @@ class AppRuntime:
         if self._signal_task:
             self._signal_task.cancel()
             await asyncio.gather(self._signal_task, return_exceptions=True)
+        if self._shap_cluster_task:
+            self._shap_cluster_task.cancel()
+            await asyncio.gather(self._shap_cluster_task, return_exceptions=True)
 
         await self.ws_manager.stop()
         await self.rest_poller.stop()
@@ -243,7 +257,58 @@ class AppRuntime:
         await self.macro_data.stop()
         await self.cryptopanic.stop()
         await self.redis_state.close()
+
+        self._persist_shutdown_checkpoints()
+
         logger.info('Runtime stopped')
+
+    def _persist_shutdown_checkpoints(self) -> None:
+        data_root = Path(settings.data_path)
+        data_root.mkdir(parents=True, exist_ok=True)
+
+        pos = self.paper.open_position
+        if pos is not None:
+            opened_at: str | None = None
+            tid = self.paper._open_trade_id
+            if tid and tid in self.paper._open:
+                oa = self.paper._open[tid].get("opened_at_utc")
+                if isinstance(oa, datetime):
+                    opened_at = oa.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+                elif oa is not None:
+                    opened_at = str(oa)
+            checkpoint = {
+                "direction": pos.direction,
+                "entry": float(pos.entry),
+                "stop": float(pos.stop),
+                "tp1": float(pos.tp1),
+                "tp2": float(pos.tp2),
+                "tp3": float(pos.tp3),
+                "size_btc": float(pos.size_btc),
+                "opened_at": opened_at,
+            }
+            try:
+                out = data_root / "open_position_checkpoint.json"
+                out.write_text(json.dumps(checkpoint, ensure_ascii=True, indent=2), encoding="utf-8")
+                logger.info("shutdown: saved open position checkpoint")
+            except Exception as exc:
+                logger.debug("open position checkpoint write failed: %s", exc)
+
+        self.probability_service.flush_buffer_to_disk(data_root / "platt_buffer_checkpoint.json")
+
+    async def _shap_cluster_background_loop(self) -> None:
+        await asyncio.sleep(30)
+        while self._running:
+            try:
+                await asyncio.to_thread(run_shap_cluster_snapshot, self.model)
+                await asyncio.to_thread(run_elasticnet_calibration_fit, self.adaptive_learning)
+            except asyncio.CancelledError:
+                break
+            except Exception as exc:
+                logger.debug('SHAP cluster background task: %s', exc)
+            try:
+                await asyncio.sleep(max(60, int(settings.shap_cluster_interval_sec)))
+            except asyncio.CancelledError:
+                break
 
     async def _signal_loop(self) -> None:
         while self._running:
@@ -251,8 +316,30 @@ class AppRuntime:
                 snapshot = await self.buffer.snapshot()
                 monitoring = self._monitoring_dict()
                 pause = self.auto_pause_manager.evaluate(self.performance_tracker.stats(portfolio_heat_pct=monitoring['portfolio_heat_pct']))
-                monitoring['auto_pause'] = pause.paused
-                monitoring['auto_pause_reason'] = pause.reason
+                brier_pause = False
+                brier_reason = ""
+                try:
+                    wb = self.adaptive_learning.worst_regime_brier()
+                    monitoring['calibration_brier_max'] = round(float(wb), 6)
+                    thr = float(settings.brier_watchdog_threshold)
+                    if wb > thr:
+                        brier_pause = True
+                        brier_reason = f"brier_watchdog:{wb:.4f}>{thr}"
+                        self._brier_observation_mode = True
+                    else:
+                        self._brier_observation_mode = False
+                except Exception as exc:
+                    logger.debug("Brier watchdog skipped: %s", exc)
+                    self._brier_observation_mode = False
+
+                monitoring['auto_pause'] = bool(pause.paused or brier_pause)
+                reasons = [pause.reason] if pause.paused else []
+                if brier_pause:
+                    reasons.append(brier_reason)
+                    monitoring['brier_observation_mode'] = True
+                else:
+                    monitoring['brier_observation_mode'] = False
+                monitoring['auto_pause_reason'] = "; ".join([r for r in reasons if r]) or (pause.reason if pause.paused else "")
                 now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
                 try:
                     current_equity = float(self.performance_tracker.equity_curve[-1]) if self.performance_tracker.equity_curve else 0.0
@@ -307,11 +394,16 @@ class AppRuntime:
                         self._mark_to_market(snapshot)
                         state = build_feature_state(snapshot)
                         regime = classify_regime(snapshot, state)
+<<<<<<< HEAD
+                        get_ic_monitor().maybe_record_daily(snapshot, state, regime.regime)
+=======
+>>>>>>> origin/main
                     await self._publish_intelligence_state(
                         snapshot,
                         state,
                         regime_name=regime.regime,
                         signal_payload=snapshot.get('latest_signal', {}),
+                        regime_state_probs=regime.state_probs,
                     )
                     await asyncio.sleep(2)
                     continue
@@ -322,6 +414,10 @@ class AppRuntime:
                     await self.buffer.set_volatility_tradeability(vol_payload)
 
                     regime = classify_regime(snapshot, state)
+<<<<<<< HEAD
+                    get_ic_monitor().maybe_record_daily(snapshot, state, regime.regime)
+=======
+>>>>>>> origin/main
                     payload = self.engine.build(
                         snapshot=snapshot,
                         state=state,
@@ -331,8 +427,14 @@ class AppRuntime:
                         auto_pause=bool(monitoring['auto_pause']),
                     )
 
+<<<<<<< HEAD
+                    vec, fm_long = state.to_vector(direction='LONG', regime=regime.regime)
+                    _, vec_masked = apply_hibernation_mask(fm_long, vec, get_ic_monitor().hibernated_factors)
+                    self.feature_seq.append(vec_masked.squeeze(0))
+=======
                     vec, _ = state.to_vector(direction='LONG', regime=regime.regime)
                     self.feature_seq.append(vec.squeeze(0))
+>>>>>>> origin/main
 
                 await self.buffer.mark_feature_eval(last_close)
                 intelligence_payload = await self._publish_intelligence_state(
@@ -340,6 +442,7 @@ class AppRuntime:
                     state,
                     regime_name=regime.regime,
                     signal_payload=payload,
+                    regime_state_probs=regime.state_probs,
                 )
                 ws_payload = dict(payload)
                 ws_payload["raw_confidence"] = float(payload.get("confidence", 0.0))
@@ -435,6 +538,7 @@ class AppRuntime:
                     "ALTER TABLE signals ADD COLUMN mae_pct REAL DEFAULT 0",
                     "ALTER TABLE signals ADD COLUMN exit_price REAL DEFAULT 0",
                     "ALTER TABLE signals ADD COLUMN duration_seconds INT DEFAULT 0",
+                    "ALTER TABLE signals ADD COLUMN raw_score REAL",
                 ):
                     try:
                         cur.execute(ddl)
@@ -593,6 +697,22 @@ class AppRuntime:
         return "sideways"
 
     @staticmethod
+    def _sanitize_orderflow_flow_score(orderflow_payload: dict[str, Any]) -> None:
+        """
+        DecisionEngine expects flow_score in ~[-1, 1]. Leaks of decision_breakdown-style
+        values (~±100, e.g. -34.4) must be scaled back. Cap intermediate magnitude [-20, 20].
+        """
+        raw_in = float(orderflow_payload.get("flow_score", 0.0))
+        x = raw_in
+        if abs(x) > 1.0:
+            x = x / 100.0
+        x = float(np.clip(x, -20.0, 20.0))
+        out = float(np.clip(x, -1.0, 1.0))
+        if abs(raw_in - out) > 1e-6:
+            logger.debug("flow_score raw=%.3f clipped=%.3f", raw_in, out)
+        orderflow_payload["flow_score"] = out
+
+    @staticmethod
     def _derive_momentum_score(state) -> float:
         tf = state.price_action.tf_15m
         price = max(float(tf.price), 1e-9)
@@ -634,12 +754,144 @@ class AppRuntime:
         except Exception:
             return 0.0
 
+    def _alpha_barrier_fracs(
+        self,
+        monitoring_stats: dict[str, Any],
+        execution_payload: dict[str, Any],
+    ) -> tuple[float | None, float | None, float | None, float | None]:
+        """
+        E[Ret] and P(win) vs spread/slippage, all as fractions except P(win) in [0,1].
+        """
+        try:
+            spread_frac = float(execution_payload.get("spread_pct", 0.0)) / 100.0
+            slip_frac = float(execution_payload.get("slippage_pct", 0.0)) / 100.0
+            win_prob = float(monitoring_stats.get("recent_win_rate", 0.0))
+            win_prob = float(max(0.0, min(1.0, win_prob)))
+            rows: list[Any] = []
+            for block in self.strategy_engine.history.values():
+                if isinstance(block, list):
+                    rows.extend(block[-80:])
+            pnls = [float(r.get("pnl_pct", 0.0)) for r in rows if isinstance(r, dict)]
+            wins = [x for x in pnls if x > 0.0]
+            if wins:
+                e_ret_pct = float(sum(wins) / len(wins))
+            elif pnls:
+                e_ret_pct = float(sum(abs(x) for x in pnls) / max(len(pnls), 1)) * 0.30
+            else:
+                e_ret_pct = 0.35
+            e_ret_frac = max(0.0, e_ret_pct / 100.0)
+            if not pnls:
+                win_prob = max(win_prob, 0.48)
+            return e_ret_frac, win_prob, spread_frac, slip_frac
+        except Exception as exc:
+            logger.debug("alpha barrier fracs skipped: %s", exc)
+            return None, None, None, None
+
+    def _collect_meta_rf_features(
+        self,
+        state,
+        regime_state_probs: dict[str, float] | None,
+        execution_payload: dict[str, Any],
+    ) -> dict[str, float]:
+        now = datetime.now(timezone.utc)
+        hour = now.hour + now.minute / 60.0
+        hour_sin = float(np.sin(2 * np.pi * hour / 24.0))
+        hour_cos = float(np.cos(2 * np.pi * hour / 24.0))
+        probs = regime_state_probs if isinstance(regime_state_probs, dict) else {}
+        return {
+            "hour_sin": hour_sin,
+            "hour_cos": hour_cos,
+            "hmm_mean_reverting": float(probs.get("mean_reverting", 1.0 / 3.0)),
+            "hmm_trending": float(probs.get("trending", 1.0 / 3.0)),
+            "hmm_liquidity_cascade": float(probs.get("liquidity_cascade", 1.0 / 3.0)),
+            "vix_level": float(state.macro.vix_level),
+            "spread_pct": float(execution_payload.get("spread_pct", 0.0)),
+        }
+
+    def _collect_meta_rf_features_snapshot(self, snapshot: dict[str, Any], direction: str) -> dict[str, float]:
+        state = build_feature_state(snapshot)
+        bundle = self._latest_intelligence_bundle if isinstance(self._latest_intelligence_bundle, dict) else {}
+        probs = bundle.get("regime_state_probs") if isinstance(bundle.get("regime_state_probs"), dict) else {}
+        ex = self._build_execution_payload(snapshot, state, direction=str(direction).upper())
+        return self._collect_meta_rf_features(state, probs, ex)
+
+    @staticmethod
+    def _btc_daily_closes_from_1h(snapshot: dict[str, Any]) -> list[float]:
+        candles = snapshot.get("candles", {}).get("1h", [])
+        if not candles or len(candles) < 24:
+            return []
+        by_day: dict[str, float] = {}
+        for c in candles:
+            ts = int(c.get("open_time", 0)) / 1000.0
+            if ts <= 0:
+                continue
+            day = datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d")
+            by_day[day] = float(c["close"])
+        days = sorted(by_day.keys())
+        return [by_day[d] for d in days[-(int(settings.macro_corr_lookback_days) + 5) :]]
+
+    @staticmethod
+    def _rolling_btc_spx_correlation(snapshot: dict[str, Any]) -> float:
+        macro = snapshot.get("macro", {}) if isinstance(snapshot.get("macro", {}), dict) else {}
+        spx = macro.get("spx_daily_closes", [])
+        if not isinstance(spx, list) or len(spx) < int(settings.macro_corr_min_samples):
+            return float(macro.get("spx_btc_correlation", 0.0) or 0.0)
+        btc = AppRuntime._btc_daily_closes_from_1h(snapshot)
+        if len(btc) < int(settings.macro_corr_min_samples):
+            return float(macro.get("spx_btc_correlation", 0.0) or 0.0)
+        max_days = int(settings.macro_corr_lookback_days) + 1
+        sb = np.asarray(spx[-max_days:], dtype=float)
+        bb = np.asarray(btc[-max_days:], dtype=float)
+        if sb.size < 2 or bb.size < 2:
+            return float(macro.get("spx_btc_correlation", 0.0) or 0.0)
+        m = int(min(sb.size, bb.size))
+        sb = sb[-m:]
+        bb = bb[-m:]
+        if np.any(sb <= 0) or np.any(bb <= 0):
+            return 0.0
+        lr_s = np.diff(np.log(sb))
+        lr_b = np.diff(np.log(bb))
+        m2 = min(lr_s.size, lr_b.size)
+        if m2 < int(settings.macro_corr_min_samples):
+            return float(macro.get("spx_btc_correlation", 0.0) or 0.0)
+        lr_s = lr_s[-m2:]
+        lr_b = lr_b[-m2:]
+        c = float(np.corrcoef(lr_s, lr_b)[0, 1])
+        if np.isnan(c):
+            return float(macro.get("spx_btc_correlation", 0.0) or 0.0)
+        return c
+
+    def _apply_macro_correlation_kelly_cap(
+        self,
+        kelly_sizing: dict[str, Any],
+        snapshot: dict[str, Any],
+    ) -> dict[str, Any]:
+        out = dict(kelly_sizing) if isinstance(kelly_sizing, dict) else {}
+        reasons = list(out.get("size_reduction_reason", [])) if isinstance(out.get("size_reduction_reason"), list) else []
+        corr = self._rolling_btc_spx_correlation(snapshot)
+        out["btc_spx_correlation_rolling"] = round(corr, 6)
+        out["macro_corr_gate_applied"] = False
+        thr = float(settings.macro_corr_threshold)
+        mult = float(settings.macro_corr_kelly_multiplier)
+        if corr > thr and mult > 0.0 and mult < 1.0 and not bool(out.get("halted", False)):
+            pct = float(out.get("position_pct", 0.0)) * mult
+            usd = float(out.get("position_size_usd", 0.0)) * mult
+            out["position_pct"] = pct
+            out["position_size_pct"] = pct
+            out["position_size_usd"] = usd
+            out["macro_corr_gate_applied"] = True
+            out["macro_corr_kelly_multiplier"] = mult
+            reasons.append("macro_high_btc_spx_corr")
+        out["size_reduction_reason"] = reasons
+        return out
+
     def _compute_intelligence_bundle(
         self,
         snapshot: dict[str, Any],
         state,
         regime_name: str,
         signal_payload: dict[str, Any] | None = None,
+        regime_state_probs: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
         current_price = self._extract_current_price(snapshot)
@@ -662,6 +914,7 @@ class AppRuntime:
                 "flow_score": flow_metrics.get("flow_score", 0.0),
             }
         )
+        self._sanitize_orderflow_flow_score(orderflow_payload)
 
         vol_payload = volatility_tradeability(state.volatility)
         vol_payload["regime"] = vol_payload.get("volatility_regime", "NORMAL")
@@ -682,6 +935,7 @@ class AppRuntime:
         momentum_score = self._derive_momentum_score(state)
         cost_score = self._derive_cost_score(execution_payload)
         normalized_regime = self._normalize_regime_label(regime_name)
+        er_b, pw_b, sf_b, sl_b = self._alpha_barrier_fracs(monitoring_stats, execution_payload)
 
         decision_output = self.decision_engine.evaluate(
             DecisionEngineInput(
@@ -693,6 +947,10 @@ class AppRuntime:
                 momentum_score=momentum_score,
                 aggression_buy_pct=float(orderflow_payload.get("aggression_buy_pct", 50.0)),
                 flow_score=float(orderflow_payload.get("flow_score", 0.0)),
+                expected_return_frac=er_b,
+                win_prob=pw_b,
+                spread_frac=sf_b,
+                slippage_frac=sl_b,
             )
         )
         decision_breakdown = dict(decision_output.get("decision_breakdown", {}))
@@ -802,12 +1060,16 @@ class AppRuntime:
         probability_payload["as_of_utc"] = now_iso
 
         base_decision = str(decision_payload.get("decision", "HOLD")).upper()
-        base_confidence = float(decision_payload.get("confidence", 0.0))
+        _de_confidence = float(decision_payload.get("confidence", 0.0))
+        base_confidence = _de_confidence
         if not bool(signal_aggregation_payload.get("rejected", True)):
             agg_dir = str(signal_aggregation_payload.get("direction", base_decision)).upper()
             if agg_dir in {"LONG", "SHORT", "HOLD"}:
                 base_decision = agg_dir
-            base_confidence = float(signal_aggregation_payload.get("confidence", base_confidence))
+            _agg_conf = float(signal_aggregation_payload.get("confidence", base_confidence))
+            # Signal aggregation may give near-zero confidence when sources disagree.
+            # Use decision engine as floor to avoid killing confidence on weak agreement.
+            base_confidence = _agg_conf if _agg_conf >= _de_confidence * 0.7 else _de_confidence
         up_prob = float(probability_payload.get("up_prob", 0.0)) / 100.0
         down_prob = float(probability_payload.get("down_prob", 0.0)) / 100.0
         raw_prob = up_prob if base_decision == "LONG" else down_prob if base_decision == "SHORT" else max(up_prob, down_prob)
@@ -823,7 +1085,18 @@ class AppRuntime:
             blockers=list(decision_payload.get("blockers", [])),
         )
 
-        calibrated_prob = float(adaptive_meta.get("calibration", {}).get("calibrated_prob", raw_prob))
+        _cal_block = adaptive_meta.get("calibration") if isinstance(adaptive_meta.get("calibration"), dict) else {}
+        _cal_val = _cal_block.get("calibrated_prob")
+        if _cal_val is None:
+            calibrated_prob = float(raw_prob)
+        else:
+            calibrated_prob = float(_cal_val)
+        if calibrated_prob == 0.0:
+            pp = probability_payload.get("platt_probability")
+            if pp is not None:
+                calibrated_prob = float(pp)
+            else:
+                calibrated_prob = float(raw_prob)
         strategy_payload = self.strategy_engine.select_strategy(
             regime=normalized_regime,
             volatility_regime=str(vol_payload.get("volatility_regime", "NORMAL")),
@@ -861,18 +1134,24 @@ class AppRuntime:
         baseline_metric = float(validation_meta.get("baseline", {}).get("metric", 0.0)) if isinstance(validation_meta.get("baseline", {}), dict) else 0.0
         candidate_metric = float(validation_meta.get("candidate", {}).get("metric", baseline_metric)) if isinstance(validation_meta.get("candidate", {}), dict) else baseline_metric
         expected_edge = abs(float(decision_breakdown.get("final_score", 0.0))) / 100.0
+        er_val, _pw_m, sf_val, sl_val = self._alpha_barrier_fracs(monitoring_stats, execution_payload)
         validation_payload = self.validation_engine.validate_step(
             "meta_decision",
             {
-                "sample_size": int(val_samples.get("train", 0)) + int(val_samples.get("test", 0)),
+                "sample_size": int(val_samples.get("train", 0)) + int(val_samples.get("test", 0)) or len(self.paper.closed) or self._sqlite_seed_count,
                 "expected_edge": expected_edge,
                 "robustness_gain": candidate_metric - baseline_metric,
                 "drawdown_delta": 0.05 if bool(adaptive_meta.get("edge_decay", {}).get("decay_detected", False)) else -0.01,
                 "overfit_risk": float(adaptive_meta.get("calibration", {}).get("calibration_error", 0.0)) * 1.4,
                 "brier_score": float(adaptive_meta.get("calibration", {}).get("brier_score", 0.25)),
                 "calibration_error": float(adaptive_meta.get("calibration", {}).get("calibration_error", 0.15)),
+                "expected_return_frac": er_val,
+                "win_prob": float(calibrated_prob),
+                "spread_frac": sf_val,
+                "slippage_frac": sl_val,
             },
         )
+        meta_rf_features = self._collect_meta_rf_features(state, regime_state_probs, execution_payload)
         meta_label_payload = self.meta_labeling_engine.label_trade(
             base_decision=str(adaptive_meta.get("final_decision", base_decision)),
             confidence=float(adaptive_meta.get("adjusted_confidence", decision_payload.get("confidence", 0.0))),
@@ -882,6 +1161,9 @@ class AppRuntime:
             drift_level=str(drift_payload.get("drift_level", "LOW")),
             regime=normalized_regime,
             edge_decay=bool(adaptive_meta.get("edge_decay", {}).get("decay_detected", False)),
+            meta_features=meta_rf_features,
+            utc_hour=datetime.utcnow().hour,
+            probability_service=self.probability_service,
         )
         drawdown_action = str(drawdown_status.get("action", monitoring_stats.get("drawdown_action", ""))).upper()
         if drawdown_action not in {"NORMAL", "REDUCE_SIZE", "HALT"}:
@@ -914,10 +1196,15 @@ class AppRuntime:
             "kelly_full": 0.0,
             "kelly_fraction": 0.0,
             "position_pct": 0.0,
+            "position_size_pct": 0.0,
             "position_size_usd": 0.0,
+            "p": 0.0,
+            "b": 0.0,
+            "raw_kelly": 0.0,
             "size_reduction_reason": ["fallback"],
             "halted": bool(drawdown_action == "HALT"),
             "halt_reason": "drawdown_circuit_breaker" if drawdown_action == "HALT" else None,
+            "risk_budgets": {},
         }
         try:
             all_strategy_rows = []
@@ -939,6 +1226,7 @@ class AppRuntime:
             if portfolio_value <= 0.0:
                 portfolio_value = float(self.performance_tracker.equity_curve[-1]) if self.performance_tracker.equity_curve else 0.0
 
+            ex_rr = float(execution_plan_payload.get("expected_rr", 0.0) or 0.0)
             kelly_sizing_payload = self.kelly_position_sizer.compute(
                 win_rate=win_rate,
                 avg_win_pct=avg_win_pct,
@@ -950,14 +1238,19 @@ class AppRuntime:
                 volatility_regime=str(vol_payload.get("volatility_regime", "NORMAL")),
                 portfolio_value=portfolio_value,
                 size_multiplier=drawdown_size_multiplier,
+                execution_rr=ex_rr if ex_rr > 0 else None,
+                depth=snapshot.get("depth", {}),
+                strategy_returns_pct=pnl_vals,
+                portfolio_heat_pct=float(monitoring_stats.get("portfolio_heat_pct", 0.0)),
             )
         except Exception as exc:
             logger.debug("Kelly sizing fallback applied: %s", exc)
 
+        kelly_sizing_payload = self._apply_macro_correlation_kelly_cap(kelly_sizing_payload, snapshot)
+
         execution_plan_payload["kelly_sizing"] = kelly_sizing_payload
-        execution_plan_payload["position_size_pct"] = float(kelly_sizing_payload.get("position_pct", 0.0))
-        execution_plan_payload["position_size_usd"] = float(kelly_sizing_payload.get("position_size_usd", 0.0))
         execution_plan_payload["drawdown_size_multiplier"] = float(drawdown_status.get("size_multiplier", 1.0))
+        execution_plan_payload = self.execution_planner.merge_tail_risk(execution_plan_payload, kelly_sizing_payload)
 
         decision_payload["base_decision"] = base_decision
         decision_payload["decision"] = str(meta_output.get("decision", adaptive_meta.get("final_decision", base_decision)))
@@ -1017,6 +1310,7 @@ class AppRuntime:
                 "edge_decay": adaptive_meta.get("edge_decay", {}),
             },
             "regime": normalized_regime,
+            "regime_state_probs": dict(regime_state_probs or {}),
             "momentum_score": round(momentum_score, 6),
             "cost_score": round(cost_score, 6),
             "net_alpha": round(net_alpha, 6),
@@ -1730,7 +2024,8 @@ class AppRuntime:
             or meta_output_payload.get('confidence')
             or confidence
         )
-        META_MIN_CONFIDENCE = 55.0
+        _hour = datetime.utcnow().hour
+        META_MIN_CONFIDENCE = 50.0 if 13 <= _hour <= 16 else 55.0
         if meta_decision not in {'LONG', 'SHORT'}:
             logger.warning(
                 'Signal blocked by meta gate: decision=%s conf=%.1f',
@@ -1867,6 +2162,201 @@ class AppRuntime:
             self._last_btc_signal_time = now_ts
             self._last_btc_signal_direction = signal
             logger.info('Saved: %s %s', str(insert_meta.get('signal_ref', '')), signal)
+            if settings.redis_state_enabled and self.redis_state.connected:
+                await self.redis_state.set_json('signal:persistent', redis_payload, ttl_seconds=3600)
+
+    async def _seed_calibration_from_sqlite(self) -> None:
+        await asyncio.to_thread(self._seed_calibration_from_sqlite_sync)
+
+    def _seed_calibration_from_sqlite_sync(self) -> None:
+        if len(self.probability_service._platt_raw_scores) > 30:
+            self._sqlite_seed_count = len(self.probability_service._platt_raw_scores)
+            return
+        try:
+            with sqlite3.connect(self._shared_signals_db) as conn:
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+                cols = self._read_signal_columns(cur)
+                has_raw = "raw_score" in cols
+                has_quality = "quality_score" in cols
+                select_parts = ["outcome", "pnl_pct"]
+                if has_raw:
+                    select_parts.append("raw_score")
+                if has_quality:
+                    select_parts.append("quality_score")
+                sel = ", ".join(select_parts)
+                cur.execute(
+                    f"""
+                    SELECT {sel}
+                    FROM signals
+                    WHERE (ticker = 'BTCUSDT' OR ticker IS NULL OR ticker = '')
+                      AND outcome IS NOT NULL
+                      AND UPPER(TRIM(COALESCE(outcome, ''))) NOT IN ('OPEN', 'INTERRUPTED')
+                    ORDER BY rowid DESC
+                    LIMIT 200
+                    """
+                )
+                rows = list(cur.fetchall())
+        except Exception as exc:
+            logger.warning("startup: calibration SQLite seed failed (continuing): %s", exc)
+            return
+
+        if not rows:
+            logger.warning("startup: calibration seed skipped — no closed BTC rows in SQLite")
+            return
+
+        for row in reversed(rows):
+            od = row["outcome"]
+            if od is None or str(od).strip() == "":
+                continue
+            ou = str(od).strip().upper()
+            if ou in {"OPEN", "INTERRUPTED"}:
+                continue
+            pnl_raw = row["pnl_pct"]
+            try:
+                pnl_pct = float(pnl_raw) if pnl_raw is not None else 0.0
+            except (TypeError, ValueError):
+                pnl_pct = 0.0
+            label = 1 if pnl_pct > 0 else 0
+
+            raw_score_val = 0.0
+            try:
+                if has_raw and row["raw_score"] is not None:
+                    raw_score_val = float(row["raw_score"])
+                elif has_quality and row["quality_score"] is not None:
+                    qs = float(row["quality_score"])
+                    raw_score_val = (qs / 50.0) - 1.0
+                else:
+                    raw_score_val = 0.0
+            except (TypeError, ValueError, KeyError):
+                raw_score_val = 0.0
+
+            self.probability_service.record_labeled_trade(raw_score_val, label, defer_retrain=True)
+
+        nbuf = len(self.probability_service._platt_raw_scores)
+        self._sqlite_seed_count = nbuf
+        if nbuf >= 30:
+            trained = self.probability_service.platt.fit(
+                self.probability_service._platt_raw_scores,
+                self.probability_service._platt_labels,
+                min_samples=30,
+            )
+            if trained:
+                self.probability_service._new_labels_since_retrain = 0
+                logger.info("startup: seeded calibration from SQLite n=%d trades", nbuf)
+                try:
+                    self.probability_service.flush_buffer_to_disk(
+                        Path(settings.data_path) / "platt_buffer_checkpoint.json",
+                    )
+                except Exception:
+                    pass
+            else:
+                logger.warning(
+                    "startup: loaded %d calibration rows from SQLite but Platt fit failed",
+                    nbuf,
+                )
+        else:
+            logger.warning(
+                "startup: calibration seed loaded n=%d rows (< 30); Platt still uncalibrated",
+                nbuf,
+            )
+
+    async def _maybe_warm_start_redis_signal_from_sqlite(self) -> None:
+        if not (settings.redis_state_enabled and self.redis_state.connected and self.redis_state._client is not None):
+            return
+        try:
+            raw = await self.redis_state._client.get(self.redis_state._key('signal'))
+        except Exception:
+            raw = None
+        if raw:
+            return
+        loaded = await asyncio.to_thread(self._fetch_latest_btc_signal_for_warm_start)
+        if not loaded:
+            return
+        row_id, payload = loaded
+        await self.redis_state.set_json('signal', payload, ttl_seconds=10)
+        logger.info('startup: warm-started Redis from SQLite signal id=%d', row_id)
+
+    def _signal_payload_from_db_row(self, d: dict[str, Any], *, freshen_as_of: bool = False) -> dict[str, Any]:
+        ep = float(d.get('entry_price') or 0.0)
+        sig = str(d.get('signal') or 'HOLD').upper()
+        sl = float(d.get('sl') or d.get('stop_loss') or 0.0)
+        tp1 = float(d.get('tp1') or 0.0)
+        tp2 = float(d.get('tp2') or 0.0)
+        tp3 = float(d.get('tp3') or 0.0)
+        ts_raw = d.get('timestamp')
+        persisted_ts: str | None = None
+        as_of: str
+        if ts_raw is not None and str(ts_raw).strip():
+            try:
+                s = str(ts_raw).strip().replace(' ', 'T')
+                dt = datetime.fromisoformat(s.replace('Z', '+00:00'))
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                persisted_ts = dt.replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+            except Exception:
+                persisted_ts = None
+        if freshen_as_of:
+            as_of = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        elif persisted_ts is not None:
+            as_of = persisted_ts
+        else:
+            as_of = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+        pad = 0.0005 if ep > 0 else 0.0
+        entry_zone = [round(ep * (1.0 - pad), 2), round(ep * (1.0 + pad), 2)] if ep > 0 else [0.0, 0.0]
+        conf = float(d.get('confidence') or 0.0)
+        out: dict[str, Any] = {
+            'signal': sig,
+            'confidence': conf,
+            'validated': True,
+            'meta_decision': sig if sig in {'LONG', 'SHORT'} else 'HOLD',
+            'meta_confidence': conf,
+            'entry_price': ep,
+            'entry_zone': entry_zone,
+            'stop_loss': sl,
+            'sl': sl,
+            'take_profit': {'TP1': tp1, 'TP2': tp2, 'TP3': tp3},
+            'tp1': tp1,
+            'tp2': tp2,
+            'tp3': tp3,
+            'rr_ratio': float(d.get('rr_ratio') or 0.0),
+            'signal_note': str(d.get('signal_note') or ''),
+            'size_multiplier': float(d.get('size_multiplier') or 1.0),
+            'quality_score': float(d.get('quality_score') or 0.0),
+            'as_of_utc': as_of,
+            'outcome': str(d.get('outcome') or ''),
+            'stale': False,
+            'source': 'sqlite_warm_start',
+        }
+        if persisted_ts is not None:
+            out['persisted_timestamp_utc'] = persisted_ts
+        return out
+
+    def _fetch_latest_btc_signal_for_warm_start(self) -> tuple[int, dict[str, Any]] | None:
+        try:
+            with sqlite3.connect(self._shared_signals_db) as conn:
+                conn.row_factory = sqlite3.Row
+                cur = conn.cursor()
+                cur.execute(
+                    """
+                    SELECT rowid AS _sqlite_rowid, *
+                    FROM signals
+                    WHERE ticker = 'BTCUSDT' OR ticker IS NULL OR ticker = ''
+                    ORDER BY rowid DESC
+                    LIMIT 1
+                    """
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                keys = row.keys()
+                d = {str(k): row[k] for k in keys}
+                rid = int(d.pop('_sqlite_rowid', 0) or 0)
+                payload = self._signal_payload_from_db_row(d, freshen_as_of=True)
+                return (rid, payload)
+        except Exception as exc:
+            logger.debug('warm-start SQLite fetch failed: %s', exc)
+            return None
 
     async def _maybe_update_open_signal_pnl(self, current_price: float) -> None:
         if self._open_signal_state is None:
@@ -1891,12 +2381,14 @@ class AppRuntime:
         state,
         regime_name: str = "",
         signal_payload: dict[str, Any] | None = None,
+        regime_state_probs: dict[str, float] | None = None,
     ) -> dict[str, Any]:
         intelligence_bundle = self._compute_intelligence_bundle(
             snapshot=snapshot,
             state=state,
             regime_name=regime_name,
             signal_payload=signal_payload,
+            regime_state_probs=regime_state_probs,
         )
         self._latest_intelligence_bundle = intelligence_bundle
 
@@ -1961,6 +2453,39 @@ class AppRuntime:
             orderflow_payload.get("obi", 0.5)
         )
         combined_payload["raw_confidence"] = float(combined_payload.get("confidence", 0.0))
+        # --- UI fields missing from combined_btc_signal() ---
+        _now_utc_h = datetime.now(timezone.utc).hour
+        if _now_utc_h < 6:
+            combined_payload["session"] = "asian"
+        elif _now_utc_h < 9:
+            combined_payload["session"] = "london_open"
+        elif _now_utc_h < 13:
+            combined_payload["session"] = "london"
+        elif _now_utc_h < 17:
+            combined_payload["session"] = "new_york"
+        else:
+            combined_payload["session"] = "after_hours"
+        combined_payload["market_regime"] = str(
+            intelligence_bundle.get("regime") or "SIDEWAYS"
+        ).upper()
+        _meta_final = str(intelligence_bundle.get("meta_output", {}).get("decision", "HOLD")).upper()
+        combined_payload["algo"] = "SIGNAL" if _meta_final in {"LONG", "SHORT"} else "NO_TRADE"
+        _sa = intelligence_bundle.get("signal_aggregation", {})
+        _alpha = _sa.get("raw_score") or _sa.get("confidence")
+        if _alpha is not None:
+            try:
+                _af = float(_alpha)
+                combined_payload["alpha_score"] = abs(_af) * 100.0 if abs(_af) <= 1.0 else abs(_af)
+            except (TypeError, ValueError):
+                pass
+        # ATR and mark_price for UI panels
+        combined_payload["atr_value"] = float(vol_payload.get("atr_pct", 0.0))
+        if not combined_payload.get("mark_price"):
+            _snap_mp = float(snapshot.get("binance_rest", {}).get("mark_price", 0.0))
+            combined_payload["mark_price"] = _snap_mp if _snap_mp > 100 else float(current_price)
+        _oi = snapshot.get("binance_rest", {}).get("open_interest", 0.0)
+        if _oi:
+            combined_payload["open_interest_btc"] = float(_oi)
         try:
             kelly_payload = intelligence_bundle.get("kelly_sizing", {})
             if isinstance(kelly_payload, dict) and kelly_payload:
@@ -2005,8 +2530,12 @@ class AppRuntime:
         await asyncio.to_thread(self._refresh_btc_open_signals, current_price)
         return combined_payload
 
+    def _observation_paper_trade(self) -> bool:
+        """Brier watchdog forces observation: behave like paper even if settings.paper_trade is False."""
+        return bool(settings.paper_trade or self._brier_observation_mode)
+
     def _handle_paper_trade(self, payload: dict[str, Any], snapshot: dict[str, Any]) -> None:
-        if not settings.paper_trade:
+        if not self._observation_paper_trade():
             return
 
         signal = str(payload.get('signal', 'HOLD'))
@@ -2090,6 +2619,10 @@ class AppRuntime:
                             'factors': list(payload.get('factors_present', [])),
                             'confidence': float(meta_confidence),
                             'strategy': str(payload.get('strategy', 'NONE')),
+<<<<<<< HEAD
+                            'meta_rf_features': self._collect_meta_rf_features_snapshot(snapshot, signal),
+=======
+>>>>>>> origin/main
                         }
 
         closed = self._mark_to_market(snapshot)
@@ -2133,6 +2666,15 @@ class AppRuntime:
                 'strategy': str(self._open_trade_context.get('strategy', 'NONE')),
             }
             self.performance_tracker.record_trade(row)
+            rf_feat = self._open_trade_context.get('meta_rf_features') if isinstance(self._open_trade_context, dict) else None
+            if isinstance(rf_feat, dict) and rf_feat:
+                try:
+                    self.meta_labeling_engine.record_closed_trade(
+                        features=rf_feat,
+                        profitable=float(closed.get('pnl_usd', 0.0)) > 0.0,
+                    )
+                except Exception as exc:
+                    logger.debug('meta RF training append skipped: %s', exc)
             factors = list(self._open_trade_context.get('factors', []))
             if factors:
                 self.stacker.record_outcome(
@@ -2168,12 +2710,13 @@ class AppRuntime:
 
     @staticmethod
     def _rr_from_reason(reason: str) -> float:
+        # Nominal RR aligned with risk.py TP multipliers (~0.9–1.5 / ~3–4 / ~5–7 by regime).
         if reason == 'tp1':
-            return 1.5
+            return 1.2
         if reason == 'tp2':
-            return 2.5
+            return 3.5
         if reason == 'tp3':
-            return 4.0
+            return 6.0
         if reason == 'stop':
             return -1.0
         return 0.0
@@ -2239,7 +2782,10 @@ class AppRuntime:
 
     async def latest_signal(self) -> dict[str, Any]:
         snap = await self.buffer.snapshot()
-        return snap.get('latest_signal', {})
+        out = dict(snap.get('latest_signal', {}))
+        # Buffer/Redis may lag until the next 15m bar; model artifacts can reload independently.
+        out['model_version'] = self.model.version
+        return out
 
     async def signal_history(self) -> list[dict[str, Any]]:
         snap = await self.buffer.snapshot()
@@ -2384,12 +2930,14 @@ class AppRuntime:
             }
         state = build_feature_state(snap)
         regime = classify_regime(snap, state)
+        get_ic_monitor().maybe_record_daily(snap, state, regime.regime)
         latest_signal = snap.get("latest_signal", {})
         bundle = self._compute_intelligence_bundle(
             snapshot=snap,
             state=state,
             regime_name=str(regime.regime),
             signal_payload=latest_signal if isinstance(latest_signal, dict) else None,
+            regime_state_probs=regime.state_probs,
         )
         self._latest_intelligence_bundle = bundle
         return bundle
@@ -2505,6 +3053,11 @@ class AppRuntime:
             max_qty_btc=8.0,
         )
         bid, ask, mid = MarketDataBuffer.best_bid_ask(snapshot.get('depth', {}))
+        adverse = compute_adverse_selection(
+            snapshot.get('depth', {}),
+            snapshot.get('agg_trades', []),
+            resolved_direction,
+        )
         return {
             'direction': resolved_direction,
             'accepted': bool(check.accepted),
@@ -2520,6 +3073,16 @@ class AppRuntime:
             'mid_price': round(float(mid), 2),
             'rejection_reason': check.reason if not check.accepted else '',
             'rejection_code': execution_rejection_code(check.reason) if not check.accepted else '',
+            'adverse_selection_flag': bool(adverse.adverse_selection_flag),
+            'execution_mode_recommendation': adverse.execution_mode_recommendation,
+            'adverse_selection': {
+                'spread_widening': adverse.spread_widening,
+                'mid_drift_pct': adverse.mid_drift_pct,
+                'spread_pct_book': adverse.spread_pct,
+                'spread_baseline_proxy_pct': adverse.spread_baseline_proxy_pct,
+                'noise_floor_pct': adverse.noise_floor_pct,
+                'reason': adverse.reason,
+            },
             'as_of_utc': datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
         }
 

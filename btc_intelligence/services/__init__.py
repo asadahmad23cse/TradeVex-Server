@@ -7,7 +7,7 @@ from .execution_planner import ExecutionPlanInput, ExecutionPlanner
 from .meta_decision_engine import MetaDecisionEngine, MetaDecisionInput
 from .meta_labeling import MetaLabelingConfig, MetaLabelingEngine
 from .order_flow_service import OrderFlowService
-from .position_sizer import KellyConfig, KellyPositionSizer
+from .position_sizer import KellyConfig, KellyPositionSizer, book_microstructure_from_depth
 from .probability_service import ProbabilityInput, ProbabilityService
 from .signal_aggregator import AggregatorConfig, SignalAggregator
 from .strategy_engine import StrategyEngine, StrategyEngineConfig
@@ -34,6 +34,7 @@ __all__ = [
     "OrderFlowService",
     "KellyConfig",
     "KellyPositionSizer",
+    "book_microstructure_from_depth",
     "ProbabilityInput",
     "ProbabilityService",
     "AggregatorConfig",

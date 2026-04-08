@@ -70,10 +70,12 @@ async def close_paper_trade(request: Request):
     return await runtime(request).close_paper_trade(payload)
 
 
+_TF_KLINES = r'^(1m|3m|5m|15m|30m|1h|2h|4h|6h|12h|1d|3d)$'
+
 @router.get('/market/klines')
 async def get_market_klines(
     request: Request,
-    timeframe: str = Query('15m', pattern='^(1m|5m|15m|1h|4h)$'),
+    timeframe: str = Query('15m', pattern=_TF_KLINES),
     limit: int = Query(500, ge=10, le=5000),
 ):
     return await runtime(request).market_klines(timeframe=timeframe, limit=limit)
@@ -82,8 +84,8 @@ async def get_market_klines(
 @router.get('/market/history')
 async def get_market_history(
     request: Request,
-    timeframe: str = Query('1d', pattern='^(1m|5m|15m|1h|4h|1d)$'),
-    limit: int = Query(2000, ge=100, le=5000),
+    timeframe: str = Query('1d', pattern=_TF_KLINES),
+    limit: int = Query(2000, ge=50, le=5000),
 ):
     return await runtime(request).market_history(timeframe=timeframe, limit=limit)
 

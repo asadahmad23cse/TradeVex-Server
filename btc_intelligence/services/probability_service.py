@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+from btc_intelligence.config import settings
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -125,21 +132,64 @@ class ProbabilityService:
         self._platt_raw_scores: list[float] = []
         self._platt_labels: list[int] = []
         self._new_labels_since_retrain: int = 0
-        self._retrain_interval: int = 50
+        self._retrain_interval: int = 30
         self._max_training_rows: int = 4000
+        self.load_buffer_from_disk(Path(settings.data_path) / "platt_buffer_checkpoint.json")
 
-    def record_labeled_trade(self, raw_score: float, label: int) -> bool:
+    def flush_buffer_to_disk(self, path: str | Path) -> None:
+        p = Path(path)
+        n = len(self._platt_raw_scores)
+        try:
+            payload = {
+                "raw_scores": [float(x) for x in self._platt_raw_scores],
+                "labels": [int(y) for y in self._platt_labels],
+                "saved_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            }
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
+            logger.info("shutdown: flushed platt buffer n=%d samples", n)
+        except Exception as exc:
+            logger.debug("platt buffer flush failed: %s", exc)
+
+    def load_buffer_from_disk(self, path: str | Path) -> None:
+        p = Path(path)
+        if not p.exists():
+            return
+        try:
+            payload = json.loads(p.read_text(encoding="utf-8"))
+            rs = payload.get("raw_scores")
+            ls = payload.get("labels")
+            if not isinstance(rs, list) or not isinstance(ls, list) or len(rs) != len(ls):
+                logger.debug("platt buffer load skipped: invalid shape")
+                return
+            self._platt_raw_scores.extend(float(x) for x in rs)
+            self._platt_labels.extend(1 if int(y) > 0 else 0 for y in ls)
+            if len(self._platt_raw_scores) > self._max_training_rows:
+                self._platt_raw_scores = self._platt_raw_scores[-self._max_training_rows :]
+                self._platt_labels = self._platt_labels[-self._max_training_rows :]
+            logger.info("startup: loaded platt buffer n=%d samples", len(self._platt_raw_scores))
+        except Exception as exc:
+            logger.debug("platt buffer load skipped: %s", exc)
+
+    def record_labeled_trade(self, raw_score: float, label: int, *, defer_retrain: bool = False) -> bool:
         self._platt_raw_scores.append(float(raw_score))
         self._platt_labels.append(1 if int(label) > 0 else 0)
         if len(self._platt_raw_scores) > self._max_training_rows:
             self._platt_raw_scores = self._platt_raw_scores[-self._max_training_rows :]
             self._platt_labels = self._platt_labels[-self._max_training_rows :]
 
+        if defer_retrain:
+            return False
+
         self._new_labels_since_retrain += 1
         if self._new_labels_since_retrain >= self._retrain_interval:
             trained = self.platt.fit(self._platt_raw_scores, self._platt_labels, min_samples=30)
             if trained:
                 self._new_labels_since_retrain = 0
+                preds = [self.platt.predict(s) for s in self._platt_raw_scores]
+                brier = self.platt.brier_score(preds, self._platt_labels)
+                n_trades = len(self._platt_raw_scores)
+                logger.info("calibration retrained: brier=%.4f trades=%d", brier, n_trades)
             return trained
         return False
 

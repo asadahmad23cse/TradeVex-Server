@@ -49,6 +49,13 @@ class ModelInference:
 
         if self.default_bundle.lgbm is not None or self.default_bundle.xgb is not None:
             self.version = self.default_bundle.version
+        else:
+            # Artifacts live under regime subdirs; HOLD / early-exit paths never call infer().
+            for key in ('sideways_range', 'bullish_trend', 'bearish_trend', 'breakout'):
+                b = self.bundles.get(key)
+                if b is not None and b.lgbm is not None and b.xgb is not None:
+                    self.version = b.version
+                    break
 
     def _load_bundle(self, path: Path, fallback_version: str) -> RegimeModelBundle:
         lgbm = None

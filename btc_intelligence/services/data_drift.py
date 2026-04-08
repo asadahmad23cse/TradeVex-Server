@@ -280,7 +280,7 @@ class DataDriftEngine:
             drift_score = float((mean_shift_score * 0.35) + (variance_shift_score * 0.35) + (psi_drift_score * 0.30))
         else:
             drift_score = float((mean_shift_score + variance_shift_score) / 2.0)
-        if drift_score >= 0.66:
+        if drift_score >= 0.72:
             level = "HIGH"
             conf_mul = 0.72
             learn_mul = 0.60

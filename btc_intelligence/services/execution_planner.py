@@ -94,3 +94,31 @@ class ExecutionPlanner:
             "liquidity_score": round(liq, 4),
         }
 
+    @staticmethod
+    def merge_tail_risk(plan: dict[str, Any], kelly: dict[str, Any]) -> dict[str, Any]:
+        """
+        Attach Kelly / tail-risk bounds to the execution plan without removing
+        existing keys (expected_rr, entry_zone, etc.).
+        """
+        out = dict(plan)
+        if not isinstance(kelly, dict):
+            return out
+        pct = float(kelly.get("position_pct", 0.0))
+        p = float(kelly.get("p", 0.0))
+        b = float(kelly.get("b", 0.0))
+        rk = float(kelly.get("raw_kelly", 0.0))
+        rb = kelly.get("risk_budgets") if isinstance(kelly.get("risk_budgets"), dict) else {}
+        out["position_size_pct"] = pct
+        out["position_size_usd"] = float(kelly.get("position_size_usd", 0.0))
+        out["p"] = p
+        out["b"] = b
+        out["raw_kelly"] = rk
+        out["tail_risk_sizing"] = {
+            "bounded_position_pct": pct,
+            "p": p,
+            "b": b,
+            "raw_kelly": rk,
+            "risk_budgets": dict(rb),
+        }
+        return out
+

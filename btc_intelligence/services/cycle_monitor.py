@@ -194,6 +194,7 @@ class CycleMonitor:
             )
 
         wf_recommendations: dict[str, str] = {}
+        wf_deflated_sharpe_ratio: float | None = None
         if isinstance(walk_forward, dict):
             for key, payload in walk_forward.items():
                 if isinstance(payload, dict):
@@ -206,6 +207,11 @@ class CycleMonitor:
                                 "WARN",
                                 f"WalkForward rejected weight update for {key}",
                             )
+                    if wf_deflated_sharpe_ratio is None and payload.get("deflated_sharpe_ratio") is not None:
+                        try:
+                            wf_deflated_sharpe_ratio = float(payload["deflated_sharpe_ratio"])
+                        except (TypeError, ValueError):
+                            pass
 
         if bool(kelly_sizing.get("halted", False)) if isinstance(kelly_sizing, dict) else False:
             add_alert(
@@ -232,6 +238,7 @@ class CycleMonitor:
             "kelly_halted": bool(kelly_sizing.get("halted", False)) if isinstance(kelly_sizing, dict) else False,
             "sources_missing": missing_sources,
             "wf_recommendations": wf_recommendations,
+            "wf_deflated_sharpe_ratio": wf_deflated_sharpe_ratio,
             "alerts": alerts,
             "reject_reasons_tally": self._top_n(self._reject_reasons_tally, n=5),
         }
