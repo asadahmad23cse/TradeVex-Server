@@ -995,7 +995,6 @@ body{
 .perf-negative{color:#ff4d4d;}
 .perf-neutral{color:#e6edf3;}
 
-<<<<<<< HEAD
 #paper-trading-panel{
   margin-top:12px;
   width:100%;
@@ -1393,8 +1392,6 @@ body{
   50%{opacity:1;transform:scale(1);}
 }
 
-=======
->>>>>>> origin/main
 @media (max-width: 980px){
   .perf-grid{grid-template-columns:repeat(3,1fr);}
   .sys-gauges-row{flex-wrap:nowrap;height:96px;}
@@ -3471,7 +3468,6 @@ function updatePositionSizingPanel(s){
   rrEl.textContent = Number.isFinite(b) ? `${b.toFixed(2)}x` : "--";
   bucketEl.textContent = bucket;
 }
-<<<<<<< HEAD
 
 function updateTailRiskRows(s){
   const intel = typeof latestDecisionIntel === "object" && latestDecisionIntel ? latestDecisionIntel : null;
@@ -3596,8 +3592,7 @@ function updateAntiCrowdingIntel(s){
     row.style.display = "none";
   }
 }
-=======
->>>>>>> origin/main
+
 async function updatePerfScoreboard(){
   try{
     const stats = await fetchJSON('/api/btc/signal/stats', { ttlMs: 15000 });
@@ -5409,11 +5404,7 @@ async function loadSignal(){
     const [s, histJson, intelJson] = await Promise.all([
       fetchJSON(`/api/btc/signal?interval=${encodeURIComponent(activeTF)}`, { ttlMs: 5000, timeoutMs: 60000 }),
       fetchJSON('/api/btc/signal/history?limit=20', { ttlMs: 7000, timeoutMs: 8000 }),
-<<<<<<< HEAD
       fetchJSON(`/api/btc/decision-intelligence?interval=${encodeURIComponent(activeTF)}`, { ttlMs: 9000, timeoutMs: 60000 }),
-=======
-      fetchJSON(`/api/btc/decision-intelligence?interval=${encodeURIComponent(activeTF)}`, { ttlMs: 9000, timeoutMs: 10000 }),
->>>>>>> origin/main
     ]);
     if(histJson){
       const signals = Array.isArray(histJson?.signals) ? histJson.signals : [];
@@ -5431,10 +5422,7 @@ async function loadSignal(){
         intelJson.degraded === true
         || intelJson.stale === true
         || intelJson.source === "redis_signal_fallback"
-<<<<<<< HEAD
-=======
         || intelJson.source === "dashboard_signal_fallback"
->>>>>>> origin/main
       )
     );
     if (!intelOk && s && typeof s === "object" && (s.signal != null || "confidence" in s)) {
@@ -5443,7 +5431,6 @@ async function loadSignal(){
       setIntelPill(intelOk, intelJson?.error, intelDegraded);
     }
     latestDecisionIntel = (intelJson && typeof intelJson === "object" && !intelHasErr) ? intelJson : null;
-<<<<<<< HEAD
     applySignalPayload(s, "btc_intelligence");
     updateDecisionIntelPanels(latestDecisionIntel, s, intelJson);
     updateSystemGauges(s);
@@ -5458,13 +5445,6 @@ async function loadSignal(){
       sigPill.textContent = sigDeg ? "Signal API: degraded (no live :9000 or cached)" : "Signal API: live";
       sigPill.className = "pill " + (sigDeg ? "warn" : "ok");
     }
-=======
-    applySignalPayload(s, "btc_service");
-    updateDecisionIntelPanels(latestDecisionIntel, s, intelJson);
-    updateSystemGauges(s);
-    await updatePerfScoreboard();
-    setPill("sig-pill","Signal API: /api/btc/signal",true);
->>>>>>> origin/main
   }catch(err){
     setPill("sig-pill","Signal API: offline",false);
     setIntelPill(false, err?.message, false);
