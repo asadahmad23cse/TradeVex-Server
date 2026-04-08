@@ -1356,6 +1356,85 @@ def get_btc_markers(interval: str = "1d", limit: int = 1000):
     return _btc_service.get_signal_markers(interval=interval, limit=limit)
 
 
+@app.get("/api/btc/sr-levels")
+def get_sr_levels(interval: str = "15m", limit: int = 200):
+    """Support and resistance levels computed from recent candles."""
+    if _btc_service is None:
+        raise HTTPException(503, "BTC service not initialised")
+    try:
+        df = _btc_service.get_recent_frame(interval=interval, limit=limit)
+        if df is None or df.empty:
+            return {"support": [], "resistance": [], "interval": interval}
+        highs = df["High"].values
+        lows  = df["Low"].values
+        closes = df["Close"].values
+        current = float(closes[-1])
+        # Simple pivot-based S/R: use rolling window peaks/troughs
+        window = 10
+        supports: list[float] = []
+        resistances: list[float] = []
+        for i in range(window, len(lows) - window):
+            lo = float(lows[i])
+            hi = float(highs[i])
+            if lo == min(lows[i - window: i + window]):
+                supports.append(round(lo, 2))
+            if hi == max(highs[i - window: i + window]):
+                resistances.append(round(hi, 2))
+        # Cluster nearby levels (within 0.3%)
+        def cluster(levels: list[float]) -> list[float]:
+            if not levels:
+                return []
+            levels = sorted(set(levels))
+            clustered: list[float] = [levels[0]]
+            for lvl in levels[1:]:
+                if abs(lvl - clustered[-1]) / max(clustered[-1], 1) > 0.003:
+                    clustered.append(lvl)
+            return clustered
+        sup_clean  = [s for s in cluster(supports)   if s < current][-6:]
+        res_clean  = [r for r in cluster(resistances) if r > current][:6]
+        return {
+            "support":    sup_clean,
+            "resistance": res_clean,
+            "current":    round(current, 2),
+            "interval":   interval,
+        }
+    except Exception as exc:
+        return {"support": [], "resistance": [], "error": str(exc)}
+
+
+@app.get("/api/btc/liquidity-zones")
+def get_liquidity_zones(interval: str = "15m", limit: int = 300):
+    """Liquidity zones (high-volume price clusters) from recent candles."""
+    if _btc_service is None:
+        raise HTTPException(503, "BTC service not initialised")
+    try:
+        df = _btc_service.get_recent_frame(interval=interval, limit=limit)
+        if df is None or df.empty:
+            return {"zones": [], "interval": interval}
+        closes  = df["Close"].values
+        volumes = df["Volume"].values if "Volume" in df.columns else df.get("volume", df["Close"] * 0).values
+        current = float(closes[-1])
+        # Find high-volume candles (top 15%)
+        vol_threshold = float(sorted(volumes)[int(len(volumes) * 0.85)])
+        zones: list[dict] = []
+        for i, (c, v) in enumerate(zip(closes, volumes)):
+            if float(v) >= vol_threshold:
+                lo = float(df["Low"].values[i])
+                hi = float(df["High"].values[i])
+                zones.append({
+                    "price":  round(float(c), 2),
+                    "low":    round(lo, 2),
+                    "high":   round(hi, 2),
+                    "volume": round(float(v), 4),
+                    "type":   "supply" if float(c) > current else "demand",
+                })
+        # Keep top 10 by volume
+        zones = sorted(zones, key=lambda z: z["volume"], reverse=True)[:10]
+        return {"zones": zones, "current": round(current, 2), "interval": interval}
+    except Exception as exc:
+        return {"zones": [], "error": str(exc)}
+
+
 @app.get("/api/btc/news")
 def btc_news(limit: int = 8):
     return {"news": get_btc_news(limit)}

@@ -104,16 +104,6 @@ REGIME_CONFIDENCE_GATES = {
 }
 
 
-def get_dynamic_confidence_gate(regime: str) -> float:
-    regime_upper = str(regime or "").upper()
-    for key, gate in REGIME_CONFIDENCE_GATES.items():
-        if key == "DEFAULT":
-            continue
-        if key in regime_upper:
-            return float(gate)
-    return float(REGIME_CONFIDENCE_GATES["DEFAULT"])
-
-
 @dataclass
 class MetaLabelingConfig:
     min_confidence: float = 55.0
