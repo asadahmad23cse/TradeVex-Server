@@ -271,12 +271,8 @@ class MetaLabelingEngine:
         prob = float(max(0.0, min(1.0, calibrated_prob)))
         ece = float(max(0.0, calibration_error))
         drift = str(drift_level or "LOW").upper()
-<<<<<<< HEAD
         gate_hour = int(utc_hour) if utc_hour is not None else datetime.now(timezone.utc).hour
         confidence_gate = get_dynamic_confidence_gate(regime, utc_hour=gate_hour)
-=======
-        confidence_gate = get_dynamic_confidence_gate(regime)
->>>>>>> origin/main
 
         reasons: list[str] = []
         allow = decision in {"LONG", "SHORT"}
@@ -357,17 +353,5 @@ class MetaLabelingEngine:
             "final_decision": final_decision,
             "reason": reason,
             "reasons": reasons,
-<<<<<<< HEAD
             "inputs": out_inputs,
-=======
-            "inputs": {
-                "confidence": round(conf, 2),
-                "calibrated_prob": round(prob, 6),
-                "calibration_error": round(ece, 6),
-                "drift_level": drift,
-                "regime": str(regime or "DEFAULT").upper(),
-                "confidence_gate": round(confidence_gate, 2),
-                "edge_decay": bool(edge_decay),
-            },
->>>>>>> origin/main
         }

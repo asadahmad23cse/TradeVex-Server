@@ -394,10 +394,7 @@ class AppRuntime:
                         self._mark_to_market(snapshot)
                         state = build_feature_state(snapshot)
                         regime = classify_regime(snapshot, state)
-<<<<<<< HEAD
                         get_ic_monitor().maybe_record_daily(snapshot, state, regime.regime)
-=======
->>>>>>> origin/main
                     await self._publish_intelligence_state(
                         snapshot,
                         state,
@@ -414,10 +411,7 @@ class AppRuntime:
                     await self.buffer.set_volatility_tradeability(vol_payload)
 
                     regime = classify_regime(snapshot, state)
-<<<<<<< HEAD
                     get_ic_monitor().maybe_record_daily(snapshot, state, regime.regime)
-=======
->>>>>>> origin/main
                     payload = self.engine.build(
                         snapshot=snapshot,
                         state=state,
@@ -427,14 +421,9 @@ class AppRuntime:
                         auto_pause=bool(monitoring['auto_pause']),
                     )
 
-<<<<<<< HEAD
                     vec, fm_long = state.to_vector(direction='LONG', regime=regime.regime)
                     _, vec_masked = apply_hibernation_mask(fm_long, vec, get_ic_monitor().hibernated_factors)
                     self.feature_seq.append(vec_masked.squeeze(0))
-=======
-                    vec, _ = state.to_vector(direction='LONG', regime=regime.regime)
-                    self.feature_seq.append(vec.squeeze(0))
->>>>>>> origin/main
 
                 await self.buffer.mark_feature_eval(last_close)
                 intelligence_payload = await self._publish_intelligence_state(
@@ -2619,10 +2608,7 @@ class AppRuntime:
                             'factors': list(payload.get('factors_present', [])),
                             'confidence': float(meta_confidence),
                             'strategy': str(payload.get('strategy', 'NONE')),
-<<<<<<< HEAD
                             'meta_rf_features': self._collect_meta_rf_features_snapshot(snapshot, signal),
-=======
->>>>>>> origin/main
                         }
 
         closed = self._mark_to_market(snapshot)
