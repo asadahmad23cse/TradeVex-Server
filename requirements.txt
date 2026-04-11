@@ -27,3 +27,4 @@ PyJWT
 shap
 optuna
 redis
+pydantic-settings
