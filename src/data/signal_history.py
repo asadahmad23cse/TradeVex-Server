@@ -163,6 +163,27 @@ def record_signal(signal_data: dict[str, Any]) -> None:
 
     history = _load()
     now_ts = time.time()
+
+    # [ADDITIVE] Prevent duplicate OPEN records — if there's already an OPEN
+    # record for the same direction, skip creating another one.
+    # This prevents signal_history.json from inflating with duplicates every 15s.
+    try:
+        if not is_blocked:
+            for _existing in reversed(history):
+                if str(_existing.get("status", "")).upper() == "OPEN":
+                    _existing_dir = str(_existing.get("signal", "")).upper()
+                    if _existing_dir == signal_side:
+                        # Same direction OPEN already exists — skip
+                        return
+                    else:
+                        # Different direction — close the old one first
+                        _existing["status"] = "CLOSED"
+                        _existing["result"] = "FLIPPED"
+                        _existing["closed_time"] = now_ts
+                    break
+    except Exception:
+        pass
+
     status = "BLOCKED" if is_blocked else "OPEN"
     result = "BLOCKED" if is_blocked else "OPEN"
     direction = "long" if signal_side == "LONG" else "short" if signal_side == "SHORT" else "flat"
@@ -261,6 +282,33 @@ def check_open_signals(
     changed = False
     live_signal = str(validated_signal or market_signal or "").upper()
     _kelly_instance = None
+
+    # [ADDITIVE] Close stale OPEN records older than 12 hours
+    # and ensure only ONE OPEN record exists at a time
+    try:
+        _now_ts = time.time()
+        _open_count = 0
+        for _rec in history:
+            if str(_rec.get("status", "")).upper() != "OPEN":
+                continue
+            _open_ts = float(_rec.get("open_timestamp", 0) or 0)
+            _age_hours = (_now_ts - _open_ts) / 3600.0 if _open_ts > 0 else 999
+            # Close records older than 12 hours
+            if _age_hours > 12:
+                _rec["status"] = "EXPIRED"
+                _rec["result"] = "EXPIRED"
+                _rec["closed_time"] = _now_ts
+                changed = True
+                continue
+            _open_count += 1
+            # Only allow 1 OPEN at a time — close extras (oldest first)
+            if _open_count > 1:
+                _rec["status"] = "CLOSED"
+                _rec["result"] = "SUPERSEDED"
+                _rec["closed_time"] = _now_ts
+                changed = True
+    except Exception:
+        pass
 
     for rec in history:
         if str(rec.get("status", "")).upper() != "OPEN":

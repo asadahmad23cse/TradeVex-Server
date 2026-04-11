@@ -1,0 +1,17 @@
+{
+  "capital": 100000.0,
+  "initial_capital": 100000.0,
+  "positions": {},
+  "closed_trades": [],
+  "mode": "manual",
+  "auto_enabled": false,
+  "created_at": 1775672478.7350006,
+  "stats": {
+    "total_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "total_pnl": 0.0,
+    "peak_equity": 100000.0,
+    "max_drawdown": 0.0
+  }
+}

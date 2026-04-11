@@ -827,7 +827,18 @@ class BitcoinMarketService:
             validated_signal=(signal if validated else "HOLD"),
             alpha_score=raw_alpha,
         )
-        record_signal(payload)
+        # [ADDITIVE] Only record signal if it's actionable (BLOCKED or first OPEN)
+        # record_signal() itself has duplicate prevention, but skip HOLD signals entirely
+        try:
+            _should_record = (
+                str(payload.get("signal", "")).upper() in ("LONG", "SHORT")
+                or str(payload.get("blocked_by", "")).strip()
+                or str(payload.get("result", "")).upper() == "BLOCKED"
+            )
+            if _should_record:
+                record_signal(payload)
+        except Exception:
+            pass
         self._signal_cache.set(cache_key, payload, ttl_seconds=5)
         return payload
     def get_signal_markers(self, interval: str = "1d", limit: int = 1000) -> list[dict[str, Any]]:

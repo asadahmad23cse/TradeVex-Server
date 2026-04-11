@@ -1,0 +1,22 @@
+{
+  "version": "ml_sideways_range_v2_1h",
+  "regime": "sideways_range",
+  "timeframe": "1h",
+  "lightgbm": {
+    "rows": 7148,
+    "walk_forward_auc_lgbm": 0.5067480034738533,
+    "trained": true,
+    "regime": "sideways_range"
+  },
+  "xgboost": {
+    "rows": 7148,
+    "walk_forward_auc_xgb": 0.5124401284182711,
+    "trained": true,
+    "regime": "sideways_range"
+  },
+  "lstm": {
+    "trained": false,
+    "skipped": true
+  },
+  "trained_at": "2026-04-09T05:26:54.643393+00:00"
+}

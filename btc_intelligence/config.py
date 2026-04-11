@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     risk_per_trade_pct: float = 1.0
     max_portfolio_heat_pct: float = 3.0
     drawdown_pause_pct: float = 15.0
-    signal_cooldown_hours: int = 4
+    signal_cooldown_hours: int = 2
     signal_stale_minutes: int = 30
 
     min_confidence: float = 60.0
@@ -158,9 +158,9 @@ class Settings(BaseSettings):
     # Anti-crowding (HHI on aggressive flow): defer SignalEngine emission after crowded tape
     crowd_gate_enabled: bool = True
     crowd_delay_ms: int = 35000
-    crowd_hhi_threshold: float = 0.38
+    crowd_score_trigger: float = 80.0  # 0–100 composite (HHI + imbalance)
+    crowd_hhi_threshold: float = 0.50
     crowd_flow_imbalance_min: float = 0.68
-    crowd_score_trigger: float = 72.0  # 0–100 composite (HHI + imbalance)
     crowd_max_trades: int = 500
     crowd_min_trades: int = 25
     crowd_price_tick_bps: float = 2.0

@@ -774,6 +774,10 @@ async def _btc_proxy_payload(
     name: str,
     redis_key: Union[str, List[str]],
     upstream_url: Union[str, List[str]],
+    *,
+    per_try_timeout: float = 8.0,
+    retries_per_url: int = 3,
+    retry_sleep_sec: float = 1.0,
 ) -> dict[str, Any]:
     redis_keys = _as_key_list(redis_key)
     upstream_urls = _as_key_list(upstream_url)
@@ -793,12 +797,15 @@ async def _btc_proxy_payload(
         except Exception:
             continue
 
-    # 2) Upstream fallback (retry each URL attempt up to 3 times, 1s between tries)
+    # 2) Upstream fallback
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
+        timeout_s = max(0.5, float(per_try_timeout))
+        max_retries = max(1, int(retries_per_url))
+        sleep_s = max(0.0, float(retry_sleep_sec))
+        async with httpx.AsyncClient(timeout=timeout_s) as client:
             for url in upstream_urls:
                 last_exc: Exception | None = None
-                for attempt in range(3):
+                for attempt in range(max_retries):
                     try:
                         resp = await client.get(url)
                         resp.raise_for_status()
@@ -812,8 +819,8 @@ async def _btc_proxy_payload(
                         return wrapped
                     except Exception as exc:
                         last_exc = exc
-                        if attempt < 2:
-                            await asyncio.sleep(1.0)
+                        if attempt < (max_retries - 1) and sleep_s > 0:
+                            await asyncio.sleep(sleep_s)
                         continue
                 if last_exc is not None:
                     logger.debug(
@@ -1261,7 +1268,22 @@ def get_btc_signal(interval: str = "5m"):
     """Real-time BTC signal using the project's quant factor algorithm."""
     if _btc_service is None:
         raise HTTPException(503, "BTC service not initialised")
-    return _btc_service.get_realtime_signal(interval=interval)
+    try:
+        return _btc_service.get_realtime_signal(interval=interval)
+    except Exception:
+        try:
+            return {
+                "asset": "BTCUSDT",
+                "signal": "HOLD",
+                "validated_signal": "HOLD",
+                "validated": False,
+                "reason": "dashboard BTC signal unavailable",
+                "is_binding": False,
+                "signal_authority": "dashboard_fallback_advisory",
+                "signal_note": "btc_intelligence unavailable — advisory only",
+            }
+        except Exception:
+            raise HTTPException(503, "BTC signal unavailable")
 
 
 @app.get("/api/btc/market-context")
@@ -1487,6 +1509,9 @@ async def btc_decision_intelligence_proxy(interval: str = Query("15m")):
             "http://127.0.0.1:9000/api/intelligence",
             "http://127.0.0.1:9000/signal",
         ],
+        per_try_timeout=2.5,
+        retries_per_url=1,
+        retry_sleep_sec=0.0,
     )
     if not isinstance(payload, dict):
         payload = {}
@@ -1535,6 +1560,9 @@ async def btc_decision_intelligence_proxy(interval: str = Query("15m")):
                 "http://127.0.0.1:9000/api/decision",
                 "http://127.0.0.1:9000/signal",
             ],
+            per_try_timeout=2.5,
+            retries_per_url=1,
+            retry_sleep_sec=0.0,
         )
         normalized["probability"] = _extract_probability_payload(prob_payload if isinstance(prob_payload, dict) else {})
 
@@ -1547,6 +1575,9 @@ async def btc_decision_intelligence_proxy(interval: str = Query("15m")):
                 "http://127.0.0.1:9000/api/intelligence",
                 "http://127.0.0.1:9000/api/execution",
             ],
+            per_try_timeout=2.5,
+            retries_per_url=1,
+            retry_sleep_sec=0.0,
         )
         if isinstance(exec_payload, dict):
             if isinstance(exec_payload.get("execution_plan"), dict):
@@ -2891,8 +2922,121 @@ def paper_portfolio():
         from src.paper_trading import get_paper_engine
 
         engine = get_paper_engine()
+
+        # Push live BTC mark price into paper engine so SL/TP auto-close works for manual trades.
+        try:
+            live_price = None
+            if _btc_service is not None:
+                sig = _btc_service.get_realtime_signal(interval="5m") or {}
+                candidates = [
+                    sig.get("mark_price"),
+                    ((sig.get("market_context") or {}).get("futures") or {}).get("mark_price"),
+                    sig.get("current_price"),
+                    sig.get("price"),
+                    sig.get("entry_price"),
+                ]
+                for candidate in candidates:
+                    try:
+                        px = float(candidate)
+                    except Exception:
+                        px = 0.0
+                    if px > 0:
+                        live_price = px
+                        break
+
+            if live_price and live_price > 0:
+                open_rows = engine.get_open_positions()
+                price_map: dict[str, float] = {}
+                for row in open_rows:
+                    ticker = str(row.get("ticker", "")).upper().strip()
+                    if not ticker:
+                        continue
+                    # BTC panel/manual flow is BTCUSDT/BTC-USDT; keep aliases for safety.
+                    if "BTC" in ticker:
+                        price_map[ticker] = live_price
+                        price_map[ticker.replace("-", "")] = live_price
+                        if ticker == "BTCUSDT":
+                            price_map["BTC-USDT"] = live_price
+                if price_map:
+                    closed_rows = engine.update_prices(price_map) or []
+                    for closed in closed_rows:
+                        push_broadcast_threadsafe(
+                            {
+                                "type": "paper_trade_update",
+                                "action": "closed",
+                                "ticker": str(closed.get("ticker", "")),
+                                "pnl_usd": float(closed.get("pnl", 0.0) or 0.0),
+                                "reason": str(closed.get("reason", "")),
+                            },
+                        )
+        except Exception as sync_exc:
+            logger.debug("Paper price sync skipped: %s", sync_exc)
+
         metrics = engine.get_portfolio_metrics()
-        positions = engine.get_open_positions()
+        raw_positions = engine.get_open_positions()
+
+        def _duration_str(held_hours: float) -> str:
+            try:
+                total_seconds = max(0, int(round(float(held_hours) * 3600.0)))
+            except Exception:
+                total_seconds = 0
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            seconds = total_seconds % 60
+            if hours > 0:
+                return f"{hours}h {minutes}m"
+            if minutes > 0:
+                return f"{minutes}m {seconds}s"
+            return f"{seconds}s"
+
+        positions = []
+        for row in raw_positions:
+            try:
+                entry_price = float(row.get("entry_price", 0.0) or 0.0)
+            except Exception:
+                entry_price = 0.0
+            try:
+                current_price = float(row.get("current_price", entry_price) or entry_price)
+            except Exception:
+                current_price = entry_price
+            try:
+                quantity = float(row.get("quantity", 0.0) or 0.0)
+            except Exception:
+                quantity = 0.0
+
+            pnl_usd = float(row.get("unrealized_pnl", row.get("pnl_usd", 0.0)) or 0.0)
+            pnl_pct_raw = row.get("unrealized_pnl_pct", row.get("pnl_pct"))
+            if pnl_pct_raw is None:
+                denom = entry_price * quantity
+                pnl_pct = (pnl_usd / denom * 100.0) if denom > 0 else 0.0
+            else:
+                try:
+                    pnl_pct = float(pnl_pct_raw)
+                except Exception:
+                    pnl_pct = 0.0
+
+            try:
+                sl_val = float(row.get("stop_loss", row.get("sl", 0.0)) or 0.0)
+            except Exception:
+                sl_val = 0.0
+            try:
+                tp_val = float(row.get("take_profit", row.get("tp1", row.get("tp", 0.0))) or 0.0)
+            except Exception:
+                tp_val = 0.0
+
+            held_hours = float(row.get("held_hours", 0.0) or 0.0)
+            position = dict(row)
+            position.update(
+                {
+                    "id": str(row.get("trade_id", row.get("id", ""))),
+                    "pnl_usd": round(pnl_usd, 6),
+                    "pnl_pct": round(pnl_pct, 6),
+                    "sl": sl_val if sl_val > 0 else None,
+                    "tp1": tp_val if tp_val > 0 else None,
+                    "duration_str": _duration_str(held_hours),
+                },
+            )
+            positions.append(position)
         return {
             "metrics": metrics,
             "open_positions": positions,
@@ -2943,13 +3087,24 @@ def paper_trades(limit: int = 50):
 async def paper_execute(payload: dict):
     """
     Manually execute a paper trade.
-    Body: { ticker, signal, entry_price, stop_loss,
-            take_profit, confidence, asset_class }
+    Body: { ticker, direction|signal, entry_price, stop_loss|sl,
+            take_profit|tp1|tp, confidence, asset_class, mode }
     """
     from src.paper_trading import get_paper_engine
 
     engine = get_paper_engine()
-    result = engine.execute_trade(payload, mode="manual")
+    mode = "auto" if str(payload.get("mode", "manual")).lower() == "auto" else "manual"
+    signal = {
+        "ticker": str(payload.get("ticker") or payload.get("asset") or "").strip().upper(),
+        "signal": str(payload.get("signal") or payload.get("direction") or "").strip().upper(),
+        "entry_price": payload.get("entry_price"),
+        "stop_loss": payload.get("stop_loss", payload.get("sl")),
+        "take_profit": payload.get("take_profit", payload.get("tp1", payload.get("tp"))),
+        "confidence": payload.get("confidence"),
+        "asset_class": payload.get("asset_class", "crypto"),
+        "strength": payload.get("strength"),
+    }
+    result = engine.execute_trade(signal, mode=mode)
     if result.get("success"):
         try:
             nm = NotificationManager((_dashboard_cfg or {}).get("notifications", {}))
@@ -3010,6 +3165,26 @@ async def paper_close(payload: dict):
                 ),
                 severity="INFO",
             )
+        except Exception:
+            pass
+        # [ADDITIVE] Mark any stale OPEN signal_history record as CLOSED
+        # Prevents TRADE ACTIVE banner showing after manual close
+        try:
+            import time as _time
+            from src.data.signal_history import _load as _sh_load, _save as _sh_save
+            _sh_hist = _sh_load()
+            _updated = False
+            for _rec in reversed(_sh_hist):
+                if str(_rec.get("status", "")).upper() == "OPEN":
+                    _rec["status"] = "CLOSED"
+                    _rec["result"] = "WIN" if float(result.get("pnl", 0)) > 0 else "LOSS"
+                    _rec["exit_price"] = float(result.get("exit_price", 0))
+                    _rec["pnl_pct"] = round(float(result.get("pnl_pct", 0)), 2)
+                    _rec["closed_time"] = _time.time()
+                    _updated = True
+                    break
+            if _updated:
+                _sh_save(_sh_hist)
         except Exception:
             pass
         return {"success": True, **result}

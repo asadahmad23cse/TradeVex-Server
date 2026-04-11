@@ -214,6 +214,174 @@ class AppRuntime:
         self._last_btc_signal_time = self._get_last_signal_time_from_db()
         self._last_btc_signal_direction = self._get_last_signal_direction_from_db()
 
+    def _sync_open_trade_to_json(
+        self, ctx: dict, action: str = "open"
+    ) -> None:
+        """
+        Advisory sync: mirror btc_intelligence paper trade
+        state into data/paper_trading.json for dashboard display.
+        Pure addition — does not affect trading logic.
+        action = 'open' | 'close'
+        """
+        try:
+            import json as _j
+            import os
+            import tempfile
+            from pathlib import Path
+
+            _ = tempfile
+            pt = Path("data/paper_trading.json")
+            if not pt.exists():
+                return
+            state = _j.loads(pt.read_text(encoding="utf-8"))
+
+            if action == "open":
+                if not str(ctx.get("direction") or "").strip():
+                    return
+                if state.get("open_position"):
+                    return  # already has position — don't overwrite
+                state["open_position"] = {
+                    "ticker": "BTCUSDT",
+                    "direction": str(ctx.get("direction", "LONG")).upper(),
+                    "entry_price": float(ctx.get("entry_price", 0)),
+                    "quantity": float(ctx.get("qty", ctx.get("size", 0))),
+                    "stop_loss": float(ctx.get("sl", 0)),
+                    "take_profit": float(ctx.get("tp1", 0)),
+                    "opened_at": str(ctx.get("opened_at", "")),
+                    "mode": "ALGO",
+                    "source": "btc_intelligence",
+                }
+            elif action == "close":
+                pos = state.pop("open_position", None)
+                if pos:
+                    trades = state.get("closed_trades", [])
+                    trades.append(pos)
+                    state["closed_trades"] = trades[-200:]
+
+            # Atomic write — safe even if process crashes mid-write
+            tmp = pt.with_suffix(".tmp")
+            tmp.write_text(
+                _j.dumps(state, indent=2, default=str),
+                encoding="utf-8",
+            )
+            os.replace(tmp, pt)
+            logger.info(
+                "paper_trading.json synced: action=%s", action
+            )
+        except Exception as _exc:
+            logger.debug(
+                "paper_trading sync skipped (non-critical): %s", _exc
+            )
+
+    # ── [ADDITIVE] Sync ALGO trades to paper_trading_state.json ──────
+    # paper_trading_state.json is what the dashboard Paper Trading panel reads.
+    # Without this, ALGO trades only exist in memory / paper_trading.json.
+    def _sync_algo_trade_to_state_json(
+        self, ctx: dict, action: str = "open"
+    ) -> None:
+        """
+        Push btc_intelligence ALGO trade into data/paper_trading_state.json
+        so it appears in the Paper Trading panel.
+        Purely additive — does not affect trading logic.
+        """
+        try:
+            import json as _j, os, uuid
+            from pathlib import Path
+
+            sf = Path("data/paper_trading_state.json")
+            if not sf.exists():
+                # Bootstrap minimal state so panel can display
+                sf.write_text(_j.dumps({
+                    "initial_capital": 100000.0,
+                    "cash": 100000.0,
+                    "mode": "manual",
+                    "open_positions": [],
+                    "closed_trades": [],
+                    "equity_curve": [],
+                }, indent=2), encoding="utf-8")
+
+            state = _j.loads(sf.read_text(encoding="utf-8"))
+            positions = list(state.get("open_positions") or [])
+
+            if action == "open":
+                direction = str(ctx.get("direction", "")).upper()
+                if not direction:
+                    return
+                # Don't duplicate — check if BTCUSDT ALGO already open
+                already = any(
+                    str(p.get("ticker", "")).upper() == "BTCUSDT"
+                    and str(p.get("source_mode", "")).lower() in ("algo", "auto", "system")
+                    for p in positions
+                )
+                if already:
+                    return
+                entry_price = float(ctx.get("entry_price", 0))
+                qty = float(ctx.get("qty", ctx.get("size", 0)))
+                confidence = float(ctx.get("confidence", 60))
+                capital_allocated = round(entry_price * qty, 2) if entry_price > 0 and qty > 0 else 0.0
+                position = {
+                    "trade_id": uuid.uuid4().hex[:12],
+                    "ticker": "BTCUSDT",
+                    "direction": direction,
+                    "entry_price": round(entry_price, 2),
+                    "current_price": round(entry_price, 2),
+                    "stop_loss": round(float(ctx.get("sl", 0)), 2) or None,
+                    "take_profit": round(float(ctx.get("tp1", 0)), 2) or None,
+                    "confidence": round(confidence, 2),
+                    "asset_class": "crypto",
+                    "quantity": round(qty, 6),
+                    "capital_allocated": capital_allocated,
+                    "position_size_pct": 0.0,
+                    "source_mode": "algo",
+                    "opened_at": str(ctx.get("opened_at", "")),
+                    "unrealized_pnl": 0.0,
+                    "unrealized_pnl_pct": 0.0,
+                }
+                positions.append(position)
+                state["open_positions"] = positions
+
+            elif action == "close":
+                # Find and remove BTCUSDT ALGO position
+                match = None
+                remaining = []
+                for p in positions:
+                    if (
+                        match is None
+                        and str(p.get("ticker", "")).upper() == "BTCUSDT"
+                        and str(p.get("source_mode", "")).lower() in ("algo", "auto", "system")
+                    ):
+                        match = p
+                    else:
+                        remaining.append(p)
+                state["open_positions"] = remaining
+                if match:
+                    exit_price = float(ctx.get("exit_price", ctx.get("entry_price", 0)))
+                    entry_price = float(match.get("entry_price", 0))
+                    qty = float(match.get("quantity", 0))
+                    direction = str(match.get("direction", "LONG")).upper()
+                    pnl = (exit_price - entry_price) * qty if direction == "LONG" else (entry_price - exit_price) * qty
+                    closed = {
+                        **match,
+                        "exit_price": round(exit_price, 2),
+                        "closed_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
+                        "pnl": round(pnl, 2),
+                        "pnl_pct": round(((exit_price - entry_price) / entry_price * 100) if entry_price > 0 else 0, 2),
+                        "reason": str(ctx.get("reason", "algo_exit")),
+                        "result": "WIN" if pnl > 0 else "LOSS" if pnl < 0 else "FLAT",
+                    }
+                    state.setdefault("closed_trades", []).append(closed)
+
+            # Atomic write
+            tmp = sf.with_suffix(".tmp")
+            tmp.write_text(
+                _j.dumps(state, indent=2, default=str),
+                encoding="utf-8"
+            )
+            os.replace(tmp, sf)
+            logger.info("paper_trading_state.json synced: action=%s", action)
+        except Exception as _exc:
+            logger.debug("paper_trading_state sync skipped: %s", _exc)
+
     async def start(self) -> None:
         if self._running:
             return
@@ -533,6 +701,10 @@ class AppRuntime:
                         cur.execute(ddl)
                     except Exception:
                         pass
+                        try:
+                            logger.debug("Silenced exception at %s", __name__, exc_info=True)
+                        except Exception:
+                            pass
                 conn.commit()
         except Exception as exc:
             logger.warning('Shared signals DB schema init failed: %s', exc)
@@ -628,6 +800,10 @@ class AppRuntime:
                 return float(candles_1m[-1].get('close', 0.0))
             except Exception:
                 pass
+                try:
+                    logger.debug("Silenced exception at %s", __name__, exc_info=True)
+                except Exception:
+                    pass
         try:
             return float(snapshot.get('binance_rest', {}).get('mark_price', 0.0))
         except Exception:
@@ -1335,6 +1511,10 @@ class AppRuntime:
                         )
         except Exception:
             pass
+            try:
+                logger.debug("Silenced exception at %s", __name__, exc_info=True)
+            except Exception:
+                pass
         return aggregate_payload
 
     def _next_btc_signal_id(self, cur: sqlite3.Cursor) -> str:
@@ -2239,6 +2419,10 @@ class AppRuntime:
                     )
                 except Exception:
                     pass
+                    try:
+                        logger.debug("Silenced exception at %s", __name__, exc_info=True)
+                    except Exception:
+                        pass
             else:
                 logger.warning(
                     "startup: loaded %d calibration rows from SQLite but Platt fit failed",
@@ -2610,6 +2794,135 @@ class AppRuntime:
                             'strategy': str(payload.get('strategy', 'NONE')),
                             'meta_rf_features': self._collect_meta_rf_features_snapshot(snapshot, signal),
                         }
+                        try:
+                            self._sync_open_trade_to_json(self._open_trade_context, "open")
+                        except Exception:
+                            pass
+                            try:
+                                logger.debug("Silenced exception at %s", __name__, exc_info=True)
+                            except Exception:
+                                pass
+                        try:
+                            take_profit = payload.get('take_profit', {})
+                            if not isinstance(take_profit, dict):
+                                take_profit = {}
+                            opened_at_iso = now_utc.replace(microsecond=0).isoformat().replace('+00:00', 'Z')
+                            self._open_trade_context.update({
+                                'direction': str(signal).upper(),
+                                'entry_price': float(entry),
+                                'qty': float(payload.get('position_size_btc', 0.0)),
+                                'sl': float(payload.get('stop_loss', 0.0)),
+                                'tp1': float(take_profit.get('TP1', 0.0)),
+                                'tp2': float(take_profit.get('TP2', 0.0)),
+                                'tp3': float(take_profit.get('TP3', 0.0)),
+                                'rr_ratio': float(payload.get('rr_ratio', payload.get('risk_reward', 0.0)) or 0.0),
+                                'opened_at': opened_at_iso,
+                            })
+                            try:
+                                self._sync_open_trade_to_json(self._open_trade_context, "open")
+                            except Exception:
+                                pass
+                                try:
+                                    logger.debug("Silenced exception at %s", __name__, exc_info=True)
+                                except Exception:
+                                    pass
+                            # [ADDITIVE] Sync ALGO trade to paper_trading_state.json for dashboard panel
+                            try:
+                                self._sync_algo_trade_to_state_json(self._open_trade_context, "open")
+                            except Exception:
+                                logger.debug("algo state sync open skipped: %s", __name__, exc_info=True)
+                            # [ADDITIVE] Record signal in signal_history.json so Signal History + banner work
+                            try:
+                                from src.data.signal_history import record_signal as _record_signal
+                                _ctx = self._open_trade_context
+                                _record_signal({
+                                    "signal": str(_ctx.get("direction", "HOLD")).upper(),
+                                    "requested_signal": str(_ctx.get("direction", "HOLD")).upper(),
+                                    "validated": True,
+                                    "confidence": float(_ctx.get("confidence", 0)),
+                                    "alpha_score": float(_ctx.get("confidence", 0)) * 0.7,
+                                    "entry_price": float(_ctx.get("entry_price", 0)),
+                                    "stop_loss": float(_ctx.get("sl", 0)),
+                                    "tp1": float(_ctx.get("tp1", 0)),
+                                    "tp2": float(_ctx.get("tp2", 0)),
+                                    "tp3": float(_ctx.get("tp3", 0)),
+                                    "risk_reward": float(_ctx.get("rr_ratio", 0)),
+                                    "as_of_utc": str(_ctx.get("opened_at", "")),
+                                    "regime": str(regime_label),
+                                    "reason": "algo_trade_opened_by_btc_intelligence",
+                                    "source": "btc_intelligence",
+                                })
+                                logger.info("ALGO trade recorded in signal_history.json")
+                            except Exception:
+                                logger.debug("signal_history record skipped: %s", __name__, exc_info=True)
+                            insert_meta = self._insert_btc_signal_row(
+                                signal=str(self._open_trade_context.get('direction', signal)).upper(),
+                                confidence=float(self._open_trade_context.get('confidence', meta_confidence)),
+                                quality_score=float(payload.get('quality_score', 0.0)),
+                                size_multiplier=float(payload.get('size_multiplier', 1.0)),
+                                signal_note=str(payload.get('signal_note', 'paper_trade_open')),
+                                entry_price=float(self._open_trade_context.get('entry_price', entry)),
+                                sl=float(self._open_trade_context.get('sl', 0.0)),
+                                tp1=float(self._open_trade_context.get('tp1', 0.0)),
+                                tp2=float(self._open_trade_context.get('tp2', 0.0)),
+                                tp3=float(self._open_trade_context.get('tp3', 0.0)),
+                                rr_ratio=float(self._open_trade_context.get('rr_ratio', 0.0)),
+                            )
+                            if insert_meta:
+                                self._open_signal_state = {
+                                    'signal_ref': str(insert_meta.get('signal_ref', '')),
+                                    'is_minimal_schema': bool(insert_meta.get('is_minimal_schema', False)),
+                                    'signal': str(self._open_trade_context.get('direction', signal)).upper(),
+                                    'entry_price': float(self._open_trade_context.get('entry_price', entry)),
+                                    'sl': float(self._open_trade_context.get('sl', 0.0)),
+                                    'tp1': float(self._open_trade_context.get('tp1', 0.0)),
+                                    'tp2': float(self._open_trade_context.get('tp2', 0.0)),
+                                    'opened_at_ts': float(time_module.time()),
+                                    'opened_at_iso': opened_at_iso,
+                                    'regime': str(regime_label),
+                                    'volatility_state': str(payload.get('volatility_regime', 'NORMAL')),
+                                    'flow_state': str(payload.get('orderflow_decision', payload.get('decision_state', 'FLAT'))),
+                                    'raw_prob': float(max(0.0, min(1.0, float(meta_confidence) / 100.0))),
+                                    'calibrated_prob': float(max(0.0, min(1.0, float(meta_confidence) / 100.0))),
+                                    'factor_values': {},
+                                    'strategy_used': str(payload.get('strategy', 'NONE')),
+                                }
+                                self._last_open_signal_id = str(insert_meta.get('signal_ref', ''))
+                            try:
+                                save_paper_state = getattr(self, '_save_paper_state', None)
+                                if callable(save_paper_state):
+                                    save_paper_state()
+                                else:
+                                    pt_path = Path('data/paper_trading.json')
+                                    ctx = self._open_trade_context
+                                    if pt_path.exists() and ctx:
+                                        import json as _json
+                                        state = _json.loads(pt_path.read_text())
+                                        pos = state.get('open_position') or {}
+                                        if not pos:
+                                            state['open_position'] = {
+                                                'ticker': 'BTCUSDT',
+                                                'direction': str(ctx.get('direction', 'LONG')).upper(),
+                                                'entry_price': float(ctx.get('entry_price', 0)),
+                                                'quantity': float(ctx.get('qty', 0)),
+                                                'stop_loss': float(ctx.get('sl', 0)),
+                                                'take_profit': float(ctx.get('tp1', 0)),
+                                                'opened_at': str(ctx.get('opened_at', '')),
+                                                'mode': 'ALGO',
+                                            }
+                                            pt_path.write_text(_json.dumps(state, indent=2))
+                            except Exception:
+                                pass
+                                try:
+                                    logger.debug("Silenced exception at %s", __name__, exc_info=True)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+                            try:
+                                logger.debug("Silenced exception at %s", __name__, exc_info=True)
+                            except Exception:
+                                pass
 
         closed = self._mark_to_market(snapshot)
         if closed:
@@ -2668,6 +2981,40 @@ class AppRuntime:
                     was_win=float(closed.get('pnl_usd', 0.0)) > 0,
                     as_of_utc=datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
                 )
+            try:
+                self._sync_open_trade_to_json(
+                    self._open_trade_context or {}, "close"
+                )
+            except Exception:
+                pass
+                try:
+                    logger.debug("Silenced exception at %s", __name__, exc_info=True)
+                except Exception:
+                    pass
+            # [ADDITIVE] Sync ALGO close to paper_trading_state.json
+            try:
+                _close_ctx = dict(self._open_trade_context or {})
+                _close_ctx["exit_price"] = float(closed.get("exit", closed.get("exit_price", 0)))
+                _close_ctx["reason"] = str(closed.get("reason", "algo_exit"))
+                self._sync_algo_trade_to_state_json(_close_ctx, "close")
+            except Exception:
+                logger.debug("algo state sync close skipped: %s", __name__, exc_info=True)
+            # [ADDITIVE] Update signal_history.json — mark OPEN signal as CLOSED
+            try:
+                from src.data.signal_history import _load as _sh_load, _save as _sh_save
+                _sh_history = _sh_load()
+                for _rec in reversed(_sh_history):
+                    if str(_rec.get("status", "")).upper() == "OPEN":
+                        _rec["status"] = "CLOSED"
+                        _rec["result"] = "WIN" if float(closed.get("pnl_usd", 0)) > 0 else "LOSS"
+                        _rec["exit_price"] = float(closed.get("exit", closed.get("exit_price", 0)))
+                        _rec["pnl_pct"] = round(float(closed.get("pnl_pct", 0)), 2)
+                        _rec["closed_time"] = time_module.time()
+                        break
+                _sh_save(_sh_history)
+                logger.info("signal_history.json updated: ALGO trade CLOSED")
+            except Exception:
+                logger.debug("signal_history close update skipped: %s", __name__, exc_info=True)
             self._open_trade_context = {}
 
     def _mark_to_market(self, snapshot: dict[str, Any]) -> dict[str, Any] | None:
@@ -2771,11 +3118,91 @@ class AppRuntime:
         out = dict(snap.get('latest_signal', {}))
         # Buffer/Redis may lag until the next 15m bar; model artifacts can reload independently.
         out['model_version'] = self.model.version
+        try:
+            out['signal_authority'] = 'btc_intelligence'
+            out['is_binding'] = True
+        except Exception:
+            pass
+            try:
+                logger.debug("Silenced exception at %s", __name__, exc_info=True)
+            except Exception:
+                pass
         return out
 
     async def signal_history(self) -> list[dict[str, Any]]:
         snap = await self.buffer.snapshot()
-        return snap.get('signal_history', [])[:100]
+        mem_history: list[dict] = list(snap.get('signal_history', []))
+
+        # Load from SQLite (always, not just when empty)
+        db_rows: list[dict] = []
+        try:
+            import sqlite3
+            db_path = self._shared_signals_db
+            if db_path.exists():
+                with sqlite3.connect(db_path) as conn:
+                    conn.row_factory = sqlite3.Row
+                    cur = conn.cursor()
+                    # Try full schema first, fallback to minimal
+                    try:
+                        cur.execute("""
+                            SELECT signal_id, ticker, timestamp, signal, 
+                                   confidence, entry_price, sl, tp1, tp2, 
+                                   tp3, rr_ratio, outcome, result, 
+                                   pnl_pct, quality_score
+                            FROM signals
+                            WHERE ticker = 'BTCUSDT'
+                            ORDER BY rowid DESC
+                            LIMIT 100
+                        """)
+                    except Exception:
+                        cur.execute("""
+                            SELECT ticker, timestamp, signal, confidence,
+                                   outcome, pnl_pct
+                            FROM signals
+                            WHERE ticker = 'BTCUSDT'
+                            ORDER BY rowid DESC
+                            LIMIT 100
+                        """)
+                    db_rows = [dict(r) for r in cur.fetchall()]
+        except Exception:
+            pass
+            try:
+                logger.debug("Silenced exception at %s", __name__, exc_info=True)
+            except Exception:
+                pass
+
+        # Combine: use timestamp as dedup key
+        seen: set[str] = set()
+        combined: list[dict] = []
+
+        # In-memory first (most recent, authoritative)
+        for entry in mem_history:
+            key = str(entry.get('as_of_utc') or entry.get('timestamp', ''))
+            if key and key not in seen:
+                seen.add(key)
+                combined.append(entry)
+
+        # SQLite next (fill historical gaps)
+        for entry in db_rows:
+            key = str(entry.get('timestamp', ''))
+            if key and key not in seen:
+                seen.add(key)
+                combined.append(entry)
+
+        # Sort newest first, return last 100
+        try:
+            combined.sort(
+                key=lambda x: str(x.get('as_of_utc') or x.get('timestamp', '')),
+                reverse=True
+            )
+        except Exception:
+            pass
+            try:
+                logger.debug("Silenced exception at %s", __name__, exc_info=True)
+            except Exception:
+                pass
+
+        return combined[:100]
 
     async def latest_regime(self) -> dict[str, Any]:
         sig = await self.latest_signal()

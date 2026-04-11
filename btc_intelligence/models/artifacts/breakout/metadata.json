@@ -1,0 +1,22 @@
+{
+  "version": "ml_breakout_v2_1h",
+  "regime": "breakout",
+  "timeframe": "1h",
+  "lightgbm": {
+    "rows": 584,
+    "walk_forward_auc_lgbm": 0.5257695478347755,
+    "trained": true,
+    "regime": "breakout"
+  },
+  "xgboost": {
+    "rows": 584,
+    "walk_forward_auc_xgb": 0.523554515156724,
+    "trained": true,
+    "regime": "breakout"
+  },
+  "lstm": {
+    "trained": false,
+    "skipped": true
+  },
+  "trained_at": "2026-04-09T05:27:04.359971+00:00"
+}

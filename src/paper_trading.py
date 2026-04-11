@@ -146,7 +146,8 @@ class PaperTradingEngine:
     def execute_trade(self, payload: dict[str, Any], mode: str = "manual") -> dict[str, Any]:
         with self._lock:
             ticker = str(payload.get("ticker") or payload.get("asset") or "").strip().upper()
-            signal = self._normalize_signal(payload.get("signal"))
+            # Accept both legacy `signal` and UI `direction` payload keys.
+            signal = self._normalize_signal(payload.get("signal", payload.get("direction")))
             entry_price = float(payload.get("entry_price") or 0.0)
             stop_loss = float(payload.get("stop_loss") or 0.0)
             take_profit = float(payload.get("take_profit") or payload.get("tp1") or 0.0)

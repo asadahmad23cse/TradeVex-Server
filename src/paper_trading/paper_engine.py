@@ -54,7 +54,8 @@ class PaperTradingEngine:
     def execute_trade(self, signal: dict, mode: str = "manual") -> dict:
         with self._lock:
             ticker = str(signal.get("ticker") or signal.get("asset") or "").strip().upper()
-            direction = self._normalize_direction(signal.get("signal"))
+            # Accept both legacy `signal` and UI `direction` payload keys.
+            direction = self._normalize_direction(signal.get("signal", signal.get("direction")))
             if not ticker:
                 return {"success": False, "message": "Ticker missing"}
             if direction not in {"LONG", "SHORT"}:

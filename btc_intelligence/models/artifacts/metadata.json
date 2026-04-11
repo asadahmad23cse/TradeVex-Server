@@ -1,0 +1,11 @@
+{
+  "version": "ml_ensemble_1h_20260409_052704",
+  "timeframe": "1h",
+  "regimes": [
+    "bullish_trend",
+    "bearish_trend",
+    "sideways_range",
+    "breakout"
+  ],
+  "trained_at": "2026-04-09T05:27:04.361317+00:00"
+}

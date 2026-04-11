@@ -1816,7 +1816,7 @@ body{
           <div id="perf-wr" class="perf-val perf-neutral">—</div>
         </div>
         <div class="perf-card">
-          <div class="perf-label">Trades</div>
+          <div class="perf-label">ALGO Trades</div>
           <div id="perf-trades" class="perf-val perf-neutral">—</div>
         </div>
         <div class="perf-card">
@@ -1846,7 +1846,7 @@ body{
           <div id="perf-wr" class="perf-val perf-neutral">—</div>
         </div>
         <div class="perf-card">
-          <div class="perf-label">Trades</div>
+          <div class="perf-label">ALGO Trades</div>
           <div id="perf-trades" class="perf-val perf-neutral">—</div>
         </div>
         <div class="perf-card">
@@ -2223,6 +2223,9 @@ const MARKER_FETCH_MAP = {
 
 let chart, candleSeries, volumeSeries, ema21Series, ema50Series, vwapSeries, bbUpperSeries, bbLowerSeries, bbMidSeries;
 let hmmTrendSeries = null;
+let vwapSD1Upper = null, vwapSD1Lower = null, vwapSD2Upper = null, vwapSD2Lower = null, vwapSD3Upper = null, vwapSD3Lower = null;
+let cvdSeries = null, fundingRateSeries = null;
+let vpvrCanvas = null;
 let hmmTrendData = [];
 let srLines = [];
 let liqLines = [];
@@ -2255,11 +2258,26 @@ let latestOrderflow = null;
 let _gaugeBootReady = false;
 let _gaugeBootStarted = false;
 let _pendingGaugeSignal = null;
+let fundingData = [];
+let livePositionOverlayToken = 0;
 const API_CACHE = new Map();
 const API_INFLIGHT = new Map();
 const sparkPrices = [];
 const sparkCanvas = document.getElementById("price-spark");
 const sparkCtx = sparkCanvas ? sparkCanvas.getContext("2d") : null;
+window.tradeMarkersRaw = window.tradeMarkersRaw || [];
+window.structureMarkersRaw = window.structureMarkersRaw || [];
+window.sweepMarkersRaw = window.sweepMarkersRaw || [];
+window.chartLayerState = window.chartLayerState || {
+  vwapBands: true,
+  fvg: true,
+  orderBlocks: true,
+  structure: true,
+  sessions: true,
+  trades: true,
+  vpvr: true,
+  keyLevels: true,
+};
 
 function apiTtl(url){
   if(url.includes("/api/btc/signal/history")) return 7000;
@@ -2371,11 +2389,21 @@ function ptUpdatePositionRow(row, position){
   const direction = String(position.direction || row.dataset.direction || "LONG").toUpperCase();
   const entry = ptNum(position.entry_price ?? row.dataset.entry, 0);
   const current = ptNum(position.current_price, ptNum(window.lastBtcPrice, entry));
-  const pnlUsd = ptNum(position.pnl_usd, 0);
-  const pnlPct = ptNum(position.pnl_pct, 0);
-  const sl = position.sl ?? "—";
-  const tp = position.tp1 ?? position.tp ?? "—";
-  const duration = position.duration_str ?? "—";
+  const pnlUsd = ptNum(position.pnl_usd ?? position.unrealized_pnl, 0);
+  const pnlPct = ptNum(position.pnl_pct ?? position.unrealized_pnl_pct, 0);
+  const sl = position.sl ?? position.stop_loss ?? position.stop ?? "—";
+  const tp = position.tp1 ?? position.take_profit ?? position.tp ?? "—";
+  const duration = position.duration_str ?? (() => {
+    const hrs = ptNum(position.held_hours, NaN);
+    if(!Number.isFinite(hrs) || hrs < 0) return "—";
+    const total = Math.round(hrs * 3600);
+    const h = Math.floor(total / 3600);
+    const m = Math.floor((total % 3600) / 60);
+    const s = total % 60;
+    if(h > 0) return `${h}h ${m}m`;
+    if(m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+  })();
   const id = position.id ?? "";
   const mode = String(position.mode || "manual").toLowerCase();
 
@@ -2706,6 +2734,7 @@ async function executeModalTrade(){
     payload = {
       ticker: "BTCUSDT",
       direction: side,
+      signal: side,
       entry_price: Number(midpoint.toFixed(2)),
       stop_loss: Number(plan.sl.toFixed(2)),
       take_profit: Number(plan.tp.toFixed(2)),
@@ -2723,6 +2752,7 @@ async function executeModalTrade(){
     payload = {
       ticker: "BTCUSDT",
       direction: side,
+      signal: side,
       entry_price: Number(entry.toFixed(2)),
       stop_loss: Number(sl.toFixed(2)),
       take_profit: Number(tp.toFixed(2)),
@@ -2736,6 +2766,9 @@ async function executeModalTrade(){
       execBtn.textContent = "EXECUTING...";
     }
     const data = await paperPostJSON("/api/paper/execute", payload);
+    if(data?.success === false){
+      throw new Error(data?.message || data?.error || "Trade execution failed");
+    }
     closeTradeModal();
     showPaperToast("✅", side, `@ $${Number(payload.entry_price).toLocaleString()}`, data?.size !== undefined ? `(size ${data.size})` : "");
     // Refresh immediately so open position shows right away
@@ -3043,9 +3076,13 @@ async function executePaperTrade(direction){
     const data = await paperPostJSON("/api/paper/execute", {
       ticker: "BTCUSDT",
       direction: side,
+      signal: side,
       entry_price: price,
       mode: "manual",
     });
+    if(data?.success === false){
+      throw new Error(data?.message || data?.error || "Trade execution failed");
+    }
     showPaperToast("✅", side, `@ $${price.toLocaleString()}`, data?.size !== undefined ? `(size ${data.size})` : "");
     setTimeout(() => {
       refreshPaperPortfolio();
@@ -3595,26 +3632,117 @@ function updateAntiCrowdingIntel(s){
 
 async function updatePerfScoreboard(){
   try{
-    const stats = await fetchJSON('/api/btc/signal/stats', { ttlMs: 15000 });
-    if(!stats) return;
     const set = (id, val, isPos) => {
-      const el = document.getElementById(id);
-      if(!el) return;
-      el.textContent = val;
-      el.className = 'perf-val ' + (isPos === null ? 'perf-neutral' : isPos ? 'perf-positive' : 'perf-negative');
+      const els = Array.from(document.querySelectorAll(`[id="${id}"]`));
+      if(!els.length) return;
+      els.forEach((el) => {
+        el.textContent = val;
+        el.className = 'perf-val ' + (isPos === null ? 'perf-neutral' : isPos ? 'perf-positive' : 'perf-negative');
+      });
     };
-    const pnl = Number(stats.total_pnl_pct ?? 0);
-    const wr = Number(stats.win_rate_pct ?? 0);
-    const trades = Number(stats.total_trades ?? 0);
-    const streak = Number(stats.current_streak ?? 0);
-    const sharpe = Number(stats.sharpe ?? 0);
-    const dd = Number(stats.max_dd_pct ?? 0);
-    set('perf-pnl', `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`, pnl >= 0);
-    set('perf-wr', `${wr.toFixed(1)}%`, wr >= 52);
-    set('perf-trades', `${trades}`, null);
-    set('perf-streak', streak >= 0 ? `▲${streak}W` : `▼${Math.abs(streak)}L`, streak >= 0);
-    set('perf-sharpe', sharpe.toFixed(2), sharpe >= 1.0);
-    set('perf-dd', `${dd.toFixed(2)}%`, dd > -2.0);
+
+    const raw = await fetchJSON('/api/paper/trades?limit=500', { noCache: true, ttlMs: 0, timeoutMs: 10000 });
+    const allTrades = Array.isArray(raw)
+      ? raw
+      : Array.isArray(raw?.trades)
+      ? raw.trades
+      : Array.isArray(raw?.closed_trades)
+      ? raw.closed_trades
+      : [];
+
+    const isAlgoTrade = (trade) => {
+      const mode = String(
+        trade?.mode ?? trade?.source_mode ?? trade?.execution_mode ?? trade?.trade_mode ?? ""
+      ).toLowerCase();
+      if(mode === "auto" || mode === "algo" || mode === "algorithmic" || mode === "system") return true;
+      if(mode.includes("manual")) return false;
+      const reason = String(trade?.reason ?? trade?.result ?? "").toLowerCase();
+      if(reason.includes("manual")) return false;
+      if(reason.includes("auto")) return true;
+      return false;
+    };
+
+    const tradeClosedMs = (trade) => {
+      const ts = trade?.closed_at ?? trade?.exit_time ?? trade?.time ?? trade?.timestamp ?? trade?.created_at;
+      const ms = ts ? Date.parse(ts) : NaN;
+      return Number.isFinite(ms) ? ms : NaN;
+    };
+
+    const tradePnlUsd = (trade) => ptNum(trade?.pnl_usd ?? trade?.pnl, 0);
+    const tradePnlPct = (trade) => {
+      const direct = ptNum(trade?.pnl_pct, NaN);
+      if(Number.isFinite(direct)) return direct;
+      const entry = ptNum(trade?.entry_price, NaN);
+      const exit = ptNum(trade?.exit_price, NaN);
+      const direction = String(trade?.direction || trade?.signal || "LONG").toUpperCase();
+      if(!(Number.isFinite(entry) && entry > 0 && Number.isFinite(exit) && exit > 0)) return 0;
+      return direction === "SHORT" ? ((entry - exit) / entry) * 100 : ((exit - entry) / entry) * 100;
+    };
+
+    const now = new Date();
+    const isToday = (ms) => {
+      if(!Number.isFinite(ms)) return false;
+      const d = new Date(ms);
+      return d.getFullYear() === now.getFullYear()
+        && d.getMonth() === now.getMonth()
+        && d.getDate() === now.getDate();
+    };
+
+    const btcAlgoToday = allTrades
+      .filter(t => String(t?.ticker || t?.asset || "").toUpperCase().includes("BTC"))
+      .filter(isAlgoTrade)
+      .map((t) => ({ ...t, _closedMs: tradeClosedMs(t), _pnlUsd: tradePnlUsd(t), _pnlPct: tradePnlPct(t) }))
+      .filter(t => isToday(t._closedMs));
+
+    btcAlgoToday.sort((a, b) => b._closedMs - a._closedMs);
+
+    const trades = btcAlgoToday.length;
+    const wins = btcAlgoToday.filter(t => t._pnlUsd > 0).length;
+    const wr = trades > 0 ? (wins / trades) * 100 : 0;
+
+    let streak = 0;
+    for(const t of btcAlgoToday){
+      const s = t._pnlUsd > 0 ? 1 : t._pnlUsd < 0 ? -1 : 0;
+      if(s === 0) continue;
+      if(streak === 0){
+        streak = s;
+        continue;
+      }
+      if((streak > 0 && s > 0) || (streak < 0 && s < 0)){
+        streak += s > 0 ? 1 : -1;
+      }else{
+        break;
+      }
+    }
+
+    const chrono = [...btcAlgoToday].sort((a, b) => a._closedMs - b._closedMs);
+    const rets = chrono.map(t => t._pnlPct / 100).filter(Number.isFinite);
+
+    let equity = 1.0;
+    let peak = 1.0;
+    let maxDd = 0.0; // negative or zero
+    for(const r of rets){
+      equity *= (1 + r);
+      if(equity > peak) peak = equity;
+      const dd = peak > 0 ? ((equity - peak) / peak) * 100 : 0;
+      if(dd < maxDd) maxDd = dd;
+    }
+    const pnl = (equity - 1) * 100;
+
+    let sharpe = 0.0;
+    if(rets.length > 1){
+      const mean = rets.reduce((s, x) => s + x, 0) / rets.length;
+      const variance = rets.reduce((s, x) => s + (x - mean) ** 2, 0) / (rets.length - 1);
+      const std = Math.sqrt(Math.max(variance, 1e-12));
+      sharpe = (mean / std) * Math.sqrt(rets.length);
+    }
+
+    set('perf-pnl', `${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}%`, trades === 0 ? null : pnl >= 0);
+    set('perf-wr', `${wr.toFixed(1)}%`, trades === 0 ? null : wr >= 50);
+    set('perf-trades', `${trades} ALGO`, null);
+    set('perf-streak', streak === 0 ? "0" : (streak > 0 ? `▲${streak}W` : `▼${Math.abs(streak)}L`), streak === 0 ? null : streak > 0);
+    set('perf-sharpe', sharpe.toFixed(2), trades < 2 ? null : sharpe >= 1.0);
+    set('perf-dd', `${maxDd.toFixed(2)}%`, trades === 0 ? null : maxDd > -2.0);
   }catch(_){
     // Keep silent; scoreboard should never break the main signal refresh.
   }
@@ -3795,6 +3923,7 @@ function updateOnChainSqsPanel(s){
     `<div class="sqs-component-row"><span class="sqs-comp-label">Volatility</span><span class="sqs-comp-val">${escapeHtml(volState)}</span></div>`,
     `<div class="sqs-component-row"><span class="sqs-comp-label">Reason</span><span class="sqs-comp-val" style="max-width:180px;white-space:normal;text-align:right;">${escapeHtml(reason)}</span></div>`,
   ].join("");
+  try{ guardTradeActiveDisplay(); }catch(_e){}
 }
 
 function setSimpleText(id, text, color){
@@ -4446,6 +4575,71 @@ function initChart(){
     lastValueVisible: true,
     title: 'HMM Trend%',
   });
+  vwapSD1Upper = chart.addLineSeries({
+    color: 'rgba(255,107,53,0.35)',
+    lineWidth: 1,
+    lineStyle: 1,
+    priceLineVisible: false,
+    lastValueVisible: false,
+  });
+  vwapSD1Lower = chart.addLineSeries({
+    color: 'rgba(255,107,53,0.35)',
+    lineWidth: 1,
+    lineStyle: 1,
+    priceLineVisible: false,
+    lastValueVisible: false,
+  });
+  vwapSD2Upper = chart.addLineSeries({
+    color: 'rgba(255,107,53,0.20)',
+    lineWidth: 1,
+    lineStyle: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+  });
+  vwapSD2Lower = chart.addLineSeries({
+    color: 'rgba(255,107,53,0.20)',
+    lineWidth: 1,
+    lineStyle: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+  });
+  vwapSD3Upper = chart.addLineSeries({
+    color: 'rgba(255,107,53,0.10)',
+    lineWidth: 1,
+    lineStyle: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+  });
+  vwapSD3Lower = chart.addLineSeries({
+    color: 'rgba(255,107,53,0.10)',
+    lineWidth: 1,
+    lineStyle: 2,
+    priceLineVisible: false,
+    lastValueVisible: false,
+  });
+  cvdSeries = chart.addLineSeries({
+    color: '#a78bfa',
+    lineWidth: 1,
+    priceScaleId: 'cvd',
+    priceLineVisible: false,
+    lastValueVisible: true,
+    title: 'CVD',
+  });
+  chart.priceScale('cvd').applyOptions({
+    scaleMargins: { top: 0.80, bottom: 0.02 },
+    visible: false,
+  });
+  fundingRateSeries = chart.addHistogramSeries({
+    priceScaleId: 'funding',
+    scaleMargins: { top: 0.92, bottom: 0 },
+    lastValueVisible: false,
+    priceLineVisible: false,
+    title: 'Funding',
+  });
+  chart.priceScale('funding').applyOptions({
+    visible: false,
+    scaleMargins: { top: 0.92, bottom: 0 },
+  });
 
   chart.subscribeCrosshairMove((param)=>{
     const tip=document.getElementById('marker-tooltip');
@@ -4460,17 +4654,32 @@ function initChart(){
       return;
     }
     const conf = m.confidence!==undefined ? `${Math.round(Number(m.confidence))}%` : "--";
-    tip.textContent = `${m.signal||"--"} | Conf: ${conf}`;
+    tip.textContent = m.tooltip || `${m.signal||"--"} | Conf: ${conf}`;
     tip.style.display='block';
     tip.style.left = `${Math.max(8, Math.min(param.point.x + 12, c.clientWidth - 220))}px`;
     tip.style.top = `${Math.max(8, param.point.y - 28)}px`;
+  });
+  chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+    try{
+      drawVolumeProfile(buildChartCandles());
+    }catch(_){ }
   });
 
   applyChartTimeScaleForTF();
   applyRegimeBackground('RANGE');
   window.addEventListener("resize",()=>chart.applyOptions({width:c.clientWidth,height:c.clientHeight}));
+  window.addEventListener("resize",()=>{
+    try{
+      ensureVPVRCanvas();
+      drawVolumeProfile(buildChartCandles());
+    }catch(_){ }
+  });
+  ensureVPVRCanvas();
+  ensureChartLayerPanel();
   fetchSRLevels();
   fetchLiquidityZones();
+  loadTradeMarkers();
+  setInterval(loadTradeMarkers, 60000);
 }
 
 function applyRegimeBackground(regime){
@@ -4600,6 +4809,806 @@ function computeVWAP(candles){
   });
 }
 
+function buildChartCandles(){
+  try{
+    return points.map(p => ({
+      time: Number(p.time),
+      open: Number(p.open),
+      high: Number(p.high),
+      low: Number(p.low),
+      close: Number(p.close),
+      volume: Number(p.volume || 0),
+      taker_buy_base: Number(p.taker_buy_base || 0),
+    }));
+  }catch(_){
+    return [];
+  }
+}
+
+function isLayerEnabled(key){
+  try{
+    return window.chartLayerState ? window.chartLayerState[key] !== false : true;
+  }catch(_){
+    return true;
+  }
+}
+
+function clearOverlayLines(key){
+  try{
+    if(window[key]){
+      window[key].forEach(l => { try{ candleSeries.removePriceLine(l); }catch(_e){} });
+    }
+    window[key] = [];
+  }catch(_){
+    window[key] = [];
+  }
+}
+
+function parseTimeToSec(raw){
+  try{
+    if(raw == null || raw === "") return null;
+    if(typeof raw === "number"){
+      if(raw > 1e12) return Math.floor(raw / 1000);
+      if(raw > 1e9) return Math.floor(raw);
+      return Math.floor(raw);
+    }
+    const s = String(raw).trim();
+    if(!s) return null;
+    if(/^\d+$/.test(s)){
+      const n = Number(s);
+      if(n > 1e12) return Math.floor(n / 1000);
+      return Math.floor(n);
+    }
+    const ms = Date.parse(s);
+    if(Number.isFinite(ms)) return Math.floor(ms / 1000);
+    return null;
+  }catch(_){
+    return null;
+  }
+}
+
+function markerTooltipText(marker){
+  try{
+    if(marker && marker.tooltip) return String(marker.tooltip);
+    const bits = [];
+    if(marker && marker.signal) bits.push(String(marker.signal));
+    if(marker && marker.confidence != null){
+      const conf = Number(marker.confidence);
+      if(Number.isFinite(conf)) bits.push(`Conf: ${Math.round(conf)}%`);
+    }
+    if(marker && marker.pnl_pct != null){
+      const pnl = Number(marker.pnl_pct);
+      if(Number.isFinite(pnl)) bits.push(`PnL: ${pnl >= 0 ? "+" : ""}${pnl.toFixed(2)}%`);
+    }
+    return bits.join(" | ");
+  }catch(_){
+    return "";
+  }
+}
+
+function rebuildMarkerMapFromAll(allMarkers){
+  try{
+    markersMap.clear();
+    for(const marker of allMarkers){
+      const ts = Number(marker?.time);
+      if(!Number.isFinite(ts)) continue;
+      const prev = markersMap.get(ts);
+      if(!prev){
+        markersMap.set(ts, marker);
+        continue;
+      }
+      const mergedTooltip = [markerTooltipText(prev), markerTooltipText(marker)]
+        .filter(Boolean)
+        .filter((value, idx, arr) => arr.indexOf(value) === idx)
+        .join(" | ");
+      markersMap.set(ts, {
+        ...prev,
+        ...marker,
+        tooltip: mergedTooltip || prev.tooltip || marker.tooltip || "",
+        signal: prev.signal || marker.signal,
+        confidence: prev.confidence ?? marker.confidence,
+      });
+    }
+  }catch(_){ }
+}
+
+function computeVWAPBands(candles){
+  try{
+    let cumPV = 0;
+    let cumVol = 0;
+    let lastDay = null;
+    let count = 0;
+    let diffSum = 0;
+    let diffSqSum = 0;
+    const bands = {
+      sd1up: [],
+      sd1dn: [],
+      sd2up: [],
+      sd2dn: [],
+      sd3up: [],
+      sd3dn: [],
+    };
+    for(const c of candles){
+      const day = new Date(c.time * 1000).toISOString().slice(0, 10);
+      if(day !== lastDay){
+        cumPV = 0;
+        cumVol = 0;
+        count = 0;
+        diffSum = 0;
+        diffSqSum = 0;
+        lastDay = day;
+      }
+      const tp = (Number(c.high) + Number(c.low) + Number(c.close)) / 3;
+      const vol = Number(c.volume || 0);
+      cumPV += tp * vol;
+      cumVol += vol;
+      const vwap = cumVol > 0 ? (cumPV / cumVol) : Number(c.close);
+      const diff = Number(c.close) - vwap;
+      count += 1;
+      diffSum += diff;
+      diffSqSum += diff * diff;
+      const variance = count > 1 ? Math.max(0, (diffSqSum / count) - Math.pow(diffSum / count, 2)) : 0;
+      const sd = Math.sqrt(variance);
+      bands.sd1up.push({ time: c.time, value: vwap + sd });
+      bands.sd1dn.push({ time: c.time, value: vwap - sd });
+      bands.sd2up.push({ time: c.time, value: vwap + sd * 2 });
+      bands.sd2dn.push({ time: c.time, value: vwap - sd * 2 });
+      bands.sd3up.push({ time: c.time, value: vwap + sd * 3 });
+      bands.sd3dn.push({ time: c.time, value: vwap - sd * 3 });
+    }
+    return bands;
+  }catch(_){
+    return { sd1up: [], sd1dn: [], sd2up: [], sd2dn: [], sd3up: [], sd3dn: [] };
+  }
+}
+
+function computeCVD(candles){
+  try{
+    let cumDelta = 0;
+    return candles.map((c) => {
+      const volume = Number(c.volume || 0);
+      const takerBuy = Number.isFinite(Number(c.taker_buy_base)) ? Number(c.taker_buy_base) : volume * 0.5;
+      const delta = takerBuy - (volume - takerBuy);
+      cumDelta += delta;
+      const close = Math.max(1, Number(c.close || 1));
+      return {
+        time: Number(c.time),
+        value: Number(((cumDelta / close) * 100).toFixed(4)),
+      };
+    });
+  }catch(_){
+    return [];
+  }
+}
+
+function detectFVGs(candles){
+  try{
+    const gaps = [];
+    for(let i = 2; i < candles.length; i++){
+      const a = candles[i - 2];
+      const c = candles[i];
+      if(Number(a.high) < Number(c.low)){
+        const low = Number(a.high);
+        const high = Number(c.low);
+        let filled = false;
+        for(let j = i + 1; j < candles.length; j++){
+          if(Number(candles[j].low) <= high && Number(candles[j].high) >= low){
+            filled = true;
+            break;
+          }
+        }
+        gaps.push({ time: Number(c.time), high, low, type: "bullish", filled });
+      }else if(Number(a.low) > Number(c.high)){
+        const high = Number(a.low);
+        const low = Number(c.high);
+        let filled = false;
+        for(let j = i + 1; j < candles.length; j++){
+          if(Number(candles[j].high) >= low && Number(candles[j].low) <= high){
+            filled = true;
+            break;
+          }
+        }
+        gaps.push({ time: Number(c.time), high, low, type: "bearish", filled });
+      }
+    }
+    return gaps.filter(g => !g.filled).slice(-20);
+  }catch(_){
+    return [];
+  }
+}
+
+function drawFVGs(candles){
+  try{
+    clearOverlayLines("_fvgLines");
+    if(!candleSeries || !isLayerEnabled("fvg")) return;
+    const gaps = detectFVGs(candles);
+    for(const gap of gaps){
+      const color = gap.type === "bullish" ? "rgba(0,200,83,0.6)" : "rgba(255,23,68,0.6)";
+      window._fvgLines.push(candleSeries.createPriceLine({
+        price: Number(gap.high),
+        color,
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: gap.type === "bullish" ? "FVG↑" : "FVG↓",
+      }));
+      window._fvgLines.push(candleSeries.createPriceLine({
+        price: Number(gap.low),
+        color,
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: false,
+        title: "",
+      }));
+    }
+  }catch(_){ }
+}
+
+function detectMarketStructure(candles){
+  try{
+    const highs = [];
+    const lows = [];
+    const markers = [];
+    let trend = null;
+    for(let i = 2; i < candles.length - 2; i++){
+      const cur = candles[i];
+      if(Number(cur.high) > Number(candles[i - 2].high) && Number(cur.high) > Number(candles[i + 2].high)){
+        highs.push({ index: i, price: Number(cur.high), time: Number(cur.time) });
+      }
+      if(Number(cur.low) < Number(candles[i - 2].low) && Number(cur.low) < Number(candles[i + 2].low)){
+        lows.push({ index: i, price: Number(cur.low), time: Number(cur.time) });
+      }
+    }
+    for(let i = 1; i < highs.length; i++){
+      const cur = highs[i];
+      const prev = highs[i - 1];
+      const isHH = cur.price > prev.price;
+      markers.push({
+        time: cur.time,
+        position: "aboveBar",
+        color: isHH ? "#00e676" : "#ff1744",
+        shape: "circle",
+        text: isHH ? "HH" : "LH",
+        size: 0.5,
+        tooltip: isHH ? "Market Structure | HH" : "Market Structure | LH",
+      });
+      if(isHH && trend === "down"){
+        markers.push({
+          time: cur.time,
+          position: "aboveBar",
+          color: "#ea00ff",
+          shape: "arrowUp",
+          text: "CHoCH",
+          size: 1.2,
+          tooltip: "Market Structure | CHoCH bullish",
+        });
+      }
+      trend = isHH ? "up" : trend;
+    }
+    for(let i = 1; i < lows.length; i++){
+      const cur = lows[i];
+      const prev = lows[i - 1];
+      const isHL = cur.price > prev.price;
+      const isLL = cur.price < prev.price;
+      markers.push({
+        time: cur.time,
+        position: isHL ? "belowBar" : "belowBar",
+        color: isHL ? "#00e676" : "#ff1744",
+        shape: "circle",
+        text: isHL ? "HL" : "LL",
+        size: 0.5,
+        tooltip: isHL ? "Market Structure | HL" : "Market Structure | LL",
+      });
+      if(isLL && trend === "up"){
+        markers.push({
+          time: cur.time,
+          position: "belowBar",
+          color: "#ea00ff",
+          shape: "arrowDown",
+          text: "CHoCH",
+          size: 1.2,
+          tooltip: "Market Structure | CHoCH bearish",
+        });
+      }
+      if(isLL) trend = "down";
+      if(isHL && trend == null) trend = "up";
+    }
+    let lastBullBos = null;
+    let lastBearBos = null;
+    for(let i = 0; i < candles.length; i++){
+      const candle = candles[i];
+      const priorHigh = highs.filter(h => h.index < i).slice(-1)[0];
+      const priorLow = lows.filter(l => l.index < i).slice(-1)[0];
+      if(priorHigh && Number(candle.close) > Number(priorHigh.price) && lastBullBos !== priorHigh.time){
+        lastBullBos = priorHigh.time;
+        markers.push({
+          time: Number(candle.time),
+          position: "aboveBar",
+          color: "#00b0ff",
+          shape: "arrowUp",
+          text: "BOS",
+          size: 1,
+          tooltip: "Market Structure | BOS bullish",
+        });
+      }
+      if(priorLow && Number(candle.close) < Number(priorLow.price) && lastBearBos !== priorLow.time){
+        lastBearBos = priorLow.time;
+        markers.push({
+          time: Number(candle.time),
+          position: "belowBar",
+          color: "#ff6d00",
+          shape: "arrowDown",
+          text: "BOS",
+          size: 1,
+          tooltip: "Market Structure | BOS bearish",
+        });
+      }
+    }
+    return markers.slice(-80);
+  }catch(_){
+    return [];
+  }
+}
+
+function detectLiquiditySweeps(candles){
+  try{
+    const markers = [];
+    for(let i = 20; i < candles.length; i++){
+      const lookback = candles.slice(i - 20, i);
+      const lookbackHigh = Math.max(...lookback.map(c => Number(c.high)));
+      const lookbackLow = Math.min(...lookback.map(c => Number(c.low)));
+      const cur = candles[i];
+      if(Number(cur.low) < lookbackLow && Number(cur.close) > lookbackLow){
+        markers.push({
+          time: Number(cur.time),
+          position: "belowBar",
+          color: "#00e5ff",
+          shape: "arrowUp",
+          text: "LSB",
+          size: 1.5,
+          tooltip: "Liquidity Sweep | Bullish",
+        });
+      }
+      if(Number(cur.high) > lookbackHigh && Number(cur.close) < lookbackHigh){
+        markers.push({
+          time: Number(cur.time),
+          position: "aboveBar",
+          color: "#ff6d00",
+          shape: "arrowDown",
+          text: "LSS",
+          size: 1.5,
+          tooltip: "Liquidity Sweep | Bearish",
+        });
+      }
+    }
+    return markers.slice(-40);
+  }catch(_){
+    return [];
+  }
+}
+
+function detectOrderBlocks(candles){
+  try{
+    const atrPeriod = 14;
+    const trueRanges = candles.map((c, idx) => {
+      if(idx === 0) return Number(c.high) - Number(c.low);
+      const prevClose = Number(candles[idx - 1].close);
+      return Math.max(
+        Number(c.high) - Number(c.low),
+        Math.abs(Number(c.high) - prevClose),
+        Math.abs(Number(c.low) - prevClose)
+      );
+    });
+    const atr = trueRanges.map((_, idx) => {
+      const start = Math.max(0, idx - atrPeriod + 1);
+      const slice = trueRanges.slice(start, idx + 1);
+      return slice.reduce((a, b) => a + b, 0) / slice.length;
+    });
+    const blocks = [];
+    for(let i = 0; i < candles.length - 3; i++){
+      const c = candles[i];
+      const future = candles.slice(i + 1, i + 4);
+      const moveUp = Math.max(...future.map(x => Number(x.high))) - Number(c.high);
+      const moveDown = Number(c.low) - Math.min(...future.map(x => Number(x.low)));
+      if(Number(c.close) < Number(c.open) && moveUp > Number(atr[i] || 0)){
+        let mitigated = false;
+        for(let j = i + 4; j < candles.length; j++){
+          if(Number(candles[j].low) <= Number(c.high) && Number(candles[j].high) >= Number(c.low)){
+            mitigated = true;
+            break;
+          }
+        }
+        blocks.push({ time: Number(c.time), high: Number(c.high), low: Number(c.low), type: "bullish", mitigated });
+      }else if(Number(c.close) > Number(c.open) && moveDown > Number(atr[i] || 0)){
+        let mitigated = false;
+        for(let j = i + 4; j < candles.length; j++){
+          if(Number(candles[j].high) >= Number(c.low) && Number(candles[j].low) <= Number(c.high)){
+            mitigated = true;
+            break;
+          }
+        }
+        blocks.push({ time: Number(c.time), high: Number(c.high), low: Number(c.low), type: "bearish", mitigated });
+      }
+    }
+    return blocks.slice(-10);
+  }catch(_){
+    return [];
+  }
+}
+
+function drawOrderBlocks(candles){
+  try{
+    clearOverlayLines("_obLines");
+    if(!candleSeries || !isLayerEnabled("orderBlocks")) return;
+    const blocks = detectOrderBlocks(candles);
+    for(const ob of blocks){
+      const color = ob.type === "bullish"
+        ? (ob.mitigated ? "rgba(0,200,83,0.2)" : "rgba(0,200,83,0.5)")
+        : (ob.mitigated ? "rgba(255,23,68,0.2)" : "rgba(255,23,68,0.5)");
+      const title = ob.type === "bullish"
+        ? (ob.mitigated ? "OB↑(used)" : "OB↑")
+        : (ob.mitigated ? "OB↓(used)" : "OB↓");
+      window._obLines.push(candleSeries.createPriceLine({
+        price: Number(ob.high),
+        color,
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title,
+      }));
+      window._obLines.push(candleSeries.createPriceLine({
+        price: Number(ob.low),
+        color,
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: false,
+        title: "",
+      }));
+    }
+  }catch(_){ }
+}
+
+function drawKeyLevels(candles){
+  try{
+    clearOverlayLines("_keyLevelLines");
+    if(!candleSeries || !isLayerEnabled("keyLevels") || !candles.length) return;
+    const lastTs = Number(candles[candles.length - 1].time) * 1000;
+    const prevDay = new Date(lastTs - 86400000).toISOString().slice(0, 10);
+    const prevDayCandles = candles.filter(c => new Date(Number(c.time) * 1000).toISOString().slice(0, 10) === prevDay);
+    if(prevDayCandles.length){
+      const prevDayHigh = Math.max(...prevDayCandles.map(c => Number(c.high)));
+      const prevDayLow = Math.min(...prevDayCandles.map(c => Number(c.low)));
+      window._keyLevelLines.push(candleSeries.createPriceLine({
+        price: prevDayHigh,
+        color: "#ffd600",
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: "PDH",
+      }));
+      window._keyLevelLines.push(candleSeries.createPriceLine({
+        price: prevDayLow,
+        color: "#ffd600",
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: "PDL",
+      }));
+    }
+    const weekCutoff = lastTs - (7 * 86400000);
+    const weekCandles = candles.filter(c => (Number(c.time) * 1000) >= weekCutoff);
+    if(weekCandles.length){
+      const weeklyHigh = Math.max(...weekCandles.map(c => Number(c.high)));
+      const weeklyLow = Math.min(...weekCandles.map(c => Number(c.low)));
+      window._keyLevelLines.push(candleSeries.createPriceLine({
+        price: weeklyHigh,
+        color: "#ff6d00",
+        lineWidth: 1,
+        lineStyle: 3,
+        axisLabelVisible: true,
+        title: "WH",
+      }));
+      window._keyLevelLines.push(candleSeries.createPriceLine({
+        price: weeklyLow,
+        color: "#ff6d00",
+        lineWidth: 1,
+        lineStyle: 3,
+        axisLabelVisible: true,
+        title: "WL",
+      }));
+    }
+  }catch(_){ }
+}
+
+function drawSessionRanges(candles){
+  try{
+    clearOverlayLines("_sessionLines");
+    if(!candleSeries || !isLayerEnabled("sessions") || !candles.length) return;
+    const currentDay = new Date(Number(candles[candles.length - 1].time) * 1000).toISOString().slice(0, 10);
+    const dayCandles = candles.filter(c => new Date(Number(c.time) * 1000).toISOString().slice(0, 10) === currentDay);
+    const sessions = [
+      { key: "Asia H/L", title: "Asia H/L", start: 0, end: 8, color: "rgba(251,146,60,0.3)" },
+      { key: "LDN H/L", title: "LDN H/L", start: 8, end: 13, color: "rgba(59,130,246,0.3)" },
+      { key: "NY H/L", title: "NY H/L", start: 13, end: 21, color: "rgba(168,85,247,0.3)" },
+    ];
+    for(const session of sessions){
+      const slice = dayCandles.filter(c => {
+        const hour = new Date(Number(c.time) * 1000).getUTCHours();
+        return hour >= session.start && hour < session.end;
+      });
+      if(!slice.length) continue;
+      const high = Math.max(...slice.map(c => Number(c.high)));
+      const low = Math.min(...slice.map(c => Number(c.low)));
+      window._sessionLines.push(candleSeries.createPriceLine({
+        price: high,
+        color: session.color,
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: true,
+        title: session.title,
+      }));
+      window._sessionLines.push(candleSeries.createPriceLine({
+        price: low,
+        color: session.color,
+        lineWidth: 1,
+        lineStyle: 2,
+        axisLabelVisible: false,
+        title: "",
+      }));
+    }
+  }catch(_){ }
+}
+
+function getVisibleCandles(candles){
+  try{
+    if(!chart || !chart.timeScale || !candles.length) return candles;
+    const range = chart.timeScale().getVisibleRange && chart.timeScale().getVisibleRange();
+    if(!range || range.from == null || range.to == null) return candles;
+    const from = Number(range.from);
+    const to = Number(range.to);
+    const visible = candles.filter(c => Number(c.time) >= from && Number(c.time) <= to);
+    return visible.length ? visible : candles;
+  }catch(_){
+    return candles;
+  }
+}
+
+function ensureVPVRCanvas(){
+  try{
+    const chartWrap = document.querySelector(".chart-wrap");
+    if(!chartWrap) return null;
+    if(!vpvrCanvas){
+      vpvrCanvas = document.createElement("canvas");
+      vpvrCanvas.id = "vpvr-canvas";
+      vpvrCanvas.style.position = "absolute";
+      vpvrCanvas.style.right = "0";
+      vpvrCanvas.style.top = "0";
+      vpvrCanvas.style.width = "80px";
+      vpvrCanvas.style.pointerEvents = "none";
+      vpvrCanvas.style.zIndex = "5";
+      chartWrap.appendChild(vpvrCanvas);
+    }
+    const chartEl = document.getElementById("chart");
+    const width = 80;
+    const height = chartEl ? chartEl.clientHeight : 560;
+    vpvrCanvas.width = width;
+    vpvrCanvas.height = height;
+    vpvrCanvas.style.height = `${height}px`;
+    return vpvrCanvas;
+  }catch(_){
+    return null;
+  }
+}
+
+function drawVolumeProfile(candles){
+  try{
+    const canvas = ensureVPVRCanvas();
+    if(!canvas) return;
+    const ctx = canvas.getContext("2d");
+    if(!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if(!isLayerEnabled("vpvr")){
+      canvas.style.display = "none";
+      return;
+    }
+    canvas.style.display = "block";
+    const visible = getVisibleCandles(candles);
+    if(!visible.length) return;
+    const minPrice = Math.min(...visible.map(c => Number(c.low)));
+    const maxPrice = Math.max(...visible.map(c => Number(c.high)));
+    if(!Number.isFinite(minPrice) || !Number.isFinite(maxPrice) || maxPrice <= minPrice) return;
+    const bucketCount = 40;
+    const step = (maxPrice - minPrice) / bucketCount;
+    const buckets = Array.from({ length: bucketCount }, (_, idx) => ({
+      idx,
+      price: minPrice + step * idx,
+      volume: 0,
+    }));
+    for(const candle of visible){
+      const tp = (Number(candle.high) + Number(candle.low) + Number(candle.close)) / 3;
+      const bucketIdx = Math.max(0, Math.min(bucketCount - 1, Math.floor((tp - minPrice) / Math.max(step, 1e-9))));
+      buckets[bucketIdx].volume += Number(candle.volume || 0);
+    }
+    const maxVol = Math.max(...buckets.map(b => b.volume), 1);
+    const totalVol = buckets.reduce((sum, b) => sum + b.volume, 0);
+    const sorted = [...buckets].sort((a, b) => b.volume - a.volume);
+    let acc = 0;
+    const valueArea = new Set();
+    for(const bucket of sorted){
+      valueArea.add(bucket.idx);
+      acc += bucket.volume;
+      if(totalVol > 0 && acc / totalVol >= 0.7) break;
+    }
+    const poc = sorted[0];
+    ctx.fillStyle = "rgba(15,23,42,0.7)";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#cbd5e1";
+    ctx.font = "10px JetBrains Mono";
+    ctx.fillText("VPVR", 8, 12);
+    const barArea = canvas.width - 18;
+    const bucketHeight = canvas.height / bucketCount;
+    buckets.forEach((bucket) => {
+      const width = (bucket.volume / maxVol) * barArea;
+      const y = canvas.height - ((bucket.idx + 1) * bucketHeight);
+      ctx.fillStyle = valueArea.has(bucket.idx) ? "rgba(59,130,246,0.5)" : "rgba(100,116,139,0.4)";
+      ctx.fillRect(canvas.width - width, y, width, Math.max(2, bucketHeight - 1));
+    });
+    if(poc){
+      const y = canvas.height - ((poc.idx + 0.5) * bucketHeight);
+      ctx.strokeStyle = "#f59e0b";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, y);
+      ctx.lineTo(canvas.width, y);
+      ctx.stroke();
+      ctx.fillStyle = "#f59e0b";
+      ctx.fillText("POC", 8, Math.max(22, y - 4));
+    }
+  }catch(_){ }
+}
+
+function ensureChartLayerPanel(){
+  try{
+    const chartWrap = document.querySelector(".chart-wrap");
+    if(!chartWrap || document.getElementById("chart-layer-panel")) return;
+    const panel = document.createElement("div");
+    panel.id = "chart-layer-panel";
+    panel.style.position = "absolute";
+    panel.style.top = "10px";
+    panel.style.right = "90px";
+    panel.style.zIndex = "7";
+    panel.style.display = "flex";
+    panel.style.flexDirection = "column";
+    panel.style.alignItems = "flex-end";
+    panel.innerHTML = `
+      <button id="chart-layer-toggle" style="border:1px solid rgba(148,163,184,.25);background:rgba(7,11,18,.9);color:#e2e8f0;border-radius:10px;padding:7px 10px;font:700 11px Sora;cursor:pointer;">Chart Layers</button>
+      <div id="chart-layer-menu" style="display:none;margin-top:8px;padding:10px 12px;border-radius:12px;border:1px solid rgba(148,163,184,.22);background:rgba(7,11,18,.96);min-width:180px;box-shadow:0 10px 26px rgba(2,6,23,.4);font:12px Sora;color:#e2e8f0;"></div>
+    `;
+    chartWrap.appendChild(panel);
+    const menu = panel.querySelector("#chart-layer-menu");
+    const items = [
+      ["vwapBands", "VWAP Bands"],
+      ["fvg", "FVG"],
+      ["orderBlocks", "Order Blocks"],
+      ["structure", "Structure"],
+      ["sessions", "Sessions"],
+      ["trades", "Trades"],
+      ["vpvr", "VPVR"],
+      ["keyLevels", "Key Levels"],
+    ];
+    menu.innerHTML = items.map(([key, label]) => `
+      <label style="display:flex;align-items:center;gap:8px;padding:4px 0;cursor:pointer;">
+        <input type="checkbox" data-layer-key="${key}" ${isLayerEnabled(key) ? "checked" : ""} />
+        <span>${label}</span>
+      </label>
+    `).join("");
+    const toggleBtn = panel.querySelector("#chart-layer-toggle");
+    toggleBtn.addEventListener("click", () => {
+      menu.style.display = menu.style.display === "none" ? "block" : "none";
+    });
+    menu.querySelectorAll("input[type='checkbox']").forEach((input) => {
+      input.addEventListener("change", (event) => {
+        const key = event.target?.dataset?.layerKey;
+        if(!key) return;
+        window.chartLayerState[key] = Boolean(event.target.checked);
+        if(vwapSD1Upper && typeof vwapSD1Upper.applyOptions === "function"){
+          const visible = isLayerEnabled("vwapBands");
+          [vwapSD1Upper, vwapSD1Lower, vwapSD2Upper, vwapSD2Lower, vwapSD3Upper, vwapSD3Lower]
+            .filter(Boolean)
+            .forEach(series => { try{ series.applyOptions({ visible }); }catch(_e){} });
+        }
+        syncChartData();
+      });
+    });
+  }catch(_){ }
+}
+
+async function loadTradeMarkers(){
+  try{
+    const history = await fetchJSON("/api/btc/signal/history", { ttlMs: 7000, timeoutMs: 9000 });
+    const trades = Array.isArray(history) ? history : Array.isArray(history?.signals) ? history.signals : [];
+    const tradeMarkers = [];
+    for(const trade of trades){
+      const direction = historyDirection(trade);
+      const confidence = Number(trade?.confidence ?? 0);
+      const confLabel = Number.isFinite(confidence) ? Math.round(confidence) : 0;
+      const entryTimeSec = parseTimeToSec(trade?.entry_time || trade?.timestamp || trade?.time || trade?.as_of_utc);
+      const exitTimeSec = parseTimeToSec(trade?.exit_time || trade?.closed_at || trade?.updated_at);
+      const pnlPct = Number(trade?.pnl_pct);
+      const entryPrice = Number(trade?.entry_price);
+      const exitPrice = Number(trade?.exit_price);
+      const status = historyStatus(trade);
+      const duration = trade?.duration_seconds != null ? fmtDuration(trade.duration_seconds) : "—";
+      const baseTooltip = `${direction} | Entry: ${Number.isFinite(entryPrice) ? fmtNum(entryPrice, 2) : "—"} | Exit: ${Number.isFinite(exitPrice) ? fmtNum(exitPrice, 2) : "—"} | PnL: ${Number.isFinite(pnlPct) ? fmtSignedPct(pnlPct, 2) : "—"} | Dur: ${duration}`;
+      if(entryTimeSec && Number.isFinite(entryPrice)){
+        tradeMarkers.push({
+          time: entryTimeSec,
+          position: direction === "SHORT" ? "aboveBar" : "belowBar",
+          color: direction === "SHORT" ? "#ff1744" : "#00c853",
+          shape: direction === "SHORT" ? "arrowDown" : "arrowUp",
+          text: `${direction === "SHORT" ? "S" : "L"} ${confLabel}%`,
+          signal: `${direction} ENTRY`,
+          confidence,
+          entry_price: entryPrice,
+          tooltip: `ENTRY | ${baseTooltip}`,
+        });
+      }
+      if(exitTimeSec && ["CLOSED", "TP1", "TP2", "TP3", "SL", "TIMEOUT"].includes(status)){
+        const exitColor = !Number.isFinite(pnlPct) ? "#94a3b8" : pnlPct >= 0 ? "#00c853" : "#ff1744";
+        tradeMarkers.push({
+          time: exitTimeSec,
+          position: Number.isFinite(pnlPct) && pnlPct >= 0 ? "belowBar" : "aboveBar",
+          color: exitColor,
+          shape: "circle",
+          text: `✕ ${Number.isFinite(pnlPct) ? fmtSignedPct(pnlPct, 2) : status}`,
+          signal: "EXIT",
+          pnl_pct: pnlPct,
+          tooltip: `EXIT | ${baseTooltip}`,
+        });
+        if(Number.isFinite(pnlPct)){
+          tradeMarkers.push({
+            time: exitTimeSec,
+            position: pnlPct >= 0 ? "belowBar" : "aboveBar",
+            color: exitColor,
+            shape: "circle",
+            size: 0.3,
+            text: fmtSignedPct(pnlPct, 2),
+            signal: "TRADE PNL",
+            pnl_pct: pnlPct,
+            tooltip: baseTooltip,
+          });
+        }
+      }
+    }
+    window.tradeMarkersRaw = tradeMarkers;
+    const candles = buildChartCandles();
+    detectAndApplyAllMarkers(candles);
+  }catch(_){ }
+}
+
+function detectAndApplyAllMarkers(candles){
+  try{
+    const structure = isLayerEnabled("structure") ? detectMarketStructure(candles) : [];
+    const sweeps = isLayerEnabled("structure") ? detectLiquiditySweeps(candles) : [];
+    window.structureMarkersRaw = structure;
+    window.sweepMarkersRaw = sweeps;
+    const sessionMarkers = buildSessionMarkers();
+    const allMarkers = [
+      ...markersRaw,
+      ...sessionMarkers,
+      ...(isLayerEnabled("trades") ? (window.tradeMarkersRaw || []) : []),
+      ...structure,
+      ...sweeps,
+      ...(liveSignalMarker ? [liveSignalMarker] : []),
+    ].sort((a, b) => Number(a.time) - Number(b.time));
+    if(candleSeries) candleSeries.setMarkers(allMarkers);
+    rebuildMarkerMapFromAll(allMarkers);
+    return allMarkers;
+  }catch(_){
+    return [];
+  }
+}
+
 function computeBB(candles, period=20, mult=2){
   const result = { upper: [], mid: [], lower: [] };
   for(let i=0; i<candles.length; i++){
@@ -4616,6 +5625,15 @@ function computeBB(candles, period=20, mult=2){
 }
 
 function volumeBarColor(c, index, total){
+  const volume = Number(c?.volume || 0);
+  const takerBuy = Number(c?.taker_buy_base);
+  if(volume > 0 && Number.isFinite(takerBuy)){
+    const buyRatio = takerBuy / volume;
+    if(buyRatio > 0.6) return 'rgba(0,200,83,0.8)';
+    if(buyRatio > 0.5) return 'rgba(0,200,83,0.4)';
+    if(buyRatio < 0.4) return 'rgba(255,23,68,0.8)';
+    if(buyRatio < 0.5) return 'rgba(255,23,68,0.4)';
+  }
   const useObi =
     latestOBI != null &&
     Number.isFinite(latestOBI) &&
@@ -4637,17 +5655,33 @@ function syncChartData(fit=false){
     low:Number(p.low),
     close:Number(p.close),
     volume:Number(p.volume || 0),
+    taker_buy_base:Number(p.taker_buy_base || 0),
   }));
   candleSeries.setData(candles);
 
   if(candles.length >= 20){
     if(vwapSeries) vwapSeries.setData(computeVWAP(candles));
+    if(vwapSD1Upper && vwapSD1Lower && vwapSD2Upper && vwapSD2Lower && vwapSD3Upper && vwapSD3Lower){
+      const vbands = computeVWAPBands(candles);
+      vwapSD1Upper.setData(isLayerEnabled("vwapBands") ? vbands.sd1up : []);
+      vwapSD1Lower.setData(isLayerEnabled("vwapBands") ? vbands.sd1dn : []);
+      vwapSD2Upper.setData(isLayerEnabled("vwapBands") ? vbands.sd2up : []);
+      vwapSD2Lower.setData(isLayerEnabled("vwapBands") ? vbands.sd2dn : []);
+      vwapSD3Upper.setData(isLayerEnabled("vwapBands") ? vbands.sd3up : []);
+      vwapSD3Lower.setData(isLayerEnabled("vwapBands") ? vbands.sd3dn : []);
+    }
     const bb = computeBB(candles);
     if(bbUpperSeries) bbUpperSeries.setData(bb.upper);
     if(bbMidSeries) bbMidSeries.setData(bb.mid);
     if(bbLowerSeries) bbLowerSeries.setData(bb.lower);
   }else{
     if(vwapSeries) vwapSeries.setData([]);
+    if(vwapSD1Upper) vwapSD1Upper.setData([]);
+    if(vwapSD1Lower) vwapSD1Lower.setData([]);
+    if(vwapSD2Upper) vwapSD2Upper.setData([]);
+    if(vwapSD2Lower) vwapSD2Lower.setData([]);
+    if(vwapSD3Upper) vwapSD3Upper.setData([]);
+    if(vwapSD3Lower) vwapSD3Lower.setData([]);
     if(bbUpperSeries) bbUpperSeries.setData([]);
     if(bbMidSeries) bbMidSeries.setData([]);
     if(bbLowerSeries) bbLowerSeries.setData([]);
@@ -4668,6 +5702,17 @@ function syncChartData(fit=false){
     ema21Series.setData([]);
     ema50Series.setData([]);
   }
+
+  if(cvdSeries && candles.length > 0) {
+    cvdSeries.setData(computeCVD(candles));
+  }
+
+  drawVolumeProfile(candles);
+  drawFVGs(candles);
+  drawKeyLevels(candles);
+  drawOrderBlocks(candles);
+  drawSessionRanges(candles);
+  detectAndApplyAllMarkers(candles);
 
   if(fit) chart.timeScale().fitContent();
 }
@@ -4740,6 +5785,54 @@ function setSignalLines(data){
       color: '#86efac', lineWidth: 1, lineStyle: 1, title: 'TP3 (25%)',
     }));
   }
+  const entry = Number(data.entry_price);
+  const stop = Number(data.stop_loss);
+  const tp1 = Number(data.tp1);
+  if(Number.isFinite(entry) && Number.isFinite(tp1)){
+    window._sigLines.push(mk(entry, {
+      color: sig === 'LONG' ? 'rgba(0,200,83,0.35)' : 'rgba(255,23,68,0.35)',
+      lineWidth: 1,
+      lineStyle: 1,
+      title: sig === 'LONG' ? '⟶ LONG ZONE' : '⟶ SHORT ZONE',
+    }));
+    window._sigLines.push(mk(tp1, {
+      color: sig === 'LONG' ? 'rgba(0,200,83,0.28)' : 'rgba(255,23,68,0.28)',
+      lineWidth: 1,
+      lineStyle: 2,
+      title: sig === 'LONG' ? 'Reward Zone' : 'Reward Zone',
+    }));
+  }
+  if(Number.isFinite(entry) && Number.isFinite(stop)){
+    window._sigLines.push(mk(stop, {
+      color: 'rgba(239,68,68,0.35)',
+      lineWidth: 1,
+      lineStyle: 2,
+      title: 'Risk Zone',
+    }));
+  }
+  livePositionOverlayToken += 1;
+  fetchLivePositionOverlay(livePositionOverlayToken);
+}
+
+async function fetchLivePositionOverlay(requestToken){
+  try{
+    if(!candleSeries || !window._sigLines) return;
+    const state = await fetchJSON('/api/paper-trading/state', { ttlMs: 5000, timeoutMs: 7000 });
+    if(requestToken !== livePositionOverlayToken) return;
+    const position = state?.open_position || state?.position || state?.data?.open_position || null;
+    if(!position) return;
+    const livePrice = Number(position.current_price ?? window.lastBtcPrice ?? lastPrice);
+    const livePnl = Number(position.pnl_pct ?? position.unrealized_pnl_pct);
+    if(!Number.isFinite(livePrice)) return;
+    window._sigLines.push(candleSeries.createPriceLine({
+      price: livePrice,
+      color: Number.isFinite(livePnl) && livePnl >= 0 ? 'rgba(0,200,83,0.85)' : 'rgba(255,23,68,0.85)',
+      lineWidth: 1,
+      lineStyle: 0,
+      axisLabelVisible: true,
+      title: `Live PnL ${Number.isFinite(livePnl) ? fmtSignedPct(livePnl, 2) : '--'}`,
+    }));
+  }catch(_){ }
 }
 
 function clearSignalLines(){
@@ -4972,6 +6065,13 @@ function renderConfHeatbar(){
 }
 
 function applyMarkers(){
+  try{
+    const candles = buildChartCandles();
+    if(candles.length){
+      detectAndApplyAllMarkers(candles);
+      return;
+    }
+  }catch(_){ }
   if(!candleSeries || typeof candleSeries.setMarkers!=="function") return;
   const sessionMarkers = buildSessionMarkers();
   const base = [...markersRaw, ...sessionMarkers];
@@ -5046,6 +6146,7 @@ async function loadCandles(noCache = false){
     low:Number(d.low),
     close:Number(d.close),
     volume:Number(d.volume||0),
+    taker_buy_base:Number(d.taker_buy_base||0),
   }));
   if(!data.length) throw new Error("No candle data");
   points=data;
@@ -5137,6 +6238,48 @@ function extractObiFromSignal(s){
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
 }
+
+// [ADDITIVE] Mutual exclusion guard — verdict vs monitoring banner
+function guardTradeActiveDisplay(){
+  try {
+    const verdictEl = document.getElementById("trade-verdict-section")
+      || document.querySelector('[data-section="verdict"]')
+      || document.getElementById("sqs-panel");
+    const monitorBanner = document.querySelector(".trade-active-banner, [data-state=\"monitoring\"]")
+      || document.getElementById("active-trade-banner");
+    if(!verdictEl || !monitorBanner) return;
+    const isMonitoring = monitorBanner.style.display !== "none"
+      && !monitorBanner.classList.contains("hidden");
+    if(isMonitoring){
+      verdictEl.style.opacity = "0.4";
+      verdictEl.title = "Position open — verdict paused";
+      if(!verdictEl.querySelector(".advisory-note")){
+        const note = document.createElement("p");
+        note.className = "advisory-note text-xs text-amber-400 mt-1";
+        note.textContent = "\u26a0 Position open — verdict advisory only";
+        verdictEl.appendChild(note);
+      }
+    }else{
+      verdictEl.style.opacity = "1";
+      verdictEl.title = "";
+      const note = verdictEl.querySelector(".advisory-note");
+      if(note) note.remove();
+    }
+  }catch(_e){ /* silent — UI only */ }
+}
+
+// [ADDITIVE] Hide duplicate "Today's Performance" section
+// Two divs with id="perf-scoreboard" exist — hide the second one
+(function hideDuplicatePerfScoreboard() {
+  try {
+    const all = document.querySelectorAll('#perf-scoreboard');
+    if (all.length > 1) {
+      for (let i = 1; i < all.length; i++) {
+        all[i].style.display = 'none';
+      }
+    }
+  } catch (_e) { /* silent — UI only */ }
+})();
 
 function applySignalPayload(s, source){
   lastSignalPayload=s;
@@ -5332,6 +6475,7 @@ function applySignalPayload(s, source){
   updatePipelineTrace(s);
   updateConstraintFlags(s);
   updateOnChainSqsPanel(s);
+  try{ guardTradeActiveDisplay(); }catch(_e){}
   // Funding rate display
   const fr = s.funding_rate_pct || 0;
   const frEl = document.getElementById('funding-rate');
@@ -5339,6 +6483,21 @@ function applySignalPayload(s, source){
       frEl.textContent = (fr >= 0 ? '+' : '') + fr.toFixed(4) + '%';
       frEl.style.color = fr > 0.03 ? '#ff1744' : fr < -0.03 ? '#00c853' : '#8b949e';
   }
+  try{
+    if(fundingRateSeries){
+      const currentTimeSec = points.length ? Number(points[points.length - 1].time) : Math.floor(Date.now() / 1000);
+      const fundingRate = Number(s.funding_rate ?? s.funding_rate_pct ?? 0);
+      if(Number.isFinite(fundingRate) && Number.isFinite(currentTimeSec)){
+        fundingData.push({
+          time: currentTimeSec,
+          value: fundingRate * 10000,
+          color: fundingRate >= 0 ? 'rgba(255,23,68,0.5)' : 'rgba(0,200,83,0.5)',
+        });
+        fundingData = fundingData.slice(-200);
+        fundingRateSeries.setData(fundingData);
+      }
+    }
+  }catch(_){ }
   const fsEl = document.getElementById('funding-sentiment');
   if (fsEl) {
       fsEl.textContent = s.funding_sentiment || '—';
@@ -5401,11 +6560,20 @@ async function loadSignal(){
   try{
     hasOpenTrade = false;
     openTradeSignal = "LONG";
-    const [s, histJson, intelJson] = await Promise.all([
+    const [signalRes, historyRes, intelRes] = await Promise.allSettled([
       fetchJSON(`/api/btc/signal?interval=${encodeURIComponent(activeTF)}`, { ttlMs: 5000, timeoutMs: 60000 }),
       fetchJSON('/api/btc/signal/history?limit=20', { ttlMs: 7000, timeoutMs: 8000 }),
       fetchJSON(`/api/btc/decision-intelligence?interval=${encodeURIComponent(activeTF)}`, { ttlMs: 9000, timeoutMs: 60000 }),
     ]);
+
+    const s = signalRes.status === "fulfilled" ? signalRes.value : null;
+    const histJson = historyRes.status === "fulfilled" ? historyRes.value : null;
+    const intelFetchErr = intelRes.status === "rejected"
+      ? (intelRes.reason?.message || String(intelRes.reason || "fetch_failed"))
+      : "";
+    const intelJson = intelRes.status === "fulfilled"
+      ? intelRes.value
+      : { error: intelFetchErr || "fetch_failed" };
     if(histJson){
       const signals = Array.isArray(histJson?.signals) ? histJson.signals : [];
       const open = signals.find(x => String(x?.status || "").toUpperCase() === "OPEN");
@@ -5794,15 +6962,27 @@ async function switchTimeframe(tf){
   ema21Series.setData([]);
   ema50Series.setData([]);
   if(vwapSeries) vwapSeries.setData([]);
+  if(vwapSD1Upper) vwapSD1Upper.setData([]);
+  if(vwapSD1Lower) vwapSD1Lower.setData([]);
+  if(vwapSD2Upper) vwapSD2Upper.setData([]);
+  if(vwapSD2Lower) vwapSD2Lower.setData([]);
+  if(vwapSD3Upper) vwapSD3Upper.setData([]);
+  if(vwapSD3Lower) vwapSD3Lower.setData([]);
   if(bbUpperSeries) bbUpperSeries.setData([]);
   if(bbMidSeries) bbMidSeries.setData([]);
   if(bbLowerSeries) bbLowerSeries.setData([]);
   if(hmmTrendSeries) hmmTrendSeries.setData([]);
+  if(cvdSeries) cvdSeries.setData([]);
+  if(fundingRateSeries) fundingRateSeries.setData([]);
   hmmTrendData = [];
   if(candleSeries){
     liqLines.forEach(line => { try{ candleSeries.removePriceLine(line); } catch(_){} });
   }
   liqLines = [];
+  clearOverlayLines("_fvgLines");
+  clearOverlayLines("_keyLevelLines");
+  clearOverlayLines("_obLines");
+  clearOverlayLines("_sessionLines");
   markersRaw = [];
   markersMap.clear();
   liveSignalMarker = null;
@@ -5812,6 +6992,8 @@ async function switchTimeframe(tf){
     await loadCandles(true);   // true = force fresh fetch, skip cache
     if(myId !== _tfSwitchId) return;   // ← stale: user already switched again
     await loadSignalMarkers();
+    if(myId !== _tfSwitchId) return;
+    await loadTradeMarkers();
     if(myId !== _tfSwitchId) return;
     await loadSignal();
     if(myId !== _tfSwitchId) return;
@@ -5835,15 +7017,27 @@ async function switchRange(range){
   ema21Series.setData([]);
   ema50Series.setData([]);
   if(vwapSeries) vwapSeries.setData([]);
+  if(vwapSD1Upper) vwapSD1Upper.setData([]);
+  if(vwapSD1Lower) vwapSD1Lower.setData([]);
+  if(vwapSD2Upper) vwapSD2Upper.setData([]);
+  if(vwapSD2Lower) vwapSD2Lower.setData([]);
+  if(vwapSD3Upper) vwapSD3Upper.setData([]);
+  if(vwapSD3Lower) vwapSD3Lower.setData([]);
   if(bbUpperSeries) bbUpperSeries.setData([]);
   if(bbMidSeries) bbMidSeries.setData([]);
   if(bbLowerSeries) bbLowerSeries.setData([]);
   if(hmmTrendSeries) hmmTrendSeries.setData([]);
+  if(cvdSeries) cvdSeries.setData([]);
+  if(fundingRateSeries) fundingRateSeries.setData([]);
   hmmTrendData = [];
   if(candleSeries){
     liqLines.forEach(line => { try{ candleSeries.removePriceLine(line); } catch(_){} });
   }
   liqLines = [];
+  clearOverlayLines("_fvgLines");
+  clearOverlayLines("_keyLevelLines");
+  clearOverlayLines("_obLines");
+  clearOverlayLines("_sessionLines");
   markersRaw = [];
   markersMap.clear();
   liveSignalMarker = null;
@@ -5853,6 +7047,8 @@ async function switchRange(range){
     await loadCandles(true);
     if(myId !== _tfSwitchId) return;
     await loadSignalMarkers();
+    if(myId !== _tfSwitchId) return;
+    await loadTradeMarkers();
     if(myId !== _tfSwitchId) return;
     await fetchLiquidityZones();
     chart.timeScale().fitContent();

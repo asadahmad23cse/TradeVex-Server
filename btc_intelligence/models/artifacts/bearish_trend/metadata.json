@@ -1,0 +1,22 @@
+{
+  "version": "ml_bearish_trend_v2_1h",
+  "regime": "bearish_trend",
+  "timeframe": "1h",
+  "lightgbm": {
+    "rows": 997,
+    "walk_forward_auc_lgbm": 0.4241239784984546,
+    "trained": true,
+    "regime": "bearish_trend"
+  },
+  "xgboost": {
+    "rows": 997,
+    "walk_forward_auc_xgb": 0.419166532459617,
+    "trained": true,
+    "regime": "bearish_trend"
+  },
+  "lstm": {
+    "trained": false,
+    "skipped": true
+  },
+  "trained_at": "2026-04-09T05:26:36.675497+00:00"
+}

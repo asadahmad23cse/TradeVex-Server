@@ -1,0 +1,22 @@
+{
+  "version": "ml_bullish_trend_v2_1h",
+  "regime": "bullish_trend",
+  "timeframe": "1h",
+  "lightgbm": {
+    "rows": 703,
+    "walk_forward_auc_lgbm": 0.4943554302740839,
+    "trained": true,
+    "regime": "bullish_trend"
+  },
+  "xgboost": {
+    "rows": 703,
+    "walk_forward_auc_xgb": 0.49700774980773427,
+    "trained": true,
+    "regime": "bullish_trend"
+  },
+  "lstm": {
+    "trained": false,
+    "skipped": true
+  },
+  "trained_at": "2026-04-09T05:26:22.890695+00:00"
+}
