@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls \"C:\\\\Users\\\\ASAD AHMAD\\\\OneDrive\\\\Desktop\\\\Trading\\\\src\\\\dashboard\"\" 2>/dev/null || dir \"C:UsersASAD AHMADOneDriveDesktopTradingsrcdashboard \")",
+      "Bash(netstat -ano)",
+      "Bash(findstr \"LISTENING\")",
+      "Bash(findstr \":8\\\\|:9\")",
+      "Bash(curl -s http://127.0.0.1:9000/health)",
+      "Bash(curl -s --max-time 3 http://127.0.0.1:9000/health)",
+      "Bash(sqlite3 \"C:\\\\Users\\\\ASAD AHMAD\\\\OneDrive\\\\Desktop\\\\Trading\\\\data\\\\signals.db\" \".schema signals\")",
+      "Bash(python3 -c ':*)"
+    ]
+  }
+}

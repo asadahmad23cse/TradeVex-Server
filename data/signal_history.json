@@ -20902,5 +20902,4305 @@
     "pnl_pct": null,
     "closed_time": 1775895009.3112626,
     "open_timestamp": 1775895009.3112626
+  },
+  {
+    "id": 210,
+    "time": "2026-04-11T20:22:57.188970+00:00",
+    "signal": "SHORT",
+    "confidence": 5.87,
+    "alpha_score": 68,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 5.9% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0083,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.289e-05,
+        "funding_rate_pct": -0.0083,
+        "mark_price": 73383.89074638,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98481.797,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.051,
+        "price_move_pct": -0.051,
+        "volume_z": -0.377,
+        "oi_delta_pct_5m": 0.043,
+        "wick_ratio": 0.492,
+        "funding_rate_z": -2.275,
+        "oi_delta_pct_1h": -0.023,
+        "oi_delta_pct_4h": 0.961,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.359,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.14,
+      "price_change_24h": 0.37,
+      "atr_pct": 0.126
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775938977.2094946,
+    "open_timestamp": 1775938977.2094946
+  },
+  {
+    "id": 211,
+    "time": "2026-04-11T20:29:04.170852+00:00",
+    "signal": "SHORT",
+    "confidence": 15.47,
+    "alpha_score": 36,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 15.5% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0083,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.265e-05,
+        "funding_rate_pct": -0.0083,
+        "mark_price": 73386.04453523,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98458.962,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.532,
+        "price_move_pct": 0.014,
+        "volume_z": -0.344,
+        "oi_delta_pct_5m": -0.018,
+        "wick_ratio": 4.814,
+        "funding_rate_z": -2.269,
+        "oi_delta_pct_1h": -0.016,
+        "oi_delta_pct_4h": 0.924,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.357,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.26,
+      "price_change_24h": 0.24,
+      "atr_pct": 0.114
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939344.2158566,
+    "open_timestamp": 1775939344.2158566
+  },
+  {
+    "id": 212,
+    "time": "2026-04-11T20:29:05.671604+00:00",
+    "signal": "SHORT",
+    "confidence": 15.47,
+    "alpha_score": 36,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 15.5% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0083,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.288e-05,
+        "funding_rate_pct": -0.0083,
+        "mark_price": 73385.84302899,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98458.756,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.537,
+        "price_move_pct": 0.019,
+        "volume_z": -0.343,
+        "oi_delta_pct_5m": -0.018,
+        "wick_ratio": 3.266,
+        "funding_rate_z": -2.275,
+        "oi_delta_pct_1h": -0.017,
+        "oi_delta_pct_4h": 0.924,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.361,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.26,
+      "price_change_24h": 0.24,
+      "atr_pct": 0.114
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939345.6969085,
+    "open_timestamp": 1775939345.6969085
+  },
+  {
+    "id": 213,
+    "time": "2026-04-11T20:29:12.870095+00:00",
+    "signal": "SHORT",
+    "confidence": 14.99,
+    "alpha_score": 37,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 15.0% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0083,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.288e-05,
+        "funding_rate_pct": -0.0083,
+        "mark_price": 73389.3,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98458.247,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.537,
+        "price_move_pct": 0.019,
+        "volume_z": -0.336,
+        "oi_delta_pct_5m": -0.018,
+        "wick_ratio": 3.297,
+        "funding_rate_z": -2.275,
+        "oi_delta_pct_1h": -0.017,
+        "oi_delta_pct_4h": 0.924,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.361,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.25,
+      "price_change_24h": 0.25,
+      "atr_pct": 0.114
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939352.917134,
+    "open_timestamp": 1775939352.917134
+  },
+  {
+    "id": 214,
+    "time": "2026-04-11T20:29:22.832117+00:00",
+    "signal": "SHORT",
+    "confidence": 14.99,
+    "alpha_score": 37,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 15.0% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0083,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.288e-05,
+        "funding_rate_pct": -0.0083,
+        "mark_price": 73389.15864493,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98456.903,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.537,
+        "price_move_pct": 0.019,
+        "volume_z": -0.335,
+        "oi_delta_pct_5m": -0.018,
+        "wick_ratio": 3.297,
+        "funding_rate_z": -2.275,
+        "oi_delta_pct_1h": -0.019,
+        "oi_delta_pct_4h": 0.922,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.36,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.25,
+      "price_change_24h": 0.25,
+      "atr_pct": 0.114
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939362.85201,
+    "open_timestamp": 1775939362.85201
+  },
+  {
+    "id": 215,
+    "time": "2026-04-11T20:29:33.632941+00:00",
+    "signal": "SHORT",
+    "confidence": 15.04,
+    "alpha_score": 37,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 15.0% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0083,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.288e-05,
+        "funding_rate_pct": -0.0083,
+        "mark_price": 73388.43632684,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98457.431,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.532,
+        "price_move_pct": 0.014,
+        "volume_z": -0.322,
+        "oi_delta_pct_5m": -0.018,
+        "wick_ratio": 4.757,
+        "funding_rate_z": -2.275,
+        "oi_delta_pct_1h": -0.018,
+        "oi_delta_pct_4h": 0.923,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.36,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.25,
+      "price_change_24h": 0.25,
+      "atr_pct": 0.114
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939373.6593745,
+    "open_timestamp": 1775939373.6593745
+  },
+  {
+    "id": 216,
+    "time": "2026-04-11T20:29:53.981090+00:00",
+    "signal": "SHORT",
+    "confidence": 15.89,
+    "alpha_score": 35,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 15.9% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0083,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.288e-05,
+        "funding_rate_pct": -0.0083,
+        "mark_price": 73381.78037481,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98459.511,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.524,
+        "price_move_pct": 0.006,
+        "volume_z": -0.316,
+        "oi_delta_pct_5m": -0.018,
+        "wick_ratio": 11.891,
+        "funding_rate_z": -2.275,
+        "oi_delta_pct_1h": -0.016,
+        "oi_delta_pct_4h": 0.925,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.361,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.26,
+      "price_change_24h": 0.24,
+      "atr_pct": 0.114
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939394.003673,
+    "open_timestamp": 1775939394.003673
+  },
+  {
+    "id": 217,
+    "time": "2026-04-11T20:30:17.802027+00:00",
+    "signal": "SHORT",
+    "confidence": 15.78,
+    "alpha_score": 35,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 15.8% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0083,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.288e-05,
+        "funding_rate_pct": -0.0083,
+        "mark_price": 73378.7,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98458.722,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.02,
+        "price_move_pct": 0.002,
+        "volume_z": -0.571,
+        "oi_delta_pct_5m": -0.018,
+        "wick_ratio": 0.077,
+        "funding_rate_z": -2.275,
+        "oi_delta_pct_1h": -0.017,
+        "oi_delta_pct_4h": 0.924,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.361,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.26,
+      "price_change_24h": 0.24,
+      "atr_pct": 0.114
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939417.8455324,
+    "open_timestamp": 1775939417.8455324
+  },
+  {
+    "id": 218,
+    "time": "2026-04-11T20:30:25.597351+00:00",
+    "signal": "SHORT",
+    "confidence": 15.78,
+    "alpha_score": 35,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 15.8% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0083,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.288e-05,
+        "funding_rate_pct": -0.0083,
+        "mark_price": 73380.0,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98458.703,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.02,
+        "price_move_pct": 0.002,
+        "volume_z": -0.569,
+        "oi_delta_pct_5m": -0.018,
+        "wick_ratio": 0.077,
+        "funding_rate_z": -2.275,
+        "oi_delta_pct_1h": -0.017,
+        "oi_delta_pct_4h": 0.924,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.361,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.26,
+      "price_change_24h": 0.24,
+      "atr_pct": 0.114
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939425.6201994,
+    "open_timestamp": 1775939425.6201994
+  },
+  {
+    "id": 219,
+    "time": "2026-04-11T20:30:30.015105+00:00",
+    "signal": "SHORT",
+    "confidence": 15.78,
+    "alpha_score": 35,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 15.8% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0083,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.288e-05,
+        "funding_rate_pct": -0.0083,
+        "mark_price": 73380.0,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98458.703,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.037,
+        "price_move_pct": -0.019,
+        "volume_z": -0.563,
+        "oi_delta_pct_5m": -0.018,
+        "wick_ratio": 0.109,
+        "funding_rate_z": -2.275,
+        "oi_delta_pct_1h": -0.017,
+        "oi_delta_pct_4h": 0.924,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.361,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.26,
+      "price_change_24h": 0.24,
+      "atr_pct": 0.114
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939430.0594127,
+    "open_timestamp": 1775939430.0594127
+  },
+  {
+    "id": 220,
+    "time": "2026-04-11T20:30:58.694556+00:00",
+    "signal": "SHORT",
+    "confidence": 5.67,
+    "alpha_score": 69,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 5.7% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0083,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.288e-05,
+        "funding_rate_pct": -0.0083,
+        "mark_price": 73355.37125362,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98450.388,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.092,
+        "price_move_pct": -0.081,
+        "volume_z": -0.454,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.146,
+        "funding_rate_z": -2.275,
+        "oi_delta_pct_1h": -0.025,
+        "oi_delta_pct_4h": 0.916,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.359,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.4,
+      "price_change_24h": 0.23,
+      "atr_pct": 0.11
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939458.7178454,
+    "open_timestamp": 1775939458.7178454
+  },
+  {
+    "id": 221,
+    "time": "2026-04-11T20:31:14.025386+00:00",
+    "signal": "SHORT",
+    "confidence": 5.33,
+    "alpha_score": 71,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 5.3% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0083,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.319e-05,
+        "funding_rate_pct": -0.0083,
+        "mark_price": 73333.1,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98426.634,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.105,
+        "price_move_pct": -0.094,
+        "volume_z": -0.414,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.022,
+        "funding_rate_z": -2.283,
+        "oi_delta_pct_1h": -0.049,
+        "oi_delta_pct_4h": 0.891,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.358,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.43,
+      "price_change_24h": 0.21,
+      "atr_pct": 0.115
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939474.044427,
+    "open_timestamp": 1775939474.044427
+  },
+  {
+    "id": 222,
+    "time": "2026-04-11T20:31:36.069603+00:00",
+    "signal": "SHORT",
+    "confidence": 5.28,
+    "alpha_score": 72,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 5.3% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0083,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.319e-05,
+        "funding_rate_pct": -0.0083,
+        "mark_price": 73305.53727536,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98427.466,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.118,
+        "price_move_pct": -0.107,
+        "volume_z": -0.395,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.02,
+        "funding_rate_z": -2.283,
+        "oi_delta_pct_1h": -0.048,
+        "oi_delta_pct_4h": 0.892,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.358,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.46,
+      "price_change_24h": 0.17,
+      "atr_pct": 0.115
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939496.0979323,
+    "open_timestamp": 1775939496.0979323
+  },
+  {
+    "id": 223,
+    "time": "2026-04-11T20:32:01.975419+00:00",
+    "signal": "SHORT",
+    "confidence": 3.27,
+    "alpha_score": 86,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 3.3% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0084,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.386e-05,
+        "funding_rate_pct": -0.0084,
+        "mark_price": 73294.9,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98410.665,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.126,
+        "price_move_pct": -0.114,
+        "volume_z": -0.273,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.254,
+        "funding_rate_z": -2.301,
+        "oi_delta_pct_1h": 0.089,
+        "oi_delta_pct_4h": 0.868,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.403,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.49,
+      "price_change_24h": 0.14,
+      "atr_pct": 0.118
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939522.0017524,
+    "open_timestamp": 1775939522.0017524
+  },
+  {
+    "id": 224,
+    "time": "2026-04-11T20:32:18.546813+00:00",
+    "signal": "SHORT",
+    "confidence": 2.97,
+    "alpha_score": 89,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 3.0% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0084,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.386e-05,
+        "funding_rate_pct": -0.0084,
+        "mark_price": 73276.47697151,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98411.558,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.157,
+        "price_move_pct": -0.146,
+        "volume_z": -0.243,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.026,
+        "funding_rate_z": -2.301,
+        "oi_delta_pct_1h": 0.09,
+        "oi_delta_pct_4h": 0.869,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.403,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.51,
+      "price_change_24h": 0.12,
+      "atr_pct": 0.119
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939538.6106124,
+    "open_timestamp": 1775939538.6106124
+  },
+  {
+    "id": 225,
+    "time": "2026-04-11T20:32:26.383931+00:00",
+    "signal": "SHORT",
+    "confidence": 36.4,
+    "alpha_score": 16,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "BULLISH TREND",
+    "reason": "regime_conflict: SHORT blocked in BULLISH regime",
+    "blocked_by": "regime_gate",
+    "funding_rate": -0.0084,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.386e-05,
+        "funding_rate_pct": -0.0084,
+        "mark_price": 73265.21592754,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98410.797,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.173,
+        "price_move_pct": -0.162,
+        "volume_z": -0.219,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.063,
+        "funding_rate_z": -2.301,
+        "oi_delta_pct_1h": 0.089,
+        "oi_delta_pct_4h": 0.869,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.403,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "15m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.53,
+      "price_change_24h": 0.08,
+      "atr_pct": 0.243
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939546.4107194,
+    "open_timestamp": 1775939546.4107194
+  },
+  {
+    "id": 226,
+    "time": "2026-04-11T20:32:29.477872+00:00",
+    "signal": "SHORT",
+    "confidence": 2.66,
+    "alpha_score": 92,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 2.7% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0084,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.386e-05,
+        "funding_rate_pct": -0.0084,
+        "mark_price": 73259.47536957,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98406.276,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.18,
+        "price_move_pct": -0.169,
+        "volume_z": -0.203,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.02,
+        "funding_rate_z": -2.301,
+        "oi_delta_pct_1h": 0.085,
+        "oi_delta_pct_4h": 0.864,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.402,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.53,
+      "price_change_24h": 0.1,
+      "atr_pct": 0.12
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939549.521049,
+    "open_timestamp": 1775939549.521049
+  },
+  {
+    "id": 227,
+    "time": "2026-04-11T20:32:39.472554+00:00",
+    "signal": "SHORT",
+    "confidence": 2.66,
+    "alpha_score": 92,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 2.7% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0084,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.386e-05,
+        "funding_rate_pct": -0.0084,
+        "mark_price": 73259.9,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98402.272,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.173,
+        "price_move_pct": -0.162,
+        "volume_z": -0.185,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.063,
+        "funding_rate_z": -2.301,
+        "oi_delta_pct_1h": 0.081,
+        "oi_delta_pct_4h": 0.86,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.401,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.53,
+      "price_change_24h": 0.1,
+      "atr_pct": 0.12
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939559.5019891,
+    "open_timestamp": 1775939559.5019891
+  },
+  {
+    "id": 228,
+    "time": "2026-04-11T20:32:46.337303+00:00",
+    "signal": "SHORT",
+    "confidence": 36.39,
+    "alpha_score": 16,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "BULLISH TREND",
+    "reason": "regime_conflict: SHORT blocked in BULLISH regime",
+    "blocked_by": "regime_gate",
+    "funding_rate": -0.0084,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.386e-05,
+        "funding_rate_pct": -0.0084,
+        "mark_price": 73256.92385507,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98401.056,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.178,
+        "price_move_pct": -0.167,
+        "volume_z": -0.178,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.032,
+        "funding_rate_z": -2.301,
+        "oi_delta_pct_1h": 0.079,
+        "oi_delta_pct_4h": 0.859,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.4,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "15m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.53,
+      "price_change_24h": 0.08,
+      "atr_pct": 0.243
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939566.356638,
+    "open_timestamp": 1775939566.356638
+  },
+  {
+    "id": 229,
+    "time": "2026-04-11T20:32:53.380026+00:00",
+    "signal": "SHORT",
+    "confidence": 2.6,
+    "alpha_score": 93,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 2.6% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0084,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.386e-05,
+        "funding_rate_pct": -0.0084,
+        "mark_price": 73247.0,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98390.928,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.191,
+        "price_move_pct": -0.18,
+        "volume_z": -0.153,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.011,
+        "funding_rate_z": -2.301,
+        "oi_delta_pct_1h": 0.069,
+        "oi_delta_pct_4h": 0.848,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.398,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.55,
+      "price_change_24h": 0.08,
+      "atr_pct": 0.122
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939573.4193134,
+    "open_timestamp": 1775939573.4193134
+  },
+  {
+    "id": 230,
+    "time": "2026-04-11T20:33:22.420624+00:00",
+    "signal": "SHORT",
+    "confidence": 2.68,
+    "alpha_score": 92,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 2.7% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0084,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.44e-05,
+        "funding_rate_pct": -0.0084,
+        "mark_price": 73257.6,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98352.788,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.197,
+        "price_move_pct": -0.165,
+        "volume_z": 0.021,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.474,
+        "funding_rate_z": -2.315,
+        "oi_delta_pct_1h": 0.03,
+        "oi_delta_pct_4h": 0.809,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.397,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.54,
+      "price_change_24h": 0.09,
+      "atr_pct": 0.125
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939602.4551954,
+    "open_timestamp": 1775939602.4551954
+  },
+  {
+    "id": 231,
+    "time": "2026-04-11T20:33:23.545574+00:00",
+    "signal": "SHORT",
+    "confidence": 35.47,
+    "alpha_score": 17,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "BULLISH TREND",
+    "reason": "regime_conflict: SHORT blocked in BULLISH regime",
+    "blocked_by": "regime_gate",
+    "funding_rate": -0.0084,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.44e-05,
+        "funding_rate_pct": -0.0084,
+        "mark_price": 73257.6,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98352.788,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.198,
+        "price_move_pct": -0.165,
+        "volume_z": 0.021,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.469,
+        "funding_rate_z": -2.315,
+        "oi_delta_pct_1h": 0.03,
+        "oi_delta_pct_4h": 0.809,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.397,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "15m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.54,
+      "price_change_24h": 0.08,
+      "atr_pct": 0.247
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939603.591889,
+    "open_timestamp": 1775939603.591889
+  },
+  {
+    "id": 232,
+    "time": "2026-04-11T20:34:03.788855+00:00",
+    "signal": "SHORT",
+    "confidence": 2.68,
+    "alpha_score": 92,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 2.7% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0084,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.44e-05,
+        "funding_rate_pct": -0.0084,
+        "mark_price": 73270.11116192,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98347.499,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.221,
+        "price_move_pct": -0.155,
+        "volume_z": 0.055,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.566,
+        "funding_rate_z": -2.315,
+        "oi_delta_pct_1h": 0.025,
+        "oi_delta_pct_4h": 0.804,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.395,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.53,
+      "price_change_24h": 0.1,
+      "atr_pct": 0.125
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939643.8158164,
+    "open_timestamp": 1775939643.8158164
+  },
+  {
+    "id": 233,
+    "time": "2026-04-11T20:34:26.459292+00:00",
+    "signal": "SHORT",
+    "confidence": 35.79,
+    "alpha_score": 17,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 35.8% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0084,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.44e-05,
+        "funding_rate_pct": -0.0084,
+        "mark_price": 73234.73675412,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98352.753,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.341,
+        "price_move_pct": -0.236,
+        "volume_z": 0.094,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.03,
+        "funding_rate_z": -2.315,
+        "oi_delta_pct_1h": 0.03,
+        "oi_delta_pct_4h": 0.809,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.397,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "15m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.57,
+      "price_change_24h": 0.05,
+      "atr_pct": 0.247
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939666.4861574,
+    "open_timestamp": 1775939666.4861574
+  },
+  {
+    "id": 234,
+    "time": "2026-04-11T20:34:51.812061+00:00",
+    "signal": "SHORT",
+    "confidence": 2.33,
+    "alpha_score": 96,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 2.3% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0084,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.44e-05,
+        "funding_rate_pct": -0.0084,
+        "mark_price": 73219.5,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98350.788,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.349,
+        "price_move_pct": -0.217,
+        "volume_z": 0.121,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.118,
+        "funding_rate_z": -2.315,
+        "oi_delta_pct_1h": 0.028,
+        "oi_delta_pct_4h": 0.807,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.396,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.59,
+      "price_change_24h": 0.04,
+      "atr_pct": 0.125
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939691.8410258,
+    "open_timestamp": 1775939691.8410258
+  },
+  {
+    "id": 235,
+    "time": "2026-04-11T20:35:22.660101+00:00",
+    "signal": "SHORT",
+    "confidence": 25.21,
+    "alpha_score": 16,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 25.2% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.452e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73185.78862319,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98355.66,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.038,
+        "price_move_pct": -0.027,
+        "volume_z": -0.529,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.005,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.033,
+        "oi_delta_pct_4h": 0.812,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.399,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "15m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.63,
+      "price_change_24h": -0.02,
+      "atr_pct": 0.25
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939722.6920607,
+    "open_timestamp": 1775939722.6920607
+  },
+  {
+    "id": 236,
+    "time": "2026-04-11T20:35:23.885402+00:00",
+    "signal": "SHORT",
+    "confidence": 0.3,
+    "alpha_score": 100,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 0.3% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.452e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73185.78862319,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98355.66,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.044,
+        "price_move_pct": -0.033,
+        "volume_z": -0.518,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.004,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.033,
+        "oi_delta_pct_4h": 0.812,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.399,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.59,
+      "price_change_24h": 0.21,
+      "atr_pct": 0.115
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939723.9252083,
+    "open_timestamp": 1775939723.9252083
+  },
+  {
+    "id": 237,
+    "time": "2026-04-11T20:35:34.203670+00:00",
+    "signal": "SHORT",
+    "confidence": 0.28,
+    "alpha_score": 100,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 0.3% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.452e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73205.9,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98357.443,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.038,
+        "price_move_pct": -0.027,
+        "volume_z": -0.505,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.223,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.035,
+        "oi_delta_pct_4h": 0.814,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.4,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.57,
+      "price_change_24h": 0.23,
+      "atr_pct": 0.115
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939734.2394507,
+    "open_timestamp": 1775939734.2394507
+  },
+  {
+    "id": 238,
+    "time": "2026-04-11T20:35:41.436695+00:00",
+    "signal": "SHORT",
+    "confidence": 0.28,
+    "alpha_score": 100,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 0.3% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.452e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73232.6,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98351.438,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.045,
+        "price_move_pct": 0.034,
+        "volume_z": -0.466,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 1.028,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.029,
+        "oi_delta_pct_4h": 0.808,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.398,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.57,
+      "price_change_24h": 0.23,
+      "atr_pct": 0.115
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939741.4643948,
+    "open_timestamp": 1775939741.4643948
+  },
+  {
+    "id": 239,
+    "time": "2026-04-11T20:35:45.846573+00:00",
+    "signal": "SHORT",
+    "confidence": 33.86,
+    "alpha_score": 19,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "BULLISH TREND",
+    "reason": "regime_conflict: SHORT blocked in BULLISH regime",
+    "blocked_by": "regime_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.452e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73255.4,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98350.139,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.077,
+        "price_move_pct": 0.065,
+        "volume_z": -0.421,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.504,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.028,
+        "oi_delta_pct_4h": 0.806,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.398,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "15m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.54,
+      "price_change_24h": 0.08,
+      "atr_pct": 0.25
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939745.875424,
+    "open_timestamp": 1775939745.875424
+  },
+  {
+    "id": 240,
+    "time": "2026-04-11T20:35:58.285264+00:00",
+    "signal": "SHORT",
+    "confidence": 0.37,
+    "alpha_score": 100,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 0.4% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.452e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73258.2,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98350.833,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.07,
+        "price_move_pct": 0.059,
+        "volume_z": -0.402,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.738,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.028,
+        "oi_delta_pct_4h": 0.807,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.398,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.49,
+      "price_change_24h": 0.3,
+      "atr_pct": 0.119
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939758.313994,
+    "open_timestamp": 1775939758.313994
+  },
+  {
+    "id": 241,
+    "time": "2026-04-11T20:36:04.957218+00:00",
+    "signal": "SHORT",
+    "confidence": 34.03,
+    "alpha_score": 19,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "BULLISH TREND",
+    "reason": "regime_conflict: SHORT blocked in BULLISH regime",
+    "blocked_by": "regime_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.452e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73255.61609445,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98348.514,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.065,
+        "price_move_pct": 0.054,
+        "volume_z": -0.401,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.896,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.026,
+        "oi_delta_pct_4h": 0.805,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.398,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "15m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.55,
+      "price_change_24h": 0.06,
+      "atr_pct": 0.25
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939765.0005293,
+    "open_timestamp": 1775939765.0005293
+  },
+  {
+    "id": 242,
+    "time": "2026-04-11T20:36:07.772702+00:00",
+    "signal": "SHORT",
+    "confidence": 0.37,
+    "alpha_score": 100,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 0.4% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.451e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73260.2,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98350.33,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.083,
+        "price_move_pct": 0.072,
+        "volume_z": -0.396,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.457,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.028,
+        "oi_delta_pct_4h": 0.807,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.398,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.49,
+      "price_change_24h": 0.3,
+      "atr_pct": 0.119
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939767.8167183,
+    "open_timestamp": 1775939767.8167183
+  },
+  {
+    "id": 243,
+    "time": "2026-04-11T20:36:14.381977+00:00",
+    "signal": "SHORT",
+    "confidence": 33.7,
+    "alpha_score": 19,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "BULLISH TREND",
+    "reason": "regime_conflict: SHORT blocked in BULLISH regime",
+    "blocked_by": "regime_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.451e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73263.0,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98350.267,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.087,
+        "price_move_pct": 0.076,
+        "volume_z": -0.394,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.435,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.028,
+        "oi_delta_pct_4h": 0.806,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.398,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "15m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.53,
+      "price_change_24h": 0.08,
+      "atr_pct": 0.25
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939774.4037898,
+    "open_timestamp": 1775939774.4037898
+  },
+  {
+    "id": 244,
+    "time": "2026-04-11T20:36:17.637089+00:00",
+    "signal": "SHORT",
+    "confidence": 0.38,
+    "alpha_score": 100,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 0.4% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.451e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73263.1,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98350.161,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.087,
+        "price_move_pct": 0.076,
+        "volume_z": -0.391,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.434,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.028,
+        "oi_delta_pct_4h": 0.806,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.398,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.48,
+      "price_change_24h": 0.32,
+      "atr_pct": 0.12
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939777.6747687,
+    "open_timestamp": 1775939777.6747687
+  },
+  {
+    "id": 245,
+    "time": "2026-04-11T20:36:27.645687+00:00",
+    "signal": "SHORT",
+    "confidence": 0.37,
+    "alpha_score": 100,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 0.4% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.451e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73259.9,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98347.991,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.083,
+        "price_move_pct": 0.071,
+        "volume_z": -0.384,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.558,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.025,
+        "oi_delta_pct_4h": 0.804,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.397,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.49,
+      "price_change_24h": 0.31,
+      "atr_pct": 0.12
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939787.7542825,
+    "open_timestamp": 1775939787.7542825
+  },
+  {
+    "id": 246,
+    "time": "2026-04-11T20:36:29.160662+00:00",
+    "signal": "SHORT",
+    "confidence": 33.71,
+    "alpha_score": 19,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "BULLISH TREND",
+    "reason": "regime_conflict: SHORT blocked in BULLISH regime",
+    "blocked_by": "regime_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.451e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73260.06380435,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98347.991,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.083,
+        "price_move_pct": 0.071,
+        "volume_z": -0.384,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.558,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.025,
+        "oi_delta_pct_4h": 0.804,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.397,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "15m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.53,
+      "price_change_24h": 0.08,
+      "atr_pct": 0.25
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939789.2010503,
+    "open_timestamp": 1775939789.2010503
+  },
+  {
+    "id": 247,
+    "time": "2026-04-11T20:36:38.495044+00:00",
+    "signal": "SHORT",
+    "confidence": 0.4,
+    "alpha_score": 100,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 0.4% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.451e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73288.2,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98347.097,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.098,
+        "price_move_pct": 0.087,
+        "volume_z": -0.378,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.378,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.024,
+        "oi_delta_pct_4h": 0.803,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.397,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.46,
+      "price_change_24h": 0.34,
+      "atr_pct": 0.121
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939798.5522544,
+    "open_timestamp": 1775939798.5522544
+  },
+  {
+    "id": 248,
+    "time": "2026-04-11T20:36:47.031927+00:00",
+    "signal": "SHORT",
+    "confidence": 32.99,
+    "alpha_score": 20,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "BULLISH TREND",
+    "reason": "regime_conflict: SHORT blocked in BULLISH regime",
+    "blocked_by": "regime_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.451e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73284.04884058,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98336.015,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.115,
+        "price_move_pct": 0.103,
+        "volume_z": -0.341,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.503,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.013,
+        "oi_delta_pct_4h": 0.792,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.394,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "15m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.5,
+      "price_change_24h": 0.12,
+      "atr_pct": 0.25
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939807.080003,
+    "open_timestamp": 1775939807.080003
+  },
+  {
+    "id": 249,
+    "time": "2026-04-11T20:36:48.959851+00:00",
+    "signal": "SHORT",
+    "confidence": 0.39,
+    "alpha_score": 100,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 0.4% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.451e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73283.91693403,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98336.015,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.114,
+        "price_move_pct": 0.103,
+        "volume_z": -0.341,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.505,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.013,
+        "oi_delta_pct_4h": 0.792,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.394,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.45,
+      "price_change_24h": 0.35,
+      "atr_pct": 0.122
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939809.0383275,
+    "open_timestamp": 1775939809.0383275
+  },
+  {
+    "id": 250,
+    "time": "2026-04-11T20:37:00.457375+00:00",
+    "signal": "SHORT",
+    "confidence": 0.42,
+    "alpha_score": 100,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 0.4% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.451e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73299.0,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98328.665,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.134,
+        "price_move_pct": 0.123,
+        "volume_z": -0.297,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.282,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.006,
+        "oi_delta_pct_4h": 0.784,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.392,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.44,
+      "price_change_24h": 0.35,
+      "atr_pct": 0.123
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939820.4885483,
+    "open_timestamp": 1775939820.4885483
+  },
+  {
+    "id": 251,
+    "time": "2026-04-11T20:37:00.864848+00:00",
+    "signal": "SHORT",
+    "confidence": 32.74,
+    "alpha_score": 21,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "BULLISH TREND",
+    "reason": "regime_conflict: SHORT blocked in BULLISH regime",
+    "blocked_by": "regime_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.451e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73299.0,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98326.997,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.14,
+        "price_move_pct": 0.129,
+        "volume_z": -0.294,
+        "oi_delta_pct_5m": -0.011,
+        "wick_ratio": 0.255,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": 0.004,
+        "oi_delta_pct_4h": 0.783,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.392,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "15m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.49,
+      "price_change_24h": 0.13,
+      "atr_pct": 0.25
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939820.9065251,
+    "open_timestamp": 1775939820.9065251
+  },
+  {
+    "id": 252,
+    "time": "2026-04-11T20:37:11.304168+00:00",
+    "signal": "SHORT",
+    "confidence": 0.36,
+    "alpha_score": 100,
+    "entry": null,
+    "stop_loss": null,
+    "active_stop_loss": null,
+    "tp1": null,
+    "tp2": null,
+    "tp3": null,
+    "risk_reward": null,
+    "direction": "short",
+    "type": "BLOCKED",
+    "regime": "RANGE",
+    "reason": "low_confidence_for_regime: 0.4% < 65.0% (RANGE)",
+    "blocked_by": "regime_confidence_gate",
+    "funding_rate": -0.0085,
+    "market_context": {
+      "futures": {
+        "funding_rate": -8.451e-05,
+        "funding_rate_pct": -0.0085,
+        "mark_price": 73319.4,
+        "next_funding_time": 1775952000000,
+        "open_interest_btc": 98317.964,
+        "liquidation_event": false,
+        "liquidation_bias": "NONE",
+        "liquidation_score": 0.248,
+        "price_move_pct": 0.139,
+        "volume_z": -0.267,
+        "oi_delta_pct_5m": -0.109,
+        "wick_ratio": 0.407,
+        "funding_rate_z": -2.318,
+        "oi_delta_pct_1h": -0.005,
+        "oi_delta_pct_4h": 0.773,
+        "funding_sentiment": "OVERLEVERAGED_SHORT",
+        "derivatives_score": 1.39,
+        "data_points": {
+          "funding_samples": 60,
+          "oi_samples": 61
+        }
+      },
+      "etf_flow": {
+        "date": "2026-04-11 00:00:00",
+        "total_usd_m": 0.0,
+        "flow_5d_sum": 0.0,
+        "flow_z": 0.0,
+        "flow_daily_z": 0.0,
+        "flow_cumulative_usd_m": 0.0,
+        "flow_label": "UNAVAILABLE",
+        "source": "fallback",
+        "factor_score": 0.0
+      },
+      "fear_greed_snapshot": {
+        "value": 15,
+        "label": "Extreme Fear",
+        "z_score": 0.243,
+        "source": "alternative_me",
+        "as_of": "1775865600"
+      },
+      "multi_timeframe": {
+        "alignment_ok": true,
+        "biases": {
+          "4h": "NEUTRAL",
+          "1d": "NEUTRAL"
+        },
+        "alignment_score": 1.0,
+        "block_reason": null,
+        "entry_timeframe": "5m"
+      },
+      "halving": {
+        "phase": "late_cycle",
+        "bias": "NEUTRAL",
+        "days_since_halving": 722,
+        "confidence_multiplier": 0.98
+      },
+      "price_change_1h": -0.42,
+      "price_change_24h": 0.38,
+      "atr_pct": 0.125
+    },
+    "trade_management": {
+      "breakeven_after_tp1": true,
+      "trail_after_tp2": true,
+      "alpha_flip_exit": true,
+      "trail_gap": 0.0
+    },
+    "tp1_hit": false,
+    "tp2_hit": false,
+    "tp3_hit": false,
+    "highest_price": null,
+    "lowest_price": null,
+    "milestones": [],
+    "status": "BLOCKED",
+    "result": "BLOCKED",
+    "exit_price": null,
+    "pnl_pct": null,
+    "closed_time": 1775939831.3746414,
+    "open_timestamp": 1775939831.3746414
   }
 ]

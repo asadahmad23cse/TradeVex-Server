@@ -26,3 +26,4 @@ statsmodels
 PyJWT
 shap
 optuna
+redis
