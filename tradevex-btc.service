@@ -1,0 +1,15 @@
+[Unit]
+Description=TradeVex BTC Intelligence
+After=network.target redis.service
+
+[Service]
+User=root
+WorkingDirectory=/root/TradeVex-Server
+ExecStart=/root/TradeVex-Server/venv/bin/python -m uvicorn btc_intelligence.main:app --host 127.0.0.1 --port 9000
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/tradevex-btc.out.log
+StandardError=append:/var/log/tradevex-btc.err.log
+
+[Install]
+WantedBy=multi-user.target
