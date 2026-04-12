@@ -480,8 +480,8 @@ slippage:
   forex_major: 5.0e-05
   forex_minor: 0.0001
 dashboard:
-  host: 127.0.0.1
-  port: 8001
+  host: 0.0.0.0
+  port: 8000
   auth:
     enabled: false
     username: admin
