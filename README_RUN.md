@@ -86,9 +86,9 @@ Then verify:
 
 ## 7) Auth (optional)
 
-If `dashboard.auth.enabled: true`, get token from:
-- `POST /auth/token`
+Two auth modes are supported via `dashboard.auth.provider`:
 
-Use token in:
-- `Authorization: Bearer <token>`
-- or `?token=...` for WebSocket `/ws`
+- `local`: set `enabled: true`, then use `POST /auth/token` and send `Authorization: Bearer <token>`.
+- `supabase`: set `enabled: true`, `provider: supabase`, and configure `SUPABASE_URL` + `SUPABASE_ANON_KEY` (or in config).  
+  Login/Signup UI is auto-injected on dashboard pages and API/`/ws` are protected by Supabase access token.
+  To restrict access to specific users only, set `dashboard.auth.allowed_emails` and/or `DASHBOARD_ALLOWED_EMAILS` (comma-separated).

@@ -313,9 +313,31 @@ class BTCKellyWarmStart:
                     for bucket_id in list(self._bucket_records.keys()):
                         self._recompute_bucket_stats(bucket_id)
                 self._refresh_totals()
-                return
+                if self.total_trades > 0:
+                    logger.info("Kelly warm-start: loaded %d trades from %s", self.total_trades, self._buckets_file)
+                    return
+                # Buckets file exists but is empty — fall through to history
+                logger.info("Kelly warm-start: buckets file empty, trying signal history")
             except Exception as exc:
                 logger.warning("Failed to load Kelly buckets from %s: %s", self._buckets_file, exc)
 
+        # Fallback: rebuild from signal history
         self._load_from_history_impl(self._history_path, verbose=False)
+        if self.total_trades == 0:
+            # Try alternate history paths
+            alt_paths = [
+                Path("data/signal_history.json"),
+                Path("btc_intelligence/logs/adaptive_learning_state.json"),
+            ]
+            for alt in alt_paths:
+                if alt.exists() and alt != self._history_path:
+                    try:
+                        self._load_from_history_impl(alt, verbose=False)
+                        if self.total_trades > 0:
+                            logger.info("Kelly warm-start: loaded %d trades from fallback %s", self.total_trades, alt)
+                            break
+                    except Exception:
+                        continue
+        if self.total_trades == 0:
+            logger.warning("Kelly warm-start: no trade history found — using Bayesian prior (WR=%.0f%%, RR=%.1f)", self.PRIOR_WIN_RATE * 100, self.PRIOR_AVG_RR)
         self.save_buckets()

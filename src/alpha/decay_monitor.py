@@ -22,11 +22,15 @@ Usage:
     # Pass weights into AlphaFactorModel.score() to modulate IC weights.
 """
 
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, date
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+CHECKPOINT_FILE = Path("data/decay_monitor_checkpoint.json")
 
 # Thresholds for declaring factor decay
 DECAY_IC_21D_THRESHOLD = -0.05   # IC_21d must be below this
@@ -57,11 +61,14 @@ class FactorDecayMonitor:
         decay_ic_21d: float = DECAY_IC_21D_THRESHOLD,
         decay_ic_63d: float = DECAY_IC_63D_THRESHOLD,
         recovery_days: int = RECOVERY_DAYS,
+        checkpoint_file: Path | str | None = None,
     ):
         self.decay_ic_21d = decay_ic_21d
         self.decay_ic_63d = decay_ic_63d
         self.recovery_days = recovery_days
+        self._checkpoint_file = Path(checkpoint_file) if checkpoint_file else CHECKPOINT_FILE
         self._states: dict[str, FactorState] = {}
+        self._load_checkpoint()
 
     def update(
         self,
@@ -122,6 +129,7 @@ class FactorDecayMonitor:
         else:
             state.weight = 1.0
 
+        self._save_checkpoint()
         return state.weight
 
     def get_weights(self) -> dict[str, float]:
@@ -147,6 +155,54 @@ class FactorDecayMonitor:
             }
             for s in self._states.values()
         ]
+
+    def _save_checkpoint(self) -> None:
+        try:
+            self._checkpoint_file.parent.mkdir(parents=True, exist_ok=True)
+            payload = {}
+            for name, state in self._states.items():
+                payload[name] = {
+                    "ic_21d": state.ic_21d,
+                    "ic_63d": state.ic_63d,
+                    "ic_126d": state.ic_126d,
+                    "is_decayed": state.is_decayed,
+                    "recovery_bar": state.recovery_bar,
+                    "weight": state.weight,
+                    "last_updated": state.last_updated.isoformat(),
+                    "decay_history": state.decay_history[-20:],
+                }
+            self._checkpoint_file.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception as exc:
+            logger.warning("Failed to save decay monitor checkpoint: %s", exc)
+
+    def _load_checkpoint(self) -> None:
+        if not self._checkpoint_file.exists():
+            return
+        try:
+            raw = json.loads(self._checkpoint_file.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return
+            for name, data in raw.items():
+                if not isinstance(data, dict):
+                    continue
+                state = FactorState(factor_name=str(name))
+                state.ic_21d = float(data.get("ic_21d", 0.0))
+                state.ic_63d = float(data.get("ic_63d", 0.0))
+                state.ic_126d = float(data.get("ic_126d", 0.0))
+                state.is_decayed = bool(data.get("is_decayed", False))
+                state.recovery_bar = int(data.get("recovery_bar", 0))
+                state.weight = float(data.get("weight", 1.0))
+                last_updated = data.get("last_updated")
+                if last_updated:
+                    try:
+                        state.last_updated = date.fromisoformat(str(last_updated))
+                    except Exception:
+                        state.last_updated = date.today()
+                state.decay_history = list(data.get("decay_history", []))
+                self._states[str(name)] = state
+            logger.info("Decay monitor: loaded checkpoint with %d factors", len(self._states))
+        except Exception as exc:
+            logger.warning("Failed to load decay monitor checkpoint: %s", exc)
 
     def apply_weights(
         self,

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import json
 import math
 import threading
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import numpy as np
 from scipy.stats import spearmanr
+
+IC_CHECKPOINT_FILE = Path("btc_intelligence/logs/ic_monitor_checkpoint.json")
 
 from btc_intelligence.config import settings
 from btc_intelligence.features.feature_vector import FEATURE_COLUMNS, FeatureState
@@ -117,6 +121,7 @@ class ICFactorMonitor:
         self.hibernated_factors: set[str] = set()
         self.factor_ics: dict[str, float] = {}
         self._lock = threading.Lock()
+        self._load_checkpoint()
 
     def maybe_record_daily(self, snapshot: dict[str, Any], state: FeatureState, regime: str) -> None:
         """Call from hot path; only writes history when UTC calendar day advances (1h candles)."""
@@ -178,6 +183,52 @@ class ICFactorMonitor:
 
         self.factor_ics = ics
         self.hibernated_factors = hib
+        self._save_checkpoint()
+
+    def _save_checkpoint(self) -> None:
+        try:
+            IC_CHECKPOINT_FILE.parent.mkdir(parents=True, exist_ok=True)
+            rows_list = [dict(r) for r in self._rows]
+            payload = {
+                "hibernated_factors": sorted(self.hibernated_factors),
+                "factor_ics": {k: round(v, 6) for k, v in self.factor_ics.items()},
+                "last_ic_date": self._last_ic_date,
+                "last_close": self._last_close,
+                "rows": rows_list[-256:],
+            }
+            IC_CHECKPOINT_FILE.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("IC monitor checkpoint save failed: %s", exc)
+
+    def _load_checkpoint(self) -> None:
+        if not IC_CHECKPOINT_FILE.exists():
+            return
+        try:
+            raw = json.loads(IC_CHECKPOINT_FILE.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict):
+                return
+            hib = raw.get("hibernated_factors", [])
+            if isinstance(hib, list):
+                self.hibernated_factors = set(str(f) for f in hib)
+            ics = raw.get("factor_ics", {})
+            if isinstance(ics, dict):
+                self.factor_ics = {str(k): float(v) for k, v in ics.items()}
+            self._last_ic_date = raw.get("last_ic_date")
+            self._last_close = raw.get("last_close")
+            rows = raw.get("rows", [])
+            if isinstance(rows, list):
+                for r in rows:
+                    if isinstance(r, dict) and "factors" in r and "fwd_log_ret" in r:
+                        self._rows.append(r)
+            import logging
+            logging.getLogger(__name__).info(
+                "IC monitor: loaded checkpoint — %d rows, %d hibernated factors",
+                len(self._rows), len(self.hibernated_factors),
+            )
+        except Exception as exc:
+            import logging
+            logging.getLogger(__name__).warning("IC monitor checkpoint load failed: %s", exc)
 
     def export_history_tail(self, n: int = 256) -> list[dict[str, Any]]:
         with self._lock:

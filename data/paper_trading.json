@@ -1,5 +1,5 @@
 {
-  "capital": 101690.98423264871,
+  "capital": 101704.1401643829,
   "initial_capital": 100000.0,
   "positions": {},
   "closed_trades": [
@@ -278,16 +278,48 @@
       "held_hours": 4.1539,
       "asset_class": "crypto",
       "confidence": 50.0
+    },
+    {
+      "trade_id": "PT-1776017138-4969",
+      "ticker": "SOLUSDT",
+      "entry_price": 82.29,
+      "exit_price": 82.22,
+      "quantity": 123.57635706969099,
+      "pnl": 8.6503,
+      "pnl_pct": 0.0851,
+      "direction": "SHORT",
+      "reason": "manual",
+      "opened_at": "2026-04-12T18:05:38.835080+00:00",
+      "closed_at": "2026-04-12T18:06:01.707671+00:00",
+      "held_hours": 0.0064,
+      "asset_class": "crypto",
+      "confidence": 50.0
+    },
+    {
+      "trade_id": "PT-1776017247-7602",
+      "ticker": "BTCUSDT",
+      "entry_price": 71078.9,
+      "exit_price": 71110.39,
+      "quantity": 0.1430799218581655,
+      "pnl": 4.5056,
+      "pnl_pct": 0.0443,
+      "direction": "LONG",
+      "reason": "manual",
+      "opened_at": "2026-04-12T18:07:27.077984+00:00",
+      "closed_at": "2026-04-12T18:07:55.223324+00:00",
+      "held_hours": 0.0078,
+      "asset_class": "crypto",
+      "confidence": 50.0
     }
   ],
   "mode": "manual",
   "auto_enabled": false,
   "created_at": 1775668619.954226,
   "stats": {
-    "total_trades": 17,
-    "wins": 14,
+    "total_trades": 19,
+    "wins": 16,
     "losses": 3,
-    "total_pnl": 1690.9842326486876,
+    "total_pnl": 1704.1401643828813,
     "peak_equity": 101716.1519521597,
     "max_drawdown": -0.041453357365070116
   }

@@ -1,72 +1,26 @@
 watchlist:
   indian_stocks:
-    - { symbol: RELIANCE,   yf_ticker: RELIANCE.NS,   name: Reliance Industries,  asset_class: indian_stock }
-    - { symbol: TCS,        yf_ticker: TCS.NS,        name: TCS,                  asset_class: indian_stock }
-    - { symbol: INFY,       yf_ticker: INFY.NS,       name: Infosys,              asset_class: indian_stock }
-    - { symbol: HCLTECH,    yf_ticker: HCLTECH.NS,    name: HCL Technologies,     asset_class: indian_stock }
-    - { symbol: LT,         yf_ticker: LT.NS,         name: Larsen and Toubro,    asset_class: indian_stock }
-    - { symbol: TATAMOTORS, yf_ticker: TATAMOTORS.NS, name: Tata Motors, asset_class: indian_stock, alt_ticker: TATAMOTORS.BO }
-    - { symbol: MARUTI,     yf_ticker: MARUTI.NS,     name: Maruti Suzuki,        asset_class: indian_stock }
-    - { symbol: ADANIENT,   yf_ticker: ADANIENT.NS,   name: Adani Enterprises,    asset_class: indian_stock }
-    - { symbol: SUNPHARMA,  yf_ticker: SUNPHARMA.NS,  name: Sun Pharma,           asset_class: indian_stock }
-    - { symbol: DRREDDY,    yf_ticker: DRREDDY.NS,    name: Dr Reddys Labs,       asset_class: indian_stock }
-    - { symbol: BAJAJ_AUTO, yf_ticker: BAJAJ-AUTO.NS, name: Bajaj Auto,           asset_class: indian_stock }
+    - { symbol: RELIANCE,   yf_ticker: RELIANCE.NS,   name: Reliance Industries, asset_class: indian_stock }
+    - { symbol: TCS,        yf_ticker: TCS.NS,        name: TCS,                 asset_class: indian_stock }
+    - { symbol: INFY,       yf_ticker: INFY.NS,       name: Infosys,             asset_class: indian_stock }
+    - { symbol: HCLTECH,    yf_ticker: HCLTECH.NS,    name: HCL Technologies,    asset_class: indian_stock }
+    - { symbol: TATAMOTORS, yf_ticker: TATAMOTORS.NS, name: Tata Motors,         asset_class: indian_stock, alt_ticker: TATAMOTORS.BO }
 
   us_stocks:
-    - { symbol: NVDA,  yf_ticker: NVDA,  name: NVIDIA,     asset_class: us_stock }
-    - { symbol: AAPL,  yf_ticker: AAPL,  name: Apple,      asset_class: us_stock }
-    - { symbol: MSFT,  yf_ticker: MSFT,  name: Microsoft,  asset_class: us_stock }
-    - { symbol: TSLA,  yf_ticker: TSLA,  name: Tesla,      asset_class: us_stock }
-    - { symbol: AMZN,  yf_ticker: AMZN,  name: Amazon,     asset_class: us_stock }
-    - { symbol: META,  yf_ticker: META,  name: Meta,       asset_class: us_stock }
-    - { symbol: AMD,   yf_ticker: AMD,   name: AMD,        asset_class: us_stock }
-    - { symbol: GOOGL, yf_ticker: GOOGL, name: Alphabet,   asset_class: us_stock }
-    - { symbol: COST,  yf_ticker: COST,  name: Costco,     asset_class: us_stock }
-    - { symbol: LLY,   yf_ticker: LLY,   name: Eli Lilly,  asset_class: us_stock }
+    - { symbol: NVDA, yf_ticker: NVDA, name: NVIDIA,     asset_class: us_stock }
+    - { symbol: AAPL, yf_ticker: AAPL, name: Apple,      asset_class: us_stock }
+    - { symbol: MSFT, yf_ticker: MSFT, name: Microsoft,  asset_class: us_stock }
+    - { symbol: TSLA, yf_ticker: TSLA, name: Tesla,      asset_class: us_stock }
+    - { symbol: AMZN, yf_ticker: AMZN, name: Amazon,     asset_class: us_stock }
 
   crypto:
-    - { symbol: BTC,  binance_ticker: BTCUSDT,  name: Bitcoin,       asset_class: crypto }
-    - { symbol: ETH,  binance_ticker: ETHUSDT,  name: Ethereum,      asset_class: crypto }
-    - { symbol: SOL,  binance_ticker: SOLUSDT,  name: Solana,        asset_class: crypto }
-    - { symbol: XRP,  binance_ticker: XRPUSDT,  name: Ripple,        asset_class: crypto }
-    - { symbol: AVAX, binance_ticker: AVAXUSDT, name: Avalanche,     asset_class: crypto }
-    - { symbol: DOT,  binance_ticker: DOTUSDT,  name: Polkadot,      asset_class: crypto }
-    - { symbol: ATOM, binance_ticker: ATOMUSDT, name: Cosmos,        asset_class: crypto }
-    - { symbol: NEAR, binance_ticker: NEARUSDT, name: NEAR Protocol, asset_class: crypto }
-    - { symbol: ALGO, binance_ticker: ALGOUSDT, name: Algorand,      asset_class: crypto }
-    - { symbol: ADA,  binance_ticker: ADAUSDT,  name: Cardano,       asset_class: crypto }
+    - { symbol: BTC, binance_ticker: BTCUSDT, name: Bitcoin,  asset_class: crypto }
+    - { symbol: ETH, binance_ticker: ETHUSDT, name: Ethereum, asset_class: crypto }
+    - { symbol: SOL, binance_ticker: SOLUSDT, name: Solana,   asset_class: crypto }
+    - { symbol: XRP, binance_ticker: XRPUSDT, name: Ripple,   asset_class: crypto }
+    - { symbol: BNB, binance_ticker: BNBUSDT, name: BNB,      asset_class: crypto }
 
-  forex:
-    - symbol: EURUSD
-      yf_ticker: EURUSD=X
-      av_from: EUR
-      av_to: USD
-      name: Euro/USD
-      pip_size: 0.0001
-    - symbol: GBPUSD
-      yf_ticker: GBPUSD=X
-      av_from: GBP
-      av_to: USD
-      name: GBP/USD
-      pip_size: 0.0001
-    - symbol: USDINR
-      yf_ticker: INR=X
-      av_from: USD
-      av_to: INR
-      name: USD/INR
-      pip_size: 0.01
-    - symbol: USDJPY
-      yf_ticker: JPY=X
-      av_from: USD
-      av_to: JPY
-      name: USD/JPY
-      pip_size: 0.01
-    - symbol: XAUUSD
-      yf_ticker: GC=F
-      av_from: XAU
-      av_to: USD
-      name: Gold/USD
-      pip_size: 0.01
+  forex: []
 
 focus_assets:
   - symbol: XAUUSD
@@ -159,9 +113,13 @@ dashboard:
   port: 8000
   auth:
     enabled: false
+    provider: "supabase"   # "local" | "supabase"
+    allowed_emails: ["admin@gmail.com"]  # only these emails can access
     username: "admin"
     password: "change-me"
     jwt_secret: "change-this-secret"
+    supabase_url: ""       # fallback to SUPABASE_URL env
+    supabase_anon_key: ""  # fallback to SUPABASE_ANON_KEY env
 
 wfo:
   min_train_days: 252

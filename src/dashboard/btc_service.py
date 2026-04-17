@@ -40,10 +40,9 @@ BEARISH_REGIMES = {"BEARISH TREND", "HIGH_VOL_BEAR", "BEAR", "CAPITULATION"}
 BULLISH_REGIMES = {"BULLISH TREND", "HIGH_VOL_BULL", "BULL", "DISTRIBUTION"}
 BASE_CONFIDENCE_THRESHOLD = 0.65
 
-# Multiplier applied to BASE_CONFIDENCE_THRESHOLD for COUNTER-TREND signals only.
-# WITH-TREND signals (e.g., SHORT in BEARISH regime) use BASE_CONFIDENCE_THRESHOLD × 1.0
-# so the bar is no higher than normal — the regime already confirms direction.
-# Counter-trend signals get the full multiplier (higher bar required).
+# Multiplier applied to BASE_CONFIDENCE_THRESHOLD per regime.
+# WITH-TREND signals get an additional 0.85× discount (regime confirms direction).
+# COUNTER-TREND signals get an additional 1.10× penalty (trading against regime).
 REGIME_CONFIDENCE_MULTIPLIER = {
     "BEARISH TREND": 1.25,
     "HIGH_VOL_BEAR": 1.20,
@@ -274,7 +273,8 @@ class BitcoinMarketService:
             or (regime in BULLISH_REGIMES and signal == "SHORT")
         )
         if _with_trend:
-            adjusted_threshold = BASE_CONFIDENCE_THRESHOLD * _base_mult * 100.0
+            # Regime already confirms direction → lower the bar by 15%
+            adjusted_threshold = BASE_CONFIDENCE_THRESHOLD * _base_mult * 0.85 * 100.0
         elif _counter_trend:
             # Extra 10% penalty on top of regime multiplier for counter-trend signals
             adjusted_threshold = BASE_CONFIDENCE_THRESHOLD * _base_mult * 1.10 * 100.0

@@ -207,12 +207,39 @@ class AppRuntime:
         self._last_btc_signal_direction: str | None = None
         self._latest_intelligence_bundle: dict[str, Any] = {}
         self._brier_observation_mode: bool = False
+        self._supabase_reachable: bool = False
 
         self.signal_log_path = Path(settings.signal_log_path)
         self.signal_log_path.parent.mkdir(parents=True, exist_ok=True)
         self._ensure_shared_db_schema()
         self._last_btc_signal_time = self._get_last_signal_time_from_db()
         self._last_btc_signal_direction = self._get_last_signal_direction_from_db()
+
+    async def _check_supabase_connectivity(self) -> None:
+        self._supabase_reachable = False
+        if not bool(settings.supabase_enabled):
+            return
+        if not settings.supabase_url:
+            logger.warning("Supabase enabled but SUPABASE_URL is empty")
+            return
+        if not settings.supabase_service_role_key:
+            logger.warning("Supabase enabled but SUPABASE_SERVICE_ROLE_KEY is empty")
+            return
+        url = f"{str(settings.supabase_url).rstrip('/')}/auth/v1/settings"
+        headers = {
+            "apikey": str(settings.supabase_anon_key or settings.supabase_service_role_key),
+            "Authorization": f"Bearer {settings.supabase_service_role_key}",
+        }
+        try:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                resp = await client.get(url, headers=headers)
+            if 200 <= int(resp.status_code) < 300:
+                self._supabase_reachable = True
+                logger.info("Supabase connectivity check OK")
+            else:
+                logger.warning("Supabase connectivity check failed: HTTP %s", resp.status_code)
+        except Exception as exc:
+            logger.warning("Supabase connectivity check failed: %s", exc)
 
     def _sync_open_trade_to_json(
         self, ctx: dict, action: str = "open"
@@ -386,6 +413,7 @@ class AppRuntime:
         if self._running:
             return
         self._running = True
+        await self._check_supabase_connectivity()
         if settings.redis_state_enabled:
             await self.redis_state.connect()
             await self._maybe_warm_start_redis_signal_from_sqlite()
@@ -3109,6 +3137,12 @@ class AppRuntime:
                 'enabled': bool(settings.redis_state_enabled),
                 'connected': bool(self.redis_state.connected),
                 'url': settings.redis_url,
+            },
+            'supabase': {
+                'enabled': bool(settings.supabase_enabled),
+                'configured': bool(settings.supabase_url and settings.supabase_service_role_key),
+                'reachable': bool(self._supabase_reachable),
+                'url': settings.supabase_url,
             },
             'server_time_utc': datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace('+00:00', 'Z'),
         }

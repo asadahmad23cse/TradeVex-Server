@@ -8,7 +8,8 @@
       "Bash(curl -s http://127.0.0.1:9000/health)",
       "Bash(curl -s --max-time 3 http://127.0.0.1:9000/health)",
       "Bash(sqlite3 \"C:\\\\Users\\\\ASAD AHMAD\\\\OneDrive\\\\Desktop\\\\Trading\\\\data\\\\signals.db\" \".schema signals\")",
-      "Bash(python3 -c ':*)"
+      "Bash(python3 -c ':*)",
+      "Bash(python -c ':*)"
     ]
   }
 }
