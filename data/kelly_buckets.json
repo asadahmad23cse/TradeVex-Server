@@ -1,6 +1,6 @@
 {
-  "total_trades": 4,
-  "saved_at": "2026-04-10T03:10:10.656304+00:00",
+  "total_trades": 5,
+  "saved_at": "2026-04-17T17:36:52.500884+00:00",
   "buckets": {
     "LONG/MODERATE/BULL": {
       "total": 4,
@@ -12,8 +12,21 @@
       "avg_rr": 2.0,
       "expectancy": -0.455,
       "sharpe": -15.841066691968502,
-      "last_updated": "2026-04-10T03:10:10.654376+00:00",
+      "last_updated": "2026-04-17T17:36:52.500294+00:00",
       "smoothing_weight": 0.13333333333333333
+    },
+    "LONG/STRONG/BULL": {
+      "total": 1,
+      "wins": 1,
+      "losses": 0,
+      "win_rate": 1.0,
+      "avg_win_pct": 2.34,
+      "avg_loss_pct": 0.0,
+      "avg_rr": 2.0,
+      "expectancy": 2.34,
+      "sharpe": 0.0,
+      "last_updated": "2026-04-17T17:36:52.500420+00:00",
+      "smoothing_weight": 0.03333333333333333
     }
   },
   "bucket_records": {
@@ -32,6 +45,12 @@
       },
       {
         "pnl_pct": -0.5,
+        "rr": 2.0
+      }
+    ],
+    "LONG/STRONG/BULL": [
+      {
+        "pnl_pct": 2.34,
         "rr": 2.0
       }
     ]

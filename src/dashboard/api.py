@@ -8,16 +8,22 @@ WebSocket at /ws broadcasts new signals in real-time.
 
 from datetime import datetime, timedelta, timezone
 import asyncio
+import base64
+import hashlib
 import json
 import logging
 import math
+import os
 import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
+import pandas as pd
 import redis
+import yaml  # type: ignore[import]
 from fastapi import (  # type: ignore[import]
     FastAPI,
     HTTPException,
@@ -32,6 +38,7 @@ from starlette.middleware.base import BaseHTTPMiddleware  # type: ignore[import]
 from src.data.news_feed import get_btc_news
 from src.data.signal_history import get_history as get_signal_history, get_stats as get_signal_stats
 from src.dashboard.btc_service import INTERVAL_TO_MS, BitcoinMarketService
+from src.dashboard.altcoin_service import AltcoinMarketService
 from src.dashboard.focus_engine import FocusQuantEngine
 from src.options import ExpiryTracker, OptionsEngine
 from src.compliance import SEBIComplianceEngine
@@ -41,15 +48,30 @@ from src.utils.notifiers import NotificationManager
 from src.webhook.receiver import WebhookReceiver
 
 try:
+    from dotenv import load_dotenv  # type: ignore[import]
+except Exception:
+    load_dotenv = None  # type: ignore[assignment]
+
+try:
     import jwt  # type: ignore[import]
     _JWT = True
 except ImportError:
     jwt = None  # type: ignore[assignment]
     _JWT = False
 
+try:
+    from cryptography.fernet import Fernet  # type: ignore[import]
+    _HAS_FERNET = True
+except Exception:
+    Fernet = None  # type: ignore[assignment]
+    _HAS_FERNET = False
+
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+if load_dotenv is not None:
+    load_dotenv()
 
 app = FastAPI(title="QuantTrader Dashboard", docs_url=None, redoc_url=None)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
@@ -59,8 +81,11 @@ _store = None
 _portfolio = None
 _focus_engine: FocusQuantEngine | None = None
 _btc_service: BitcoinMarketService | None = None
+_altcoin_service: AltcoinMarketService | None = None
 _live_runner = None
 _connected_ws: List[WebSocket] = []
+_binance_account_cache: dict[str, Any] = {}   # { user_key: {"ts": float, "data": dict} }
+_BINANCE_ACCOUNT_CACHE_TTL = 12.0              # seconds
 _app_loop: asyncio.AbstractEventLoop | None = None
 _dashboard_cfg: dict = {}
 _options_engine: OptionsEngine | None = None
@@ -73,6 +98,10 @@ _webhook_request_counts: dict[str, list[float]] = {}
 _options_provider: Optional[object] = None
 r = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
 _btc_proxy_cache: dict[str, dict[str, Any]] = {}
+_supabase_token_cache: dict[str, tuple[float, str, str]] = {}
+_user_profile_file = Path("data/user_profiles.json")
+_user_profile_lock = threading.Lock()
+_user_profile_cipher: Any = None
 
 
 def init_webhook(
@@ -135,12 +164,13 @@ def _check_rate_limit(client_ip: str) -> bool:
 
 def init_dashboard(store, portfolio, config: dict | None = None, **kwargs) -> None:  # type: ignore[no-untyped-def]
     """Inject SignalStore and PortfolioTracker into the dashboard."""
-    global _store, _portfolio, _dashboard_cfg, _focus_engine, _btc_service, _options_engine
+    global _store, _portfolio, _dashboard_cfg, _focus_engine, _btc_service, _altcoin_service, _options_engine
     _store = store
     _portfolio = portfolio
     _dashboard_cfg = config or {}
     _focus_engine = FocusQuantEngine(_dashboard_cfg)
     _btc_service = BitcoinMarketService(_dashboard_cfg)
+    _altcoin_service = AltcoinMarketService(_dashboard_cfg)
     if _options_engine is None:
         _options_engine = OptionsEngine()
     try:
@@ -175,6 +205,35 @@ def init_dashboard(store, portfolio, config: dict | None = None, **kwargs) -> No
         pass
 
 
+def _ensure_dashboard_cfg_loaded() -> None:
+    global _dashboard_cfg
+    if _dashboard_cfg:
+        return
+    repo_root = Path(__file__).resolve().parents[2]
+    candidates = [
+        os.getenv("DASHBOARD_CONFIG_PATH", "").strip(),
+        os.getenv("QUANT_CONFIG_PATH", "").strip(),
+        "config.runtime.8001.yaml",
+        "config.yaml",
+        str((repo_root / "config.runtime.8001.yaml").resolve()),
+        str((repo_root / "config.yaml").resolve()),
+    ]
+    for cand in candidates:
+        if not cand:
+            continue
+        path = Path(cand)
+        if not path.exists():
+            continue
+        try:
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            if isinstance(loaded, dict):
+                _dashboard_cfg = loaded
+                logger.info("Dashboard config fallback loaded from %s", path)
+                return
+        except Exception as exc:
+            logger.warning("Failed to load dashboard config from %s: %s", path, exc)
+
+
 def set_live_runner(runner) -> None:  # type: ignore[no-untyped-def]
     """Attach/detach a LiveRunner instance for runtime telemetry endpoints."""
     global _live_runner
@@ -182,11 +241,76 @@ def set_live_runner(runner) -> None:  # type: ignore[no-untyped-def]
 
 
 def _auth_config() -> dict:
+    _ensure_dashboard_cfg_loaded()
     return (_dashboard_cfg.get("dashboard", {}) or {}).get("auth", {})
 
 
+def _auth_provider() -> str:
+    cfg = _auth_config()
+    return str(cfg.get("provider", "local") or "local").strip().lower()
+
+
+def _supabase_config() -> dict[str, str]:
+    cfg = _auth_config()
+    url = str(cfg.get("supabase_url") or os.getenv("SUPABASE_URL", "")).strip().rstrip("/")
+    anon_key = str(cfg.get("supabase_anon_key") or os.getenv("SUPABASE_ANON_KEY", "")).strip()
+    return {"url": url, "anon_key": anon_key}
+
+
+def _supabase_allowed_emails() -> set[str]:
+    cfg = _auth_config()
+    allowed: set[str] = set()
+
+    cfg_val = cfg.get("allowed_emails") or []
+    if isinstance(cfg_val, list):
+        for v in cfg_val:
+            email = str(v or "").strip().lower()
+            if email:
+                allowed.add(email)
+    elif isinstance(cfg_val, str):
+        for part in cfg_val.split(","):
+            email = part.strip().lower()
+            if email:
+                allowed.add(email)
+
+    env_val = str(os.getenv("DASHBOARD_ALLOWED_EMAILS", "")).strip()
+    if env_val:
+        for part in env_val.split(","):
+            email = part.strip().lower()
+            if email:
+                allowed.add(email)
+
+    return allowed
+
+
+def _is_supabase_email_allowed(email: str) -> bool:
+    allowed = _supabase_allowed_emails()
+    if not allowed:
+        return True
+    return email.strip().lower() in allowed
+
+
+def _email_from_jwt_unverified(token: str) -> str:
+    try:
+        parts = str(token or "").split(".")
+        if len(parts) < 2:
+            return ""
+        payload = parts[1]
+        padding = "=" * ((4 - len(payload) % 4) % 4)
+        raw = base64.urlsafe_b64decode(payload + padding).decode("utf-8", errors="ignore")
+        obj = json.loads(raw) if raw else {}
+        return str((obj or {}).get("email") or "").strip().lower()
+    except Exception:
+        return ""
+
+
 def _auth_enabled() -> bool:
-    return bool(_auth_config().get("enabled", False) and _JWT)
+    if not bool(_auth_config().get("enabled", False)):
+        return False
+    provider = _auth_provider()
+    if provider == "supabase":
+        return True
+    return bool(_JWT)
 
 
 def _issue_token(username: str) -> str:
@@ -196,7 +320,7 @@ def _issue_token(username: str) -> str:
     return jwt.encode({"sub": username}, secret, algorithm="HS256")
 
 
-def _verify_token(token: str) -> bool:
+def _verify_local_token(token: str) -> bool:
     assert jwt is not None, "PyJWT is required for auth"
     cfg = _auth_config()
     secret = cfg.get("jwt_secret", "change-me")
@@ -207,24 +331,235 @@ def _verify_token(token: str) -> bool:
         return False
 
 
+def _local_token_subject(token: str) -> str:
+    if not _JWT or jwt is None:
+        return ""
+    cfg = _auth_config()
+    secret = cfg.get("jwt_secret", "change-me")
+    try:
+        payload = jwt.decode(token, secret, algorithms=["HS256"])
+        return str(payload.get("sub") or "").strip()
+    except Exception:
+        return ""
+
+
+async def _verify_supabase_token(token: str) -> bool:
+    now = time.time()
+    cached = _supabase_token_cache.get(token)
+    if cached and cached[0] > now:
+        return _is_supabase_email_allowed(cached[2])
+
+    conf = _supabase_config()
+    if not conf["url"] or not conf["anon_key"]:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=6.0, trust_env=False) as client:
+            res = await client.get(
+                f"{conf['url']}/auth/v1/user",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "apikey": conf["anon_key"],
+                },
+            )
+        if res.status_code != 200:
+            return False
+        payload = res.json() if res.content else {}
+        user_id = str(payload.get("id") or "")
+        email = str(payload.get("email") or "").strip().lower()
+        if not email:
+            email = _email_from_jwt_unverified(token)
+        if not user_id:
+            return False
+        if not _is_supabase_email_allowed(email):
+            return False
+        _supabase_token_cache[token] = (now + 45.0, user_id, email)
+        return True
+    except Exception:
+        return False
+
+
+async def _verify_request_token(token: str) -> bool:
+    provider = _auth_provider()
+    if provider == "supabase":
+        return await _verify_supabase_token(token)
+    return _verify_local_token(token)
+
+
+def _extract_auth_token(request: Request) -> str:
+    auth_header = request.headers.get("Authorization", "")
+    token = auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else ""
+    if not token and "token" in request.query_params:
+        token = str(request.query_params["token"])
+    return token
+
+
+def _identity_from_token_cache(token: str) -> tuple[str, str]:
+    if not token:
+        return "", ""
+    if _auth_provider() == "supabase":
+        cached = _supabase_token_cache.get(token)
+        if cached:
+            return str(cached[1] or ""), str(cached[2] or "")
+        return "", ""
+    sub = _local_token_subject(token)
+    return sub, sub
+
+
+def _request_user_identity(request: Request) -> tuple[str, str]:
+    uid = str(getattr(request.state, "auth_user_id", "") or "")
+    email = str(getattr(request.state, "auth_email", "") or "")
+    if uid:
+        return uid, email
+    token = _extract_auth_token(request)
+    return _identity_from_token_cache(token)
+
+
+def _profile_key() -> str:
+    raw = str(os.getenv("DASHBOARD_PROFILE_ENCRYPTION_KEY", "") or "").strip()
+    if raw:
+        key_bytes = raw.encode("utf-8")
+        if _HAS_FERNET and Fernet is not None:
+            try:
+                Fernet(key_bytes)
+                return raw
+            except Exception:
+                pass
+        digest = hashlib.sha256(key_bytes).digest()
+        return base64.urlsafe_b64encode(digest).decode("utf-8")
+
+    # Fallback deterministic key (replace in production with DASHBOARD_PROFILE_ENCRYPTION_KEY).
+    seed = str(_auth_config().get("jwt_secret") or os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or "change-this-secret")
+    digest = hashlib.sha256(seed.encode("utf-8")).digest()
+    return base64.urlsafe_b64encode(digest).decode("utf-8")
+
+
+def _profile_cipher() -> Any:
+    global _user_profile_cipher
+    if _user_profile_cipher is not None:
+        return _user_profile_cipher
+    if not _HAS_FERNET or Fernet is None:
+        return None
+    try:
+        _user_profile_cipher = Fernet(_profile_key().encode("utf-8"))
+        return _user_profile_cipher
+    except Exception as exc:
+        logger.warning("Profile encryption key invalid; falling back to plaintext storage: %s", exc)
+        return None
+
+
+def _encrypt_profile_secret(value: str) -> str:
+    raw = str(value or "")
+    if not raw:
+        return ""
+    cipher = _profile_cipher()
+    if cipher is None:
+        return raw
+    try:
+        return "enc:" + cipher.encrypt(raw.encode("utf-8")).decode("utf-8")
+    except Exception:
+        return raw
+
+
+def _decrypt_profile_secret(value: str) -> str:
+    raw = str(value or "")
+    if not raw:
+        return ""
+    if raw.startswith("enc:"):
+        cipher = _profile_cipher()
+        if cipher is None:
+            return ""
+        token = raw[4:]
+        try:
+            return cipher.decrypt(token.encode("utf-8")).decode("utf-8")
+        except Exception:
+            return ""
+    return raw
+
+
+def _mask_secret(value: str) -> str:
+    raw = str(value or "")
+    if not raw:
+        return ""
+    if len(raw) <= 8:
+        return "*" * len(raw)
+    return f"{raw[:4]}{'*' * (len(raw) - 8)}{raw[-4:]}"
+
+
+def _load_user_profiles() -> dict[str, dict[str, Any]]:
+    with _user_profile_lock:
+        if not _user_profile_file.exists():
+            return {}
+        try:
+            obj = json.loads(_user_profile_file.read_text(encoding="utf-8"))
+            return obj if isinstance(obj, dict) else {}
+        except Exception:
+            return {}
+
+
+def _save_user_profiles(profiles: dict[str, dict[str, Any]]) -> None:
+    with _user_profile_lock:
+        _user_profile_file.parent.mkdir(parents=True, exist_ok=True)
+        _user_profile_file.write_text(
+            json.dumps(profiles, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+
+def _profile_summary(user_key: str, email: str, rec: dict[str, Any]) -> dict[str, Any]:
+    api_key = _decrypt_profile_secret(str(rec.get("binance_api_key", "") or ""))
+    api_secret = _decrypt_profile_secret(str(rec.get("binance_api_secret", "") or ""))
+    access_token = _decrypt_profile_secret(str(rec.get("binance_access_token", "") or ""))
+    return {
+        "user_id": user_key,
+        "email": str(rec.get("email") or email or ""),
+        "display_name": str(rec.get("display_name") or ""),
+        "created_at": str(rec.get("created_at") or ""),
+        "updated_at": str(rec.get("updated_at") or ""),
+        "binance": {
+            "api_key_masked": _mask_secret(api_key),
+            "api_secret_set": bool(api_secret),
+            "access_token_masked": _mask_secret(access_token),
+            "access_token_set": bool(access_token),
+            "ready_for_real_trading": bool(api_key and (api_secret or access_token)),
+        },
+    }
+
+
+def _open_dashboard_paths() -> set[str]:
+    return {
+        "/",
+        "/terminal",
+        "/crypto-terminal",
+        "/asset-terminal",
+        "/portfolio",
+        "/history",
+        "/factors",
+        "/regime",
+        "/focus",
+        "/stock-terminal",
+        "/auth/token",
+    }
+
+
 class DashboardAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
         if not _auth_enabled():
             return await call_next(request)
-        open_paths = {"/auth/token"}
+        open_paths = _open_dashboard_paths()
         if (
             request.url.path.startswith("/static")
             or request.url.path.startswith("/webhook")
             or request.url.path == "/api/options-intelligence"
+            or request.url.path == "/favicon.ico"
             or request.url.path in open_paths
         ):
             return await call_next(request)
-        auth_header = request.headers.get("Authorization", "")
-        token = auth_header.replace("Bearer ", "") if auth_header.startswith("Bearer ") else ""
-        if not token and "token" in request.query_params:
-            token = request.query_params["token"]
-        if not token or not _verify_token(token):
-            raise HTTPException(status_code=401, detail="Dashboard auth required")
+        token = _extract_auth_token(request)
+        if not token or not await _verify_request_token(token):
+            return JSONResponse({"detail": "Dashboard auth required"}, status_code=401)
+        user_id, email = _identity_from_token_cache(token)
+        request.state.auth_user_id = user_id
+        request.state.auth_email = email
         return await call_next(request)
 
 
@@ -248,6 +583,9 @@ _response_cache_ttl = {
     "/api/btc/decision-intelligence": 10,
     "/api/btc/probability": 10,
     "/api/btc/execution-plan": 10,
+    "/api/crypto/candles": 10,
+    "/api/crypto/deep-signal": 10,
+    "/api/crypto/market-context": 10,
     "/api/btc/news": 120,
     "/api/news": 120,
     "/api/portfolio": 15,
@@ -654,10 +992,12 @@ def _minimal_decision_intelligence_from_signal(
     sig: dict[str, Any],
     *,
     source: str = "redis_signal_fallback",
+    stale: bool = True,
+    degraded: bool = True,
 ) -> dict[str, Any]:
     """
-    Build a decision-intelligence-shaped dict from btc:signal when upstream is down.
-    Marked stale/degraded for UI.
+    Build a decision-intelligence-shaped dict from btc:signal.
+    Caller controls stale/degraded semantics.
     """
     now = datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
     signal = str(sig.get("signal", "HOLD")).upper()
@@ -706,8 +1046,8 @@ def _minimal_decision_intelligence_from_signal(
         if isinstance(sig.get("meta_labeling"), dict)
         else {},
         "as_of_utc": sig.get("as_of_utc") or sig.get("timestamp") or now,
-        "stale": True,
-        "degraded": True,
+        "stale": bool(stale),
+        "degraded": bool(degraded),
         "source": source,
     }
     return out
@@ -768,6 +1108,566 @@ def _normalize_decision_intelligence_payload(payload: dict[str, Any]) -> dict[st
     out["probability"] = _extract_probability_payload(payload)
     out["execution_plan"] = dict(payload.get("execution_plan", {})) if isinstance(payload.get("execution_plan"), dict) else {}
     return out
+
+
+def _normalize_crypto_symbol(symbol: str | None) -> str:
+    raw = str(symbol or "BTCUSDT").strip().upper()
+    alias = {"BTC": "BTCUSDT", "ETH": "ETHUSDT", "SOL": "SOLUSDT"}
+    return alias.get(raw, raw)
+
+
+def _is_alt_symbol(symbol: str | None) -> bool:
+    return _normalize_crypto_symbol(symbol) in {"ETHUSDT", "SOLUSDT"}
+
+
+def _asset_short(symbol: str | None) -> str:
+    sym = _normalize_crypto_symbol(symbol)
+    return sym[:-4] if sym.endswith("USDT") else sym
+
+
+def _ensure_altcoin_service() -> AltcoinMarketService | None:
+    global _altcoin_service
+    if _altcoin_service is not None:
+        return _altcoin_service
+    try:
+        _altcoin_service = AltcoinMarketService(_dashboard_cfg)
+    except Exception:
+        _altcoin_service = None
+    return _altcoin_service
+
+
+def _alt_signal_payload(symbol: str, interval: str = "15m") -> dict[str, Any]:
+    svc = _ensure_altcoin_service()
+    if svc is None:
+        base = {
+            "asset": _normalize_crypto_symbol(symbol),
+            "signal": "HOLD",
+            "validated_signal": "HOLD",
+            "validated": False,
+            "reason": "Altcoin service not initialised",
+            "confidence": 0.0,
+            "alpha_score": 0.0,
+            "net_alpha_score": 0.0,
+            "regime": "SIDEWAYS",
+            "as_of_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        return _alt_enrich_signal_payload(base, symbol=symbol)
+    raw = svc.get_realtime_signal(
+        symbol=_normalize_crypto_symbol(symbol),
+        interval=interval,
+    )
+    if not isinstance(raw, dict):
+        raw = {
+            "asset": _normalize_crypto_symbol(symbol),
+            "signal": "HOLD",
+            "validated_signal": "HOLD",
+            "validated": False,
+            "reason": "Altcoin service returned invalid payload",
+            "confidence": 0.0,
+            "alpha_score": 0.0,
+            "net_alpha_score": 0.0,
+            "regime": "SIDEWAYS",
+            "as_of_utc": datetime.now(timezone.utc).isoformat(),
+        }
+    return _alt_enrich_signal_payload(raw, symbol=symbol)
+
+
+def _alt_frame(symbol: str, interval: str = "15m", limit: int = 300) -> pd.DataFrame:
+    svc = _ensure_altcoin_service()
+    if svc is None:
+        return pd.DataFrame()
+    payload = svc.get_recent_candles(
+        symbol=_normalize_crypto_symbol(symbol),
+        interval=interval,
+        limit=limit,
+    )
+    rows = payload.get("data", []) if isinstance(payload, dict) else []
+    if not isinstance(rows, list) or not rows:
+        return pd.DataFrame()
+    parsed: list[dict[str, Any]] = []
+    for row in rows:
+        try:
+            parsed.append(
+                {
+                    "time": datetime.fromtimestamp(int(row.get("time")), tz=timezone.utc),
+                    "Open": float(row.get("open", 0.0)),
+                    "High": float(row.get("high", 0.0)),
+                    "Low": float(row.get("low", 0.0)),
+                    "Close": float(row.get("close", 0.0)),
+                    "Volume": float(row.get("volume", 0.0)),
+                },
+            )
+        except Exception:
+            continue
+    if not parsed:
+        return pd.DataFrame()
+    return pd.DataFrame(parsed).set_index("time").sort_index()
+
+
+def _alt_clip(value: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, float(value)))
+
+
+def _alt_session_label() -> str:
+    hour = datetime.now(timezone.utc).hour
+    if 0 <= hour < 8:
+        return "Asia Session"
+    if 8 <= hour < 16:
+        return "London Session"
+    return "NY Session"
+
+
+def _alt_fear_greed_label(score: float) -> str:
+    if score <= 20:
+        return "Extreme Fear"
+    if score <= 40:
+        return "Fear"
+    if score < 60:
+        return "Neutral"
+    if score < 80:
+        return "Greed"
+    return "Extreme Greed"
+
+
+def _alt_volatility_label(atr_pct: float) -> str:
+    if atr_pct >= 2.8:
+        return "HIGH"
+    if atr_pct <= 0.7:
+        return "LOW"
+    return "NORMAL"
+
+
+def _alt_validation_checks_from_gate(sig: dict[str, Any], fear_greed: float) -> dict[str, bool]:
+    gate = sig.get("gate_status") if isinstance(sig.get("gate_status"), dict) else {}
+    liq_gate = bool(gate.get("liquidity_gate", True))
+    checks = {
+        "data_quality_ok": bool(gate.get("data_quality", True)),
+        "confidence_ok": bool(gate.get("confidence_gate", False)),
+        "cost_ok": bool(gate.get("cost_gate", False)),
+        "mtf_ok": bool(gate.get("mtf_alignment", True)),
+        "etf_ok": True,
+        "fear_greed_ok": 12.0 <= fear_greed <= 88.0,
+        "liquidation_ok": liq_gate,
+        "oi_ok": True,
+        "sl_distance_ok": True,
+    }
+    return checks
+
+
+def _alt_first_blocker(sig: dict[str, Any], checks: dict[str, bool]) -> str:
+    requested = str(sig.get("requested_signal") or sig.get("signal") or "HOLD").upper()
+    validated = str(sig.get("validated_signal") or "HOLD").upper()
+    if requested in {"HOLD", "WAIT", ""}:
+        return "alpha_threshold"
+    if validated in {"LONG", "SHORT"}:
+        return ""
+    for key in (
+        "data_quality_ok",
+        "confidence_ok",
+        "cost_ok",
+        "mtf_ok",
+        "fear_greed_ok",
+        "liquidation_ok",
+        "oi_ok",
+        "sl_distance_ok",
+    ):
+        if checks.get(key) is False:
+            return key
+    return "validation_block"
+
+
+def _alt_flow_state(obi: float) -> str:
+    if obi >= 0.08:
+        return "FAVOR_LONG"
+    if obi <= -0.08:
+        return "FAVOR_SHORT"
+    return "NO_TRADE"
+
+
+def _alt_rsi_zone(rsi: float) -> str:
+    if rsi >= 70:
+        return "OVERBOUGHT"
+    if rsi <= 30:
+        return "OVERSOLD"
+    return "NEUTRAL"
+
+
+def _alt_market_overview(sig: dict[str, Any], fear_greed: float) -> dict[str, Any]:
+    ctx = sig.get("market_context") if isinstance(sig.get("market_context"), dict) else {}
+    regime = str(sig.get("regime") or "SIDEWAYS").upper()
+    atr_pct = float(ctx.get("atr_pct", 0.0) or 0.0)
+    return {
+        "price_change_1h": round(float(ctx.get("price_change_1h", 0.0) or 0.0), 3),
+        "price_change_24h": round(float(ctx.get("price_change_24h", 0.0) or 0.0), 3),
+        "fear_greed_label": _alt_fear_greed_label(fear_greed),
+        "volatility": _alt_volatility_label(atr_pct),
+        "atr_pct": round(atr_pct, 3),
+        "regime": regime,
+        "session": _alt_session_label(),
+    }
+
+
+def _alt_mtf_bias(sig: dict[str, Any]) -> dict[str, Any]:
+    ctx = sig.get("market_context") if isinstance(sig.get("market_context"), dict) else {}
+    mtf = ctx.get("mtf") if isinstance(ctx.get("mtf"), dict) else {}
+    details = mtf.get("details") if isinstance(mtf.get("details"), dict) else {}
+    b4 = str(details.get("4h", "NEUTRAL")).upper()
+    b1h = str(details.get("1h", "NEUTRAL")).upper()
+    regime = str(sig.get("regime") or "SIDEWAYS").upper()
+    if "BULL" in regime:
+        b1d = "BULLISH"
+    elif "BEAR" in regime:
+        b1d = "BEARISH"
+    else:
+        b1d = "NEUTRAL"
+    return {
+        "bias_4h": b4 if b4 in {"BULLISH", "BEARISH", "NEUTRAL", "SIDEWAYS"} else "NEUTRAL",
+        "bias_1d": b1d if b1d in {"BULLISH", "BEARISH", "NEUTRAL"} else "NEUTRAL",
+        "bias_1h": b1h if b1h in {"BULLISH", "BEARISH", "NEUTRAL", "SIDEWAYS"} else "NEUTRAL",
+        "aligned": bool(mtf.get("aligned", True)),
+        "score": float(mtf.get("score", 1.0) or 1.0),
+    }
+
+
+def _alt_factor_contributions(sig: dict[str, Any]) -> list[dict[str, Any]]:
+    fs = sig.get("factor_scores") if isinstance(sig.get("factor_scores"), dict) else {}
+    iw = sig.get("ic_weights") if isinstance(sig.get("ic_weights"), dict) else {}
+    rows: list[dict[str, Any]] = []
+    for key in sorted(set(fs.keys()) | set(iw.keys())):
+        score = float(fs.get(key, 0.0) or 0.0)
+        weight = float(iw.get(key, 0.0) or 0.0)
+        contrib = score * (weight if abs(weight) > 0 else 1.0)
+        rows.append(
+            {
+                "factor": key,
+                "score": round(score, 4),
+                "weight": round(weight, 4),
+                "contribution": round(contrib, 4),
+            },
+        )
+    rows.sort(key=lambda r: abs(float(r.get("contribution", 0.0) or 0.0)), reverse=True)
+    return rows[:12]
+
+
+def _alt_breakdown_from_signal(sig: dict[str, Any], checks: dict[str, bool], obi: float) -> dict[str, Any]:
+    conf = float(sig.get("confidence", 0.0) or 0.0)
+    thr = float(sig.get("adjusted_confidence_threshold", 65.0) or 65.0)
+    net_alpha = float(sig.get("net_alpha_score_raw", sig.get("net_alpha_score", 0.0)) or 0.0)
+    ctx = sig.get("market_context") if isinstance(sig.get("market_context"), dict) else {}
+    regime = str(sig.get("regime") or "SIDEWAYS").upper()
+    mom = float(ctx.get("price_change_1h", 0.0) or 0.0) * 12.0 + (float(ctx.get("rsi", 50.0) or 50.0) - 50.0)
+    momentum_score = _alt_clip(mom, -100.0, 100.0)
+    flow_score = _alt_clip(obi * 100.0, -100.0, 100.0)
+    cost_score = _alt_clip(net_alpha * 1200.0, -100.0, 100.0)
+    regime_score = 35.0 if checks.get("mtf_ok", True) and checks.get("liquidation_ok", True) else -25.0
+    if "BEAR" in regime:
+        regime_score -= 5.0
+    elif "BULL" in regime:
+        regime_score += 5.0
+    confidence_edge = conf - thr
+    final_score = _alt_clip((confidence_edge * 1.4) + (momentum_score * 0.15) + (flow_score * 0.2) + (cost_score * 0.25), -100.0, 100.0)
+    return {
+        "regime_score": round(regime_score, 2),
+        "momentum_score": round(momentum_score, 2),
+        "flow_score": round(flow_score, 2),
+        "cost_score": round(cost_score, 2),
+        "final_score": round(final_score, 2),
+        "explanation": str(sig.get("reason") or "Altcoin decision stack active"),
+    }
+
+
+def _alt_trade_verdict_from_signal(sig: dict[str, Any], checks: dict[str, bool], breakdown: dict[str, Any]) -> dict[str, Any]:
+    decision = str(sig.get("validated_signal") or "HOLD").upper()
+    final_verdict = "TRADE" if decision in {"LONG", "SHORT"} else "AVOID"
+    liq_ok = checks.get("liquidation_ok", True)
+    mtf_ok = checks.get("mtf_ok", True)
+    regime_alignment = "HIGH" if mtf_ok and liq_ok else "MEDIUM" if mtf_ok else "LOW"
+    mo = sig.get("market_overview") if isinstance(sig.get("market_overview"), dict) else {}
+    vol = str(mo.get("volatility", "NORMAL")).upper()
+    vol_state = "NOT_TRADEABLE" if vol == "HIGH" and final_verdict != "TRADE" else vol
+    return {
+        "final_verdict": final_verdict,
+        "decision_confidence": round(float(sig.get("confidence", 0.0) or 0.0), 2),
+        "regime_alignment": regime_alignment,
+        "liquidity_quality": "STRONG" if liq_ok else "WEAK",
+        "volatility_state": vol_state,
+        "decision": decision,
+        "reason": str(breakdown.get("explanation") or sig.get("reason") or ""),
+    }
+
+
+def _alt_decision_intelligence_from_signal(sig: dict[str, Any]) -> dict[str, Any]:
+    enriched = _alt_enrich_signal_payload(sig, symbol=str(sig.get("symbol") or sig.get("asset") or "ETHUSDT"))
+    checks = enriched.get("validation_checks") if isinstance(enriched.get("validation_checks"), dict) else {}
+    order_flow = enriched.get("order_flow") if isinstance(enriched.get("order_flow"), dict) else {}
+    obi = float(order_flow.get("obi", 0.0) or 0.0)
+    breakdown = _alt_breakdown_from_signal(enriched, checks, obi)
+    probability = _alt_prob_from_signal(enriched)
+    execution_plan = _alt_execution_plan_from_signal(enriched)
+    trade_verdict = _alt_trade_verdict_from_signal(enriched, checks, breakdown)
+    blockers = [k for k, v in checks.items() if v is False]
+    decision = str(enriched.get("validated_signal") or "HOLD").upper()
+    requested = str(enriched.get("requested_signal") or enriched.get("signal") or "HOLD").upper()
+    regime = str(enriched.get("regime") or "SIDEWAYS").upper()
+    cal_prob = max(float(probability.get("up_prob", 0.0) or 0.0), float(probability.get("down_prob", 0.0) or 0.0), float(probability.get("sideways_prob", 0.0) or 0.0)) / 100.0
+
+    return {
+        "as_of_utc": enriched.get("as_of_utc"),
+        "decision_engine": {
+            "decision": decision,
+            "requested_signal": requested,
+            "final_score": float(breakdown.get("final_score", 0.0) or 0.0),
+            "confidence": float(enriched.get("confidence", 0.0) or 0.0),
+            "quality_score": float(enriched.get("signal_strength", 0.0) or 0.0),
+            "regime": regime,
+            "reason": str(enriched.get("reason") or ""),
+            "blockers": blockers,
+            "trade_triggers": [] if blockers else [f"{decision} setup confirmed on {enriched.get('symbol', '')}"],
+            "flow_decision": str(order_flow.get("decision_state") or "NO_TRADE"),
+        },
+        "decision_breakdown": breakdown,
+        "factor_contributions": _alt_factor_contributions(enriched),
+        "probability": probability,
+        "execution_plan": execution_plan,
+        "trade_verdict": trade_verdict,
+        "meta_decision": {
+            "final_decision": decision,
+            "reasons": blockers if blockers else [str(enriched.get("reason") or "")],
+            "calibration": {"calibrated_prob": round(cal_prob, 4)},
+        },
+        "meta_labeling": {
+            "inputs": {
+                "rf_veto_applied": False,
+                "rf_fp_probability": None,
+            },
+        },
+        "validation_engine": {
+            "checks": {
+                "alpha_barrier": bool(checks.get("cost_ok", False)),
+                "confidence_gate": bool(checks.get("confidence_ok", False)),
+                "data_quality": bool(checks.get("data_quality_ok", False)),
+            },
+        },
+        "strategy_selection": {"active": "altcoin_spot_quant_v1", "symbol": enriched.get("symbol")},
+        "data_drift": {"status": "stable"},
+        "meta_output": {"status": "live"},
+        "adaptive_learning": {"enabled": True},
+        "order_flow": order_flow,
+        "regime": regime,
+        "regime_state_probs": {
+            "trending": 0.7 if "TREND" in regime else 0.35,
+            "mean_reverting": 0.2 if "SIDEWAYS" in regime or "RANGE" in regime else 0.45,
+            "liquidity_cascade": 0.1 if "VOLATILITY" not in regime else 0.2,
+        },
+        "signal_aggregation": {
+            "requested_signal": requested,
+            "validated_signal": decision,
+            "blocked_by": enriched.get("blocked_by"),
+        },
+        "execution_gate": {"open": decision in {"LONG", "SHORT"}},
+        "kelly_sizing": {
+            "position_size_pct": float(enriched.get("position_size_pct", 0.0) or 0.0),
+            "method": ((enriched.get("position_sizing") or {}).get("method")),
+        },
+        "net_alpha": float(enriched.get("net_alpha_score_raw", 0.0) or 0.0),
+        "monitoring_summary": {
+            "stale": bool(enriched.get("stale", False)),
+            "degraded": bool(enriched.get("degraded", False)),
+            "source": "altcoin_deep_signal",
+        },
+        "source": "altcoin_deep_signal",
+        "stale": bool(enriched.get("stale", False)),
+        "degraded": bool(enriched.get("degraded", False)),
+    }
+
+
+def _alt_enrich_signal_payload(payload: dict[str, Any], symbol: str | None = None) -> dict[str, Any]:
+    out = dict(payload if isinstance(payload, dict) else {})
+    sym = _normalize_crypto_symbol(str(out.get("symbol") or out.get("asset") or symbol or "ETHUSDT"))
+    out["symbol"] = sym
+    out["asset"] = sym
+    raw_signal = str(out.get("signal") or "HOLD").upper()
+    if raw_signal == "BUY":
+        raw_signal = "LONG"
+    elif raw_signal == "SELL":
+        raw_signal = "SHORT"
+    out["signal"] = raw_signal
+
+    validated = str(out.get("validated_signal") or raw_signal).upper()
+    if validated == "BUY":
+        validated = "LONG"
+    elif validated == "SELL":
+        validated = "SHORT"
+    if validated not in {"LONG", "SHORT"}:
+        validated = "HOLD"
+    out["validated_signal"] = validated
+    out["validated"] = bool(validated in {"LONG", "SHORT"})
+
+    ctx = out.get("market_context") if isinstance(out.get("market_context"), dict) else {}
+    rsi = float(ctx.get("rsi", 50.0) or 50.0)
+    p24 = float(ctx.get("price_change_24h", 0.0) or 0.0)
+    obv = float(ctx.get("obv_slope", 0.0) or 0.0)
+    fear_greed = _alt_clip(50.0 + (rsi - 50.0) * 0.9 + p24 * 3.2 + obv * 12.0, 0.0, 100.0)
+    out["fear_greed"] = int(round(fear_greed))
+    out["session"] = _alt_session_label()
+
+    mo = _alt_market_overview(out, fear_greed)
+    out["market_overview"] = mo
+    out["market_regime"] = str(out.get("regime") or mo.get("regime") or "SIDEWAYS").upper()
+    out["volatility_regime"] = str(mo.get("volatility") or "NORMAL")
+    out["volatility"] = {
+        "volatility_regime": out["volatility_regime"],
+        "atr_pct": mo.get("atr_pct"),
+    }
+    out["mtf_bias"] = _alt_mtf_bias(out)
+
+    gate = out.get("gate_status") if isinstance(out.get("gate_status"), dict) else {}
+    liq = ctx.get("liquidity") if isinstance(ctx.get("liquidity"), dict) else {}
+    bbook = liq.get("binance") if isinstance(liq.get("binance"), dict) else {}
+    obi = float(bbook.get("book_imbalance", 0.0) or 0.0)
+    volume_ratio = float(ctx.get("volume_ratio", 1.0) or 1.0)
+    cmf = float(ctx.get("cmf", 0.0) or 0.0)
+    volume_trend = "HIGH" if volume_ratio >= 1.2 else "LOW" if volume_ratio <= 0.85 else "NORMAL"
+    obv_trend = "RISING" if obv >= 0 else "FALLING"
+    cmf_signal = "ACCUMULATION" if cmf > 0.05 else "DISTRIBUTION" if cmf < -0.05 else "NEUTRAL"
+    of = {
+        "decision_state": _alt_flow_state(obi),
+        "volume_trend": volume_trend,
+        "obv_trend": obv_trend,
+        "cmf": round(cmf, 4),
+        "cmf_signal": cmf_signal,
+        "rsi": round(rsi, 2),
+        "rsi_zone": _alt_rsi_zone(rsi),
+        "obi": round(obi, 4),
+    }
+    out["order_flow"] = of
+    out["orderflow"] = of
+    out["obi"] = round(obi, 4)
+
+    mark_price = float(out.get("entry_price", 0.0) or 0.0)
+    if mark_price <= 0:
+        mark_price = float(out.get("entry", 0.0) or 0.0)
+    top_notional = float(bbook.get("top30_notional_usd", 0.0) or 0.0)
+    out["mark_price"] = round(mark_price, 6) if mark_price > 0 else None
+    out["open_interest_btc"] = round((top_notional / max(mark_price, 1.0)), 3) if top_notional > 0 and mark_price > 0 else 0.0
+    out["funding_rate"] = 0.0
+    out["funding_rate_pct"] = 0.0
+    out["funding_sentiment"] = "SPOT_ONLY"
+
+    pos = out.get("position_sizing") if isinstance(out.get("position_sizing"), dict) else {}
+    out["position_size_pct"] = float(pos.get("size_pct", 0.0) or 0.0)
+    out["meta_confidence"] = float(out.get("confidence", 0.0) or 0.0)
+    out["signal_strength"] = int(round(_alt_clip(float(out.get("confidence", 0.0) or 0.0) if out["validated"] else float(out.get("confidence", 0.0) or 0.0) * 0.55, 0.0, 100.0)))
+    out["quality_score"] = out["signal_strength"]
+
+    out["requested_signal"] = raw_signal
+    out["alpha_score_raw"] = float(out.get("alpha_score", 0.0) or 0.0)
+    out["net_alpha_score_raw"] = float(out.get("net_alpha_score", 0.0) or 0.0)
+
+    checks = _alt_validation_checks_from_gate(out, fear_greed)
+    out["validation_checks"] = checks
+    out["blocked_by"] = _alt_first_blocker(out, checks)
+
+    entry = float(out.get("entry_price", 0.0) or 0.0)
+    sl = float(out.get("stop_loss", 0.0) or 0.0)
+    tp1 = float(out.get("tp1", 0.0) or 0.0)
+    tp2 = float(out.get("tp2", 0.0) or 0.0)
+    tp3 = float(out.get("tp3", 0.0) or 0.0)
+    if entry > 0:
+        out["entry_zone_low"] = round(entry * 0.998, 6)
+        out["entry_zone_high"] = round(entry * 1.002, 6)
+        out["sl_pct"] = round(abs(entry - sl) / entry * 100.0, 3) if sl > 0 else None
+        out["tp1_pct"] = round(abs(tp1 - entry) / entry * 100.0, 3) if tp1 > 0 else None
+        out["tp2_pct"] = round(abs(tp2 - entry) / entry * 100.0, 3) if tp2 > 0 else None
+        out["tp3_pct"] = round(abs(tp3 - entry) / entry * 100.0, 3) if tp3 > 0 else None
+    else:
+        out["entry_zone_low"] = None
+        out["entry_zone_high"] = None
+        out["sl_pct"] = None
+        out["tp1_pct"] = None
+        out["tp2_pct"] = None
+        out["tp3_pct"] = None
+
+    interval = str(out.get("interval") or "15m")
+    out["signal_validity_seconds"] = int(max(60, int(INTERVAL_TO_MS.get(interval, 900000) / 1000)))
+    out.setdefault("hibernated_factors", [])
+    out["source"] = "altcoin_deep_signal"
+    out["stale"] = bool(out.get("stale", False))
+    out["degraded"] = bool(out.get("degraded", False))
+    return out
+
+
+def _alt_prob_from_signal(sig: dict[str, Any]) -> dict[str, Any]:
+    conf = float(sig.get("confidence", 0.0) or 0.0)
+    vsig = str(sig.get("validated_signal") or sig.get("signal") or "HOLD").upper()
+    if vsig in {"BUY", "LONG"}:
+        up = max(0.0, min(100.0, conf))
+        down = max(0.0, round((100.0 - up) * 0.45, 2))
+    elif vsig in {"SELL", "SHORT"}:
+        down = max(0.0, min(100.0, conf))
+        up = max(0.0, round((100.0 - down) * 0.45, 2))
+    else:
+        up = down = max(0.0, round(conf * 0.35, 2))
+    sideways = max(0.0, round(100.0 - up - down, 2))
+    if up >= down and up >= sideways:
+        dom = "LONG"
+    elif down >= up and down >= sideways:
+        dom = "SHORT"
+    else:
+        dom = "SIDEWAYS"
+    return {
+        "up_prob": round(up, 2),
+        "down_prob": round(down, 2),
+        "sideways_prob": round(sideways, 2),
+        "dominant_state": dom,
+        "dominant": dom,
+        "calibration_score": round(conf, 2),
+    }
+
+
+def _alt_execution_plan_from_signal(sig: dict[str, Any]) -> dict[str, Any]:
+    entry = sig.get("entry_price")
+    sl = sig.get("stop_loss")
+    tp = sig.get("take_profit")
+    rr = sig.get("risk_reward")
+    gate = sig.get("gate_status") if isinstance(sig.get("gate_status"), dict) else {}
+    slippage_risk = "LOW"
+    if gate.get("liquidity_gate") is False:
+        slippage_risk = "HIGH"
+    elif gate.get("liquidity_gate") is True and gate.get("cost_gate") is False:
+        slippage_risk = "MEDIUM"
+    return {
+        "entry_zone": [entry, entry] if entry else None,
+        "stop_loss": sl,
+        "take_profit": tp,
+        "take_profit_2": sig.get("tp2"),
+        "expected_rr": rr,
+        "slippage_risk": slippage_risk,
+        "position_size_pct": ((sig.get("position_sizing") or {}).get("size_pct")),
+        "regime": sig.get("regime"),
+    }
+
+
+def _alt_markers(symbol: str, interval: str = "15m", limit: int = 300) -> list[dict[str, Any]]:
+    frame = _alt_frame(symbol, interval=interval, limit=limit)
+    if frame.empty or len(frame) < 80:
+        return []
+    close = frame["Close"].astype(float)
+    ema20 = close.ewm(span=20).mean()
+    ema50 = close.ewm(span=50).mean()
+    out: list[dict[str, Any]] = []
+    prev_state = 0
+    for i in range(1, len(frame)):
+        state = 1 if ema20.iloc[i] > ema50.iloc[i] else -1
+        if state == prev_state:
+            continue
+        prev_state = state
+        ts = int(pd.Timestamp(frame.index[i]).timestamp())
+        if state > 0:
+            out.append({"time": ts, "position": "belowBar", "color": "#34d399", "shape": "arrowUp", "text": "BUY"})
+        else:
+            out.append({"time": ts, "position": "aboveBar", "color": "#f87171", "shape": "arrowDown", "text": "SELL"})
+    return out[-200:]
 
 
 async def _btc_proxy_payload(
@@ -910,7 +1810,7 @@ def push_broadcast_threadsafe(data: dict) -> None:
 
 @app.on_event("startup")
 async def _capture_loop() -> None:
-    global _app_loop, _btc_service
+    global _app_loop, _btc_service, _altcoin_service
     _app_loop = asyncio.get_running_loop()
     # Auto-init BTC service when running standalone via uvicorn (without main.py)
     if _btc_service is None:
@@ -919,6 +1819,12 @@ async def _capture_loop() -> None:
         except Exception as exc:  # pragma: no cover
             import logging
             logging.getLogger(__name__).warning("BTC service auto-init failed: %s", exc)
+    if _altcoin_service is None:
+        try:
+            _altcoin_service = AltcoinMarketService(_dashboard_cfg)
+        except Exception as exc:  # pragma: no cover
+            import logging
+            logging.getLogger(__name__).warning("Altcoin service auto-init failed: %s", exc)
 
 
 @app.on_event("shutdown")
@@ -940,7 +1846,7 @@ async def _shutdown_live_runner() -> None:
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     token = websocket.query_params.get("token", "")
-    if _auth_enabled() and not _verify_token(token):
+    if _auth_enabled() and not await _verify_request_token(token):
         await websocket.close(code=4401)
         return
     await websocket.accept()
@@ -1247,25 +2153,87 @@ def get_focus_trades(interval: str = "5m"):
 
 
 @app.get("/api/btc/history")
-def get_btc_history(interval: str = "1d"):
-    """All-time historical BTCUSDT candles from Binance."""
+def get_btc_history(interval: str = "1d", symbol: str = "BTCUSDT"):
+    """Historical candles; BTC default, ETH/SOL compatible via symbol parameter."""
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        svc = _ensure_altcoin_service()
+        if svc is None:
+            raise HTTPException(503, "Altcoin service not initialised")
+        return svc.get_recent_candles(symbol=sym, interval=interval, limit=1000)
     if _btc_service is None:
         raise HTTPException(503, "BTC service not initialised")
     return _btc_service.get_all_time_history(interval=interval)
 
 
 @app.get("/api/btc/candles")
-def get_btc_candles(interval: str = "15m", limit: int = 200):
-    """Recent BTCUSDT candles for trading chart windows."""
+def get_btc_candles(interval: str = "15m", limit: int = 200, symbol: str = "BTCUSDT"):
+    """Recent candles for trading chart windows (BTC default, ETH/SOL compatible)."""
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        svc = _ensure_altcoin_service()
+        if svc is None:
+            raise HTTPException(503, "Altcoin service not initialised")
+        limit = max(50, min(limit, 1200))
+        return svc.get_recent_candles(symbol=sym, interval=interval, limit=limit)
     if _btc_service is None:
         raise HTTPException(503, "BTC service not initialised")
     limit = max(50, min(limit, 1000))
     return _btc_service.get_recent_candles(interval=interval, limit=limit)
 
 
+@app.get("/api/crypto/candles")
+def get_crypto_candles(symbol: str = "ETHUSDT", interval: str = "15m", limit: int = 300):
+    """Recent spot candles for non-BTC crypto terminal (ETH/SOL)."""
+    svc = _ensure_altcoin_service()
+    if svc is None:
+        raise HTTPException(503, "Altcoin service not initialised")
+    return svc.get_recent_candles(symbol=symbol, interval=interval, limit=limit)
+
+
+@app.get("/api/crypto/deep-signal")
+def get_crypto_deep_signal(symbol: str = "ETHUSDT", interval: str = "15m"):
+    """BTC-style deep signal pipeline for ETH/SOL without touching BTC service."""
+    svc = _ensure_altcoin_service()
+    if svc is None:
+        raise HTTPException(503, "Altcoin service not initialised")
+    return svc.get_realtime_signal(symbol=symbol, interval=interval)
+
+
+@app.get("/api/crypto/market-context")
+def get_crypto_market_context(symbol: str = "ETHUSDT", interval: str = "15m"):
+    """Return market context block from the deep signal payload."""
+    svc = _ensure_altcoin_service()
+    if svc is None:
+        raise HTTPException(503, "Altcoin service not initialised")
+    payload = svc.get_realtime_signal(symbol=symbol, interval=interval)
+    return {
+        "symbol": str(payload.get("symbol") or symbol).upper(),
+        "interval": interval,
+        "market_context": payload.get("market_context", {}),
+        "gate_status": payload.get("gate_status", {}),
+        "as_of_utc": payload.get("as_of_utc"),
+    }
+
+
 @app.get("/api/btc/signal")
-def get_btc_signal(interval: str = "5m"):
-    """Real-time BTC signal using the project's quant factor algorithm."""
+def get_btc_signal(interval: str = "5m", symbol: str = "BTCUSDT"):
+    """Real-time signal endpoint with BTC default; ETH/SOL compatible via symbol."""
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        try:
+            return _alt_signal_payload(sym, interval=interval)
+        except Exception:
+            return {
+                "asset": sym,
+                "signal": "HOLD",
+                "validated_signal": "HOLD",
+                "validated": False,
+                "reason": "altcoin signal unavailable",
+                "is_binding": False,
+                "signal_authority": "dashboard_fallback_advisory",
+                "signal_note": "altcoin service unavailable - advisory only",
+            }
     if _btc_service is None:
         raise HTTPException(503, "BTC service not initialised")
     try:
@@ -1280,23 +2248,33 @@ def get_btc_signal(interval: str = "5m"):
                 "reason": "dashboard BTC signal unavailable",
                 "is_binding": False,
                 "signal_authority": "dashboard_fallback_advisory",
-                "signal_note": "btc_intelligence unavailable — advisory only",
+                "signal_note": "btc_intelligence unavailable - advisory only",
             }
         except Exception:
             raise HTTPException(503, "BTC signal unavailable")
 
 
 @app.get("/api/btc/market-context")
-def get_btc_market_context(interval: str = "5m"):
-    """Current BTC macro/derivatives context used by the live signal."""
+def get_btc_market_context(interval: str = "5m", symbol: str = "BTCUSDT"):
+    """Current context used by the live signal (BTC default, ETH/SOL compatible)."""
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        sig = _alt_signal_payload(sym, interval=interval)
+        return sig.get("market_context", {})
     if _btc_service is None:
         raise HTTPException(503, "BTC service not initialised")
     return _btc_service.get_market_context(interval=interval)
 
 
 @app.get("/api/btc/signal/history")
-def signal_history(limit: int = 50):
-    return {"signals": get_signal_history(limit), "stats": get_signal_stats()}
+def signal_history(limit: int = 50, symbol: str = "BTCUSDT"):
+    signals = get_signal_history(limit)
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        signals = [s for s in signals if str(s.get("ticker", "")).upper() == sym]
+    elif sym == "BTCUSDT":
+        signals = [s for s in signals if str(s.get("ticker", "BTCUSDT")).upper() == "BTCUSDT"]
+    return {"signals": signals, "stats": get_signal_stats()}
 
 
 @app.get("/api/btc/signal/stats")
@@ -1371,20 +2349,27 @@ def btc_system_report(interval: str = "5m"):
 
 
 @app.get("/api/btc/markers")
-def get_btc_markers(interval: str = "1d", limit: int = 1000):
-    """Historical LONG/SHORT markers for BTC chart overlay."""
+def get_btc_markers(interval: str = "1d", limit: int = 1000, symbol: str = "BTCUSDT"):
+    """Historical LONG/SHORT markers (BTC default, ETH/SOL compatible)."""
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        return _alt_markers(sym, interval=interval, limit=min(max(limit, 100), 1200))
     if _btc_service is None:
         raise HTTPException(503, "BTC service not initialised")
     return _btc_service.get_signal_markers(interval=interval, limit=limit)
 
 
 @app.get("/api/btc/sr-levels")
-def get_sr_levels(interval: str = "15m", limit: int = 200):
+def get_sr_levels(interval: str = "15m", limit: int = 200, symbol: str = "BTCUSDT"):
     """Support and resistance levels computed from recent candles."""
-    if _btc_service is None:
+    sym = _normalize_crypto_symbol(symbol)
+    if (not _is_alt_symbol(sym)) and _btc_service is None:
         raise HTTPException(503, "BTC service not initialised")
     try:
-        df = _btc_service.get_recent_frame(interval=interval, limit=limit)
+        if _is_alt_symbol(sym):
+            df = _alt_frame(sym, interval=interval, limit=limit)
+        else:
+            df = _btc_service.get_recent_frame(interval=interval, limit=limit)
         if df is None or df.empty:
             return {"support": [], "resistance": [], "interval": interval}
         highs = df["High"].values
@@ -1425,12 +2410,16 @@ def get_sr_levels(interval: str = "15m", limit: int = 200):
 
 
 @app.get("/api/btc/liquidity-zones")
-def get_liquidity_zones(interval: str = "15m", limit: int = 300):
+def get_liquidity_zones(interval: str = "15m", limit: int = 300, symbol: str = "BTCUSDT"):
     """Liquidity zones (high-volume price clusters) from recent candles."""
-    if _btc_service is None:
+    sym = _normalize_crypto_symbol(symbol)
+    if (not _is_alt_symbol(sym)) and _btc_service is None:
         raise HTTPException(503, "BTC service not initialised")
     try:
-        df = _btc_service.get_recent_frame(interval=interval, limit=limit)
+        if _is_alt_symbol(sym):
+            df = _alt_frame(sym, interval=interval, limit=limit)
+        else:
+            df = _btc_service.get_recent_frame(interval=interval, limit=limit)
         if df is None or df.empty:
             return {"zones": [], "interval": interval}
         closes  = df["Close"].values
@@ -1458,12 +2447,37 @@ def get_liquidity_zones(interval: str = "15m", limit: int = 300):
 
 
 @app.get("/api/btc/news")
-def btc_news(limit: int = 8):
+def btc_news(limit: int = 8, symbol: str = "BTCUSDT"):
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        from src.data.news_feed import get_news_for_asset
+        return {"news": get_news_for_asset(_asset_short(sym), "crypto", limit)}
     return {"news": get_btc_news(limit)}
 
 
 @app.get("/api/btc/orderflow")
-async def btc_orderflow_proxy():
+async def btc_orderflow_proxy(symbol: str = "BTCUSDT", interval: str = Query("15m")):
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        sig = _alt_signal_payload(sym, interval=interval)
+        ctx = sig.get("market_context", {}) if isinstance(sig.get("market_context"), dict) else {}
+        liq = ctx.get("liquidity", {}) if isinstance(ctx.get("liquidity"), dict) else {}
+        binance = liq.get("binance", {}) if isinstance(liq.get("binance"), dict) else {}
+        decision = str(sig.get("validated_signal") or sig.get("signal") or "HOLD").upper()
+        if decision == "LONG":
+            decision_state = "FAVOR_LONG"
+        elif decision == "SHORT":
+            decision_state = "FAVOR_SHORT"
+        else:
+            decision_state = "NO_TRADE"
+        return {
+            "decision_state": decision_state,
+            "decision": decision_state,
+            "reason": sig.get("reason", "--"),
+            "obi": float(binance.get("book_imbalance", 0.0) or 0.0),
+            "cvd_slope": float(ctx.get("obv_slope", 0.0) or 0.0),
+            "stale": False,
+        }
     return await _btc_proxy_payload(
         name="orderflow",
         redis_key="btc:orderflow",
@@ -1472,7 +2486,32 @@ async def btc_orderflow_proxy():
 
 
 @app.get("/api/btc/volume")
-async def btc_volume_proxy():
+async def btc_volume_proxy(symbol: str = "BTCUSDT", interval: str = Query("15m")):
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        sig = _alt_signal_payload(sym, interval=interval)
+        entry = float(sig.get("entry_price", 0.0) or 0.0)
+        tp = float(sig.get("take_profit", 0.0) or 0.0)
+        sl = float(sig.get("stop_loss", 0.0) or 0.0)
+        vol_ratio = float(((sig.get("market_context") or {}).get("volume_ratio", 1.0) or 1.0))
+        decision = str(sig.get("validated_signal") or sig.get("signal") or "HOLD").upper()
+        if decision == "LONG":
+            decision_state = "FAVOR_LONG"
+        elif decision == "SHORT":
+            decision_state = "FAVOR_SHORT"
+        else:
+            decision_state = "NO_TRADE"
+        return {
+            "decision_state": decision_state,
+            "decision": decision_state,
+            "poc_price": round(entry, 4) if entry > 0 else None,
+            "hvn": [round(tp, 4)] if tp > 0 else [],
+            "lvn": [round(sl, 4)] if sl > 0 else [],
+            "distance_from_poc_pct": 0.0,
+            "window_minutes": 120,
+            "volume_ratio": round(vol_ratio, 4),
+            "stale": False,
+        }
     return await _btc_proxy_payload(
         name="volume",
         redis_key="btc:volprofile",
@@ -1481,7 +2520,35 @@ async def btc_volume_proxy():
 
 
 @app.get("/api/btc/volatility")
-async def btc_volatility_proxy():
+async def btc_volatility_proxy(symbol: str = "BTCUSDT", interval: str = Query("15m")):
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        sig = _alt_signal_payload(sym, interval=interval)
+        ctx = sig.get("market_context", {}) if isinstance(sig.get("market_context"), dict) else {}
+        atr_pct = float(ctx.get("atr_pct", 0.0) or 0.0)
+        if atr_pct < 0.6:
+            regime = "LOW"
+            tradeability = "REDUCE_SIZE"
+            size_multiplier = 0.7
+        elif atr_pct < 1.8:
+            regime = "NORMAL"
+            tradeability = "ALLOW"
+            size_multiplier = 1.0
+        elif atr_pct < 2.8:
+            regime = "EXPANSION"
+            tradeability = "CAUTION"
+            size_multiplier = 0.75
+        else:
+            regime = "HIGH_VOL"
+            tradeability = "NO_TRADE"
+            size_multiplier = 0.4
+        return {
+            "tradeability": tradeability,
+            "regime": regime,
+            "atr_pct": round(atr_pct, 4),
+            "size_multiplier": size_multiplier,
+            "stale": False,
+        }
     return await _btc_proxy_payload(
         name="volatility",
         redis_key="btc:volatility",
@@ -1490,7 +2557,23 @@ async def btc_volatility_proxy():
 
 
 @app.get("/api/btc/execution")
-async def btc_execution_proxy():
+async def btc_execution_proxy(symbol: str = "BTCUSDT", interval: str = Query("15m")):
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        sig = _alt_signal_payload(sym, interval=interval)
+        plan = _alt_execution_plan_from_signal(sig)
+        return {
+            "symbol": sym,
+            "decision": sig.get("validated_signal") or sig.get("signal") or "HOLD",
+            "execution_plan": plan,
+            "entry_zone": plan.get("entry_zone"),
+            "stop_loss": plan.get("stop_loss"),
+            "take_profit": plan.get("take_profit"),
+            "take_profit_2": plan.get("take_profit_2"),
+            "expected_rr": plan.get("expected_rr"),
+            "slippage_risk": plan.get("slippage_risk"),
+            "stale": False,
+        }
     return await _btc_proxy_payload(
         name="execution",
         redis_key="btc:execution",
@@ -1499,7 +2582,16 @@ async def btc_execution_proxy():
 
 
 @app.get("/api/btc/decision-intelligence")
-async def btc_decision_intelligence_proxy(interval: str = Query("15m")):
+async def btc_decision_intelligence_proxy(interval: str = Query("15m"), symbol: str = "BTCUSDT"):
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        sig = _alt_signal_payload(sym, interval=interval)
+        payload = _alt_decision_intelligence_from_signal(sig)
+        normalized = _normalize_decision_intelligence_payload(payload)
+        if not isinstance(normalized.get("decision_breakdown"), dict):
+            normalized["decision_breakdown"] = {}
+        return normalized
+
     iv = interval if interval in INTERVAL_TO_MS else "15m"
     payload = await _btc_proxy_payload(
         name="decision_intelligence",
@@ -1535,7 +2627,9 @@ async def btc_decision_intelligence_proxy(interval: str = Query("15m")):
             ):
                 payload = _minimal_decision_intelligence_from_signal(
                     live_sig,
-                    source="dashboard_signal_fallback",
+                    source="dashboard_signal_live",
+                    stale=False,
+                    degraded=False,
                 )
         except Exception as exc:
             logger.warning("decision-intelligence dashboard signal fallback failed: %s", exc)
@@ -1594,7 +2688,14 @@ async def btc_decision_intelligence_proxy(interval: str = Query("15m")):
 
 
 @app.get("/api/btc/probability")
-async def btc_probability_proxy():
+async def btc_probability_proxy(symbol: str = "BTCUSDT", interval: str = Query("15m")):
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        sig = _alt_signal_payload(sym, interval=interval)
+        prob = _alt_prob_from_signal(sig)
+        prob["stale"] = False
+        return prob
+
     payload = await _btc_proxy_payload(
         name="probability",
         redis_key=["btc:probability", "btc:intelligence", "btc:signal"],
@@ -1619,7 +2720,11 @@ async def btc_probability_proxy():
 
 
 @app.get("/api/btc/execution-plan")
-async def btc_execution_plan_proxy():
+async def btc_execution_plan_proxy(symbol: str = "BTCUSDT", interval: str = Query("15m")):
+    sym = _normalize_crypto_symbol(symbol)
+    if _is_alt_symbol(sym):
+        sig = _alt_signal_payload(sym, interval=interval)
+        return _alt_execution_plan_from_signal(sig)
     return await _btc_proxy_payload(
         name="execution_plan",
         redis_key="btc:execution_plan",
@@ -2915,13 +4020,34 @@ def get_portfolio():
 # Paper Trading Endpoints
 # ------------------------------------------------------------------
 
+def _paper_user_key(request: Request) -> str:
+    user_id, email = _request_user_identity(request)
+    key = str(user_id or "").strip()
+    if key:
+        return key
+    fallback = str(email or "").strip()
+    if fallback:
+        return fallback
+    return "local-default"
+
+
+def _paper_engine_for_request(request: Request):
+    from src.paper_trading import get_user_paper_engine
+
+    return get_user_paper_engine(_paper_user_key(request))
+
+
+def _paper_executor_for_request(request: Request):
+    from src.paper_trading import get_user_auto_executor
+
+    return get_user_auto_executor(_paper_user_key(request))
+
+
 @app.get("/api/paper/portfolio")
-def paper_portfolio():
+def paper_portfolio(request: Request):
     """Live portfolio metrics + positions."""
     try:
-        from src.paper_trading import get_paper_engine
-
-        engine = get_paper_engine()
+        engine = _paper_engine_for_request(request)
 
         # Push live BTC mark price into paper engine so SL/TP auto-close works for manual trades.
         try:
@@ -3076,23 +4202,19 @@ def paper_portfolio():
 
 
 @app.get("/api/paper/trades")
-def paper_trades(limit: int = 50):
+def paper_trades(request: Request, limit: int = 50):
     """Closed trade history."""
-    from src.paper_trading import get_paper_engine
-
-    return get_paper_engine().get_closed_trades(limit)
+    return _paper_engine_for_request(request).get_closed_trades(limit)
 
 
 @app.post("/api/paper/execute")
-async def paper_execute(payload: dict):
+async def paper_execute(payload: dict, request: Request):
     """
     Manually execute a paper trade.
     Body: { ticker, direction|signal, entry_price, stop_loss|sl,
             take_profit|tp1|tp, confidence, asset_class, mode }
     """
-    from src.paper_trading import get_paper_engine
-
-    engine = get_paper_engine()
+    engine = _paper_engine_for_request(request)
     mode = "auto" if str(payload.get("mode", "manual")).lower() == "auto" else "manual"
     signal = {
         "ticker": str(payload.get("ticker") or payload.get("asset") or "").strip().upper(),
@@ -3124,14 +4246,12 @@ async def paper_execute(payload: dict):
 
 
 @app.post("/api/paper/close")
-async def paper_close(payload: dict):
+async def paper_close(payload: dict, request: Request):
     """
     Close an open position.
     Body: { ticker, exit_price, reason }
     """
-    from src.paper_trading import get_paper_engine
-
-    engine = get_paper_engine()
+    engine = _paper_engine_for_request(request)
     ticker = str(payload.get("ticker", "")).strip().upper()
     if not ticker:
         return {"success": False, "error": "Ticker is required"}
@@ -3192,21 +4312,19 @@ async def paper_close(payload: dict):
 
 
 @app.post("/api/paper/mode")
-async def paper_set_mode(payload: dict):
+async def paper_set_mode(payload: dict, request: Request):
     """
     Set auto/manual mode.
     Body: { mode: "auto" | "manual" }
     """
     import threading
 
-    from src.paper_trading import get_auto_executor, get_paper_engine
-
     mode = str(payload.get("mode", "manual")).lower()
     mode = "auto" if mode == "auto" else "manual"
-    engine = get_paper_engine()
+    engine = _paper_engine_for_request(request)
     engine.set_mode(mode)
 
-    executor = get_auto_executor()
+    executor = _paper_executor_for_request(request)
     if mode == "auto" and not executor._running:
         t = threading.Thread(target=executor.start, daemon=True)
         t.start()
@@ -3217,38 +4335,190 @@ async def paper_set_mode(payload: dict):
 
 
 @app.post("/api/paper/reset")
-async def paper_reset(payload: dict):
+async def paper_reset(payload: dict, request: Request):
     """Reset paper account. Body: { capital: float }"""
-    from src.paper_trading import get_paper_engine
-
     capital = float(payload.get("capital", 100000))
-    get_paper_engine().reset(capital)
+    _paper_engine_for_request(request).reset(capital)
     return {"success": True, "capital": capital}
 
 
 @app.get("/api/paper/pending")
-def paper_pending():
+def paper_pending(request: Request):
     """Get signals waiting for manual approval."""
-    from src.paper_trading import get_auto_executor
-
-    return get_auto_executor().get_pending_signals()
+    return _paper_executor_for_request(request).get_pending_signals()
 
 
 @app.post("/api/paper/approve")
-async def paper_approve(payload: dict):
+async def paper_approve(payload: dict, request: Request):
     """Approve a pending signal. Body: { ticker, trade_id }"""
-    from src.paper_trading import get_auto_executor
-
-    return get_auto_executor().approve_signal(payload["ticker"], payload["trade_id"])
+    return _paper_executor_for_request(request).approve_signal(payload["ticker"], payload["trade_id"])
 
 
 @app.post("/api/paper/reject")
-async def paper_reject(payload: dict):
+async def paper_reject(payload: dict, request: Request):
     """Reject a pending signal. Body: { ticker, trade_id }"""
-    from src.paper_trading import get_auto_executor
-
-    get_auto_executor().reject_signal(payload["ticker"], payload["trade_id"])
+    _paper_executor_for_request(request).reject_signal(payload["ticker"], payload["trade_id"])
     return {"success": True}
+
+
+# ─── BINANCE LIVE ACCOUNT ────────────────────────────────────────────────────
+
+def _binance_signed_request(api_key: str, api_secret: str, path: str, params: dict | None = None) -> Any:
+    """Make an HMAC-SHA256 signed GET request to Binance REST API."""
+    import hmac as _hmac
+    base_params = dict(params or {})
+    base_params["timestamp"] = int(time.time() * 1000)
+    base_params["recvWindow"] = 10000
+    query_string = "&".join(f"{k}={v}" for k, v in sorted(base_params.items()))
+    signature = _hmac.new(
+        api_secret.encode("utf-8"),
+        query_string.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    url = f"https://api.binance.com{path}?{query_string}&signature={signature}"
+    resp = httpx.get(url, headers={"X-MBX-APIKEY": api_key}, timeout=8.0)
+    if resp.status_code == 200:
+        return resp.json()
+    raise ValueError(f"Binance {resp.status_code}: {resp.text[:200]}")
+
+
+def _binance_get_usdt_prices(assets: list[str]) -> dict[str, float]:
+    """Fetch USDT prices for a list of assets using public ticker endpoint."""
+    prices: dict[str, float] = {"USDT": 1.0}
+    symbols_needed = [a for a in assets if a != "USDT"]
+    if not symbols_needed:
+        return prices
+    try:
+        symbols_param = "[" + ",".join(f'"{a}USDT"' for a in symbols_needed) + "]"
+        resp = httpx.get(
+            "https://api.binance.com/api/v3/ticker/price",
+            params={"symbols": symbols_param},
+            timeout=6.0,
+        )
+        if resp.status_code == 200:
+            for item in resp.json():
+                sym = str(item.get("symbol", ""))
+                if sym.endswith("USDT"):
+                    asset = sym[:-4]
+                    try:
+                        prices[asset] = float(item["price"])
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return prices
+
+
+@app.get("/api/binance/account")
+def binance_account(request: Request):
+    """Return live Binance spot account balance. Requires user to have saved API keys."""
+    uid, _ = _request_user_identity(request)
+    user_key = uid or "default"
+
+    # Serve from cache if fresh
+    cached = _binance_account_cache.get(user_key)
+    if cached and (time.time() - cached["ts"]) < _BINANCE_ACCOUNT_CACHE_TTL:
+        return cached["data"]
+
+    # Load and decrypt API keys from user profile
+    profiles = _load_user_profiles()
+    rec = profiles.get(user_key, {})
+    api_key = _decrypt_profile_secret(str(rec.get("binance_api_key", "") or ""))
+    api_secret = _decrypt_profile_secret(str(rec.get("binance_api_secret", "") or ""))
+
+    if not api_key or not api_secret:
+        result = {"connected": False, "error": "No API keys configured", "balances": []}
+        return result
+
+    try:
+        account_data = _binance_signed_request(api_key, api_secret, "/api/v3/account")
+
+        can_trade = bool(account_data.get("canTrade", False))
+        raw_balances = account_data.get("balances", [])
+
+        # Filter to non-zero balances only
+        non_zero = [
+            b for b in raw_balances
+            if float(b.get("free", 0)) > 0 or float(b.get("locked", 0)) > 0
+        ]
+
+        asset_names = [b["asset"] for b in non_zero]
+        prices = _binance_get_usdt_prices(asset_names)
+
+        balances = []
+        total_usdt = 0.0
+        for b in non_zero:
+            asset = str(b["asset"])
+            free = float(b.get("free", 0))
+            locked = float(b.get("locked", 0))
+            price = prices.get(asset, 0.0)
+            usdt_val = round((free + locked) * price, 2) if price > 0 else None
+            if usdt_val is not None:
+                total_usdt += usdt_val
+            balances.append({
+                "asset": asset,
+                "free": round(free, 8),
+                "locked": round(locked, 8),
+                "usdt_value": usdt_val,
+            })
+
+        # Sort by USDT value descending
+        balances.sort(key=lambda x: x["usdt_value"] or 0, reverse=True)
+
+        result = {
+            "connected": True,
+            "can_trade": can_trade,
+            "total_usdt_value": round(total_usdt, 2),
+            "balances": balances,
+            "fetched_at": datetime.now(timezone.utc).isoformat(),
+        }
+        _binance_account_cache[user_key] = {"ts": time.time(), "data": result}
+        return result
+
+    except ValueError as e:
+        err = str(e)
+        if "401" in err or "403" in err or "-2014" in err or "-2015" in err:
+            return {"connected": False, "error": "Invalid API keys — check key permissions", "balances": []}
+        logger.warning("Binance account fetch failed: %s", e)
+        return {"connected": False, "error": "Binance request failed", "balances": []}
+    except Exception as e:
+        logger.warning("Binance account endpoint error: %s", e)
+        return {"connected": False, "error": "Internal error", "balances": []}
+
+
+@app.get("/api/binance/open-orders")
+def binance_open_orders(request: Request):
+    """Return all open Binance spot orders for the authenticated user."""
+    uid, _ = _request_user_identity(request)
+    user_key = uid or "default"
+
+    profiles = _load_user_profiles()
+    rec = profiles.get(user_key, {})
+    api_key = _decrypt_profile_secret(str(rec.get("binance_api_key", "") or ""))
+    api_secret = _decrypt_profile_secret(str(rec.get("binance_api_secret", "") or ""))
+
+    if not api_key or not api_secret:
+        return []
+
+    try:
+        orders = _binance_signed_request(api_key, api_secret, "/api/v3/openOrders")
+        result = []
+        for o in (orders if isinstance(orders, list) else []):
+            result.append({
+                "symbol": o.get("symbol"),
+                "side": o.get("side"),
+                "type": o.get("type"),
+                "origQty": o.get("origQty"),
+                "executedQty": o.get("executedQty"),
+                "price": o.get("price"),
+                "stopPrice": o.get("stopPrice"),
+                "status": o.get("status"),
+                "time": o.get("time"),
+            })
+        return result
+    except Exception as e:
+        logger.warning("Binance open-orders endpoint error: %s", e)
+        return []
 
 
 @app.get("/api/history")
@@ -3382,12 +4652,75 @@ def get_snapshot():
 
 @app.post("/auth/token")
 async def issue_dashboard_token(payload: dict):
+    if _auth_provider() == "supabase":
+        raise HTTPException(status_code=404, detail="Local token auth disabled (provider=supabase)")
     cfg = _auth_config()
     username = payload.get("username", "")
     password = payload.get("password", "")
     if username != cfg.get("username") or password != cfg.get("password"):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     return {"access_token": _issue_token(username), "token_type": "bearer"}
+
+
+@app.get("/api/auth-check")
+def auth_check(request: Request):
+    user_id, email = _request_user_identity(request)
+    return {"ok": True, "user_id": user_id, "email": email}
+
+
+@app.get("/api/user/profile")
+def get_user_profile(request: Request):
+    user_id, email = _request_user_identity(request)
+    user_key = str(user_id or email or "").strip()
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Dashboard auth required")
+    profiles = _load_user_profiles()
+    rec = profiles.get(user_key, {})
+    return _profile_summary(user_key, email, rec)
+
+
+@app.post("/api/user/profile")
+def update_user_profile(payload: dict, request: Request):
+    user_id, email = _request_user_identity(request)
+    user_key = str(user_id or email or "").strip()
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Dashboard auth required")
+
+    profiles = _load_user_profiles()
+    now_iso = datetime.now(timezone.utc).isoformat()
+    rec: dict[str, Any] = dict(profiles.get(user_key, {}))
+    if not rec.get("created_at"):
+        rec["created_at"] = now_iso
+
+    rec["user_id"] = user_key
+    rec["email"] = str(email or rec.get("email") or "").strip().lower()
+    rec["updated_at"] = now_iso
+
+    if "display_name" in payload:
+        rec["display_name"] = str(payload.get("display_name") or "").strip()
+
+    if bool(payload.get("clear_binance_keys")):
+        rec["binance_api_key"] = ""
+        rec["binance_api_secret"] = ""
+        rec["binance_access_token"] = ""
+    else:
+        if "binance_api_key" in payload:
+            api_key = str(payload.get("binance_api_key") or "").strip()
+            if api_key:
+                rec["binance_api_key"] = _encrypt_profile_secret(api_key)
+        if "binance_api_secret" in payload:
+            api_secret = str(payload.get("binance_api_secret") or "").strip()
+            if api_secret:
+                rec["binance_api_secret"] = _encrypt_profile_secret(api_secret)
+        if "binance_access_token" in payload:
+            access_token = str(payload.get("binance_access_token") or "").strip()
+            if access_token:
+                rec["binance_access_token"] = _encrypt_profile_secret(access_token)
+
+    profiles[user_key] = rec
+    _save_user_profiles(profiles)
+
+    return {"success": True, "profile": _profile_summary(user_key, email, rec)}
 
 
 @app.get("/api/factors")
@@ -3756,9 +5089,656 @@ def get_options_intelligence():
 # HTML Pages
 # ------------------------------------------------------------------
 
+def _frontend_auth_config() -> dict[str, Any]:
+    supa = _supabase_config()
+    return {
+        "enabled": _auth_enabled(),
+        "provider": _auth_provider(),
+        "supabaseUrl": supa["url"],
+        "supabaseAnonKey": supa["anon_key"],
+    }
+
+
+def _supabase_auth_bootstrap() -> str:
+    cfg_json = json.dumps(_frontend_auth_config())
+    bootstrap = """
+<script>
+(function () {
+  const AUTH_CFG = __AUTH_CFG__;
+  window.__DASHBOARD_AUTH__ = AUTH_CFG;
+  if (!AUTH_CFG || !AUTH_CFG.enabled || AUTH_CFG.provider !== "supabase") return;
+
+  const SUPABASE_URL = String(AUTH_CFG.supabaseUrl || "").trim();
+  const SUPABASE_ANON_KEY = String(AUTH_CFG.supabaseAnonKey || "").trim();
+  const SUPABASE_CONFIG_READY = !!(SUPABASE_URL && SUPABASE_ANON_KEY);
+
+  let supabaseClient = null;
+  let supabasePromise = null;
+  let currentToken = "";
+  let uiReady = false;
+
+  function projectRefFromUrl(url) {
+    try {
+      return new URL(url).hostname.split(".")[0] || "";
+    } catch (_err) {
+      return "";
+    }
+  }
+
+  const projectRef = projectRefFromUrl(SUPABASE_URL);
+  const storageKey = projectRef ? ("sb-" + projectRef + "-auth-token") : "";
+
+  function readStoredToken() {
+    if (!storageKey) return "";
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return "";
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === "object") {
+        if (typeof parsed.access_token === "string" && parsed.access_token) return parsed.access_token;
+        if (parsed.currentSession && typeof parsed.currentSession.access_token === "string") return parsed.currentSession.access_token;
+        if (Array.isArray(parsed) && parsed[0] && typeof parsed[0].access_token === "string") return parsed[0].access_token;
+      }
+    } catch (_err) {}
+    return "";
+  }
+
+  currentToken = readStoredToken();
+
+  function isInternalApi(urlValue) {
+    try {
+      const u = new URL(urlValue, window.location.origin);
+      if (u.origin !== window.location.origin) return false;
+      return u.pathname.startsWith("/api/");
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = async function (input, init) {
+    let targetUrl = "";
+    if (typeof input === "string") targetUrl = input;
+    else if (input && input.url) targetUrl = input.url;
+
+    if (!isInternalApi(targetUrl)) {
+      return nativeFetch(input, init);
+    }
+
+    const headers = new Headers((init && init.headers) || (input instanceof Request ? input.headers : undefined));
+    if (currentToken) headers.set("Authorization", "Bearer " + currentToken);
+
+    if (input instanceof Request) {
+      const nextInit = Object.assign({}, init || {});
+      nextInit.headers = headers;
+      return nativeFetch(input, nextInit);
+    }
+    const nextInit = Object.assign({}, init || {});
+    nextInit.headers = headers;
+    return nativeFetch(input, nextInit);
+  };
+
+  const NativeWebSocket = window.WebSocket;
+  function AuthWebSocket(url, protocols) {
+    let nextUrl = url;
+    try {
+      const u = new URL(url, window.location.origin);
+      if (u.origin === window.location.origin && u.pathname === "/ws" && currentToken && !u.searchParams.get("token")) {
+        u.searchParams.set("token", currentToken);
+      }
+      nextUrl = u.toString();
+    } catch (_err) {}
+    return protocols ? new NativeWebSocket(nextUrl, protocols) : new NativeWebSocket(nextUrl);
+  }
+  AuthWebSocket.prototype = NativeWebSocket.prototype;
+  Object.setPrototypeOf(AuthWebSocket, NativeWebSocket);
+  window.WebSocket = AuthWebSocket;
+
+  function ensureUi() {
+    if (uiReady) return;
+    if (!document.body) return;
+    uiReady = true;
+    const style = document.createElement("style");
+    style.textContent = `
+      .sb-auth-overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:#020617;z-index:2147483647}
+      .sb-auth-card{width:min(420px,92vw);padding:20px;border-radius:14px;border:1px solid rgba(148,163,184,.3);background:#0f172a;color:#e2e8f0;font-family:system-ui,sans-serif}
+      .sb-auth-title{font-size:18px;font-weight:700;margin:0 0 8px}
+      .sb-auth-sub{font-size:12px;color:#94a3b8;margin:0 0 14px}
+      .sb-auth-tabs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:0 0 10px}
+      .sb-auth-tab{padding:8px 10px;border-radius:8px;border:1px solid rgba(148,163,184,.35);background:#111c31;color:#b7c6de;font-weight:700;cursor:pointer}
+      .sb-auth-tab.active{background:#1d4ed8;border-color:#1d4ed8;color:#eaf2ff}
+      .sb-auth-pane{display:none}
+      .sb-auth-pane.active{display:block}
+      .sb-auth-inp{width:100%;padding:10px;border-radius:8px;border:1px solid rgba(148,163,184,.35);background:#0b1220;color:#e2e8f0;margin-bottom:8px}
+      .sb-auth-row{display:flex;gap:8px}
+      .sb-auth-btn{flex:1;padding:10px;border-radius:8px;border:1px solid rgba(148,163,184,.35);background:#1e293b;color:#e2e8f0;font-weight:600;cursor:pointer}
+      .sb-auth-btn.primary{background:#0ea5e9;border-color:#0ea5e9;color:#06253a}
+      .sb-auth-btn.ghost{background:#0b1220;color:#b7c6de}
+      .sb-auth-msg{min-height:18px;font-size:12px;color:#fda4af;margin-top:8px}
+      .sb-auth-user{display:none;align-items:center;gap:8px;padding:8px 10px;border-radius:999px;border:1px solid rgba(148,163,184,.35);background:rgba(15,23,42,.95);color:#e2e8f0;font:12px/1.2 system-ui,sans-serif;max-width:min(94vw,480px)}
+      .sb-auth-user button{padding:4px 8px;border-radius:999px;border:1px solid rgba(148,163,184,.35);background:#0b1220;color:#e2e8f0;cursor:pointer;flex-shrink:0}
+      .sb-auth-user #sb-auth-user-email{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+      .sb-auth-user-row{position:relative;z-index:9000;display:flex;justify-content:flex-end;padding:10px 16px 0 16px}
+      .sb-profile-fab{display:none;position:fixed;right:16px;bottom:16px;z-index:9002;padding:10px 14px;border-radius:999px;border:1px solid rgba(148,163,184,.4);background:#0b1220;color:#dbeafe;font-weight:700;cursor:pointer}
+      .sb-profile-panel{display:none;position:fixed;right:16px;bottom:64px;z-index:9002;width:min(420px,94vw);padding:14px;border-radius:12px;border:1px solid rgba(148,163,184,.35);background:rgba(2,6,23,.98);color:#e2e8f0}
+      .sb-profile-title{font-size:15px;font-weight:700;margin:0 0 8px}
+      .sb-profile-sub{font-size:11px;color:#93c5fd;margin:0 0 10px}
+      .sb-profile-label{display:block;font-size:11px;color:#94a3b8;margin:8px 0 4px}
+      .sb-profile-inp{width:100%;padding:9px;border-radius:8px;border:1px solid rgba(148,163,184,.35);background:#0b1220;color:#e2e8f0}
+      .sb-profile-help{font-size:11px;color:#94a3b8;margin-top:8px}
+      .sb-profile-actions{display:flex;gap:8px;margin-top:10px}
+      .sb-profile-btn{flex:1;padding:9px;border-radius:8px;border:1px solid rgba(148,163,184,.35);background:#1e293b;color:#e2e8f0;font-weight:700;cursor:pointer}
+      .sb-profile-btn.primary{background:#0284c7;border-color:#0284c7;color:#e0f2fe}
+      .sb-profile-msg{min-height:16px;font-size:12px;color:#fda4af;margin-top:8px}
+      body.sb-auth-locked > *:not(#sb-auth-overlay){display:none !important}
+      body.sb-auth-locked #sb-profile-open, body.sb-auth-locked #sb-profile-panel{display:none !important}
+    `;
+    document.head.appendChild(style);
+    document.body.insertAdjacentHTML("beforeend", `
+      <div id="sb-auth-overlay" class="sb-auth-overlay">
+        <div class="sb-auth-card">
+          <h3 class="sb-auth-title">Secure Login</h3>
+          <p class="sb-auth-sub">Use your Supabase account to access trading dashboard.</p>
+          <div class="sb-auth-tabs">
+            <button id="sb-tab-login" class="sb-auth-tab active" type="button">Login</button>
+            <button id="sb-tab-signup" class="sb-auth-tab" type="button">Sign Up</button>
+          </div>
+
+          <div id="sb-pane-login" class="sb-auth-pane active">
+            <input id="sb-auth-email" class="sb-auth-inp" type="email" placeholder="Email" autocomplete="username" />
+            <input id="sb-auth-password" class="sb-auth-inp" type="password" placeholder="Password" autocomplete="current-password" />
+            <div class="sb-auth-row">
+              <button id="sb-auth-login" class="sb-auth-btn primary" type="button">Login</button>
+            </div>
+            <div class="sb-auth-row">
+              <button id="sb-auth-forgot" class="sb-auth-btn ghost" type="button">Forgot password</button>
+            </div>
+          </div>
+
+          <div id="sb-pane-signup" class="sb-auth-pane">
+            <input id="sb-signup-email" class="sb-auth-inp" type="email" placeholder="Email" autocomplete="email" />
+            <input id="sb-signup-password" class="sb-auth-inp" type="password" placeholder="Create password" autocomplete="new-password" />
+            <input id="sb-signup-confirm" class="sb-auth-inp" type="password" placeholder="Confirm password" autocomplete="new-password" />
+            <div class="sb-auth-row">
+              <button id="sb-auth-signup" class="sb-auth-btn primary" type="button">Create Account</button>
+            </div>
+          </div>
+          <div id="sb-auth-msg" class="sb-auth-msg"></div>
+        </div>
+      </div>
+      <div class="sb-auth-user-row">
+        <div id="sb-auth-user" class="sb-auth-user">
+          <span id="sb-auth-user-email"></span>
+          <button id="sb-auth-logout" type="button">Logout</button>
+        </div>
+      </div>
+      <button id="sb-profile-open" class="sb-profile-fab" type="button">Profile</button>
+      <div id="sb-profile-panel" class="sb-profile-panel">
+        <h4 class="sb-profile-title">Account Profile</h4>
+        <p class="sb-profile-sub">Add Binance keys for your own real account execution.</p>
+        <label class="sb-profile-label" for="sb-profile-email">Email</label>
+        <input id="sb-profile-email" class="sb-profile-inp" type="text" readonly />
+        <label class="sb-profile-label" for="sb-profile-display">Display Name</label>
+        <input id="sb-profile-display" class="sb-profile-inp" type="text" placeholder="Optional name" />
+        <label class="sb-profile-label" for="sb-profile-api-key">Binance API Key</label>
+        <input id="sb-profile-api-key" class="sb-profile-inp" type="text" placeholder="Paste API key" />
+        <label class="sb-profile-label" for="sb-profile-access-token">Binance Access Token (optional)</label>
+        <input id="sb-profile-access-token" class="sb-profile-inp" type="text" placeholder="Paste access token" />
+        <label class="sb-profile-label" for="sb-profile-api-secret">Binance API Secret</label>
+        <input id="sb-profile-api-secret" class="sb-profile-inp" type="password" placeholder="Leave blank to keep saved secret" />
+        <div class="sb-profile-help" id="sb-profile-status"></div>
+        <div class="sb-profile-actions">
+          <button id="sb-profile-save" class="sb-profile-btn primary" type="button">Save</button>
+          <button id="sb-profile-clear" class="sb-profile-btn" type="button">Clear Keys</button>
+          <button id="sb-profile-close" class="sb-profile-btn" type="button">Close</button>
+        </div>
+        <div id="sb-profile-msg" class="sb-profile-msg"></div>
+      </div>
+    `);
+    document.body.classList.add("sb-auth-locked");
+  }
+
+  function setMessage(msg, isError) {
+    const el = document.getElementById("sb-auth-msg");
+    if (!el) return;
+    el.textContent = msg || "";
+    el.style.color = isError ? "#fda4af" : "#86efac";
+  }
+
+  async function verifyDashboardAccess(token) {
+    if (!token) return false;
+    try {
+      const res = await nativeFetch("/api/auth-check", {
+        headers: { "Authorization": "Bearer " + token },
+        cache: "no-store",
+      });
+      return !!res.ok;
+    } catch (_err) {
+      return false;
+    }
+  }
+
+  async function renderSession(session) {
+    const overlay = document.getElementById("sb-auth-overlay");
+    const userChip = document.getElementById("sb-auth-user");
+    const userEmail = document.getElementById("sb-auth-user-email");
+    const profileOpen = document.getElementById("sb-profile-open");
+    const profilePanel = document.getElementById("sb-profile-panel");
+    const email = session && session.user ? (session.user.email || session.user.id || "") : "";
+    currentToken = session && session.access_token ? session.access_token : "";
+    if (!session) {
+      if (overlay) overlay.style.display = "flex";
+      if (document.body) document.body.classList.add("sb-auth-locked");
+      if (userChip) userChip.style.display = "none";
+      if (userEmail) userEmail.textContent = "";
+      if (profileOpen) profileOpen.style.display = "none";
+      if (profilePanel) profilePanel.style.display = "none";
+      return;
+    }
+
+    const canAccess = await verifyDashboardAccess(currentToken);
+    if (!canAccess) {
+      if (overlay) overlay.style.display = "flex";
+      if (document.body) document.body.classList.add("sb-auth-locked");
+      if (userChip) userChip.style.display = "none";
+      if (userEmail) userEmail.textContent = "";
+      if (profileOpen) profileOpen.style.display = "none";
+      if (profilePanel) profilePanel.style.display = "none";
+      setMessage("This account is not authorized for this terminal.", true);
+      try {
+        const c = await loadSupabaseClient();
+        await c.auth.signOut();
+      } catch (_err) {}
+      currentToken = "";
+      return;
+    }
+
+    if (overlay) overlay.style.display = "none";
+    if (document.body) document.body.classList.remove("sb-auth-locked");
+    if (userChip) userChip.style.display = "inline-flex";
+    if (userEmail) userEmail.textContent = email || "";
+    if (profileOpen) profileOpen.style.display = "inline-flex";
+  }
+
+  async function loadSupabaseClient() {
+    if (!SUPABASE_CONFIG_READY) {
+      throw new Error("SUPABASE_URL / SUPABASE_ANON_KEY missing on server config");
+    }
+    if (supabaseClient) return supabaseClient;
+    if (!supabasePromise) {
+      supabasePromise = new Promise(function (resolve, reject) {
+        if (window.supabase && typeof window.supabase.createClient === "function") {
+          resolve(window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY));
+          return;
+        }
+        const script = document.createElement("script");
+        script.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2";
+        script.async = true;
+        script.onload = function () {
+          if (!window.supabase || typeof window.supabase.createClient !== "function") {
+            reject(new Error("Supabase SDK unavailable"));
+            return;
+          }
+          resolve(window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY));
+        };
+        script.onerror = function () { reject(new Error("Failed to load Supabase SDK")); };
+        document.head.appendChild(script);
+      });
+    }
+    supabaseClient = await supabasePromise;
+    return supabaseClient;
+  }
+
+  async function initAuthUi() {
+    ensureUi();
+    if (!SUPABASE_CONFIG_READY) {
+      const overlay = document.getElementById("sb-auth-overlay");
+      if (overlay) overlay.style.display = "flex";
+      setMessage("Server auth config missing. Set SUPABASE_URL and SUPABASE_ANON_KEY.", true);
+      return;
+    }
+    try {
+      const client = await loadSupabaseClient();
+      const sessionRes = await client.auth.getSession();
+      await renderSession(sessionRes && sessionRes.data ? sessionRes.data.session : null);
+
+      const tabLogin = document.getElementById("sb-tab-login");
+      const tabSignup = document.getElementById("sb-tab-signup");
+      const paneLogin = document.getElementById("sb-pane-login");
+      const paneSignup = document.getElementById("sb-pane-signup");
+      const loginBtn = document.getElementById("sb-auth-login");
+      const signupBtn = document.getElementById("sb-auth-signup");
+      const forgotBtn = document.getElementById("sb-auth-forgot");
+      const logoutBtn = document.getElementById("sb-auth-logout");
+      const emailEl = document.getElementById("sb-auth-email");
+      const passEl = document.getElementById("sb-auth-password");
+      const signupEmailEl = document.getElementById("sb-signup-email");
+      const signupPassEl = document.getElementById("sb-signup-password");
+      const signupConfirmEl = document.getElementById("sb-signup-confirm");
+      const profileOpenBtn = document.getElementById("sb-profile-open");
+      const profilePanel = document.getElementById("sb-profile-panel");
+      const profileEmailEl = document.getElementById("sb-profile-email");
+      const profileDisplayEl = document.getElementById("sb-profile-display");
+      const profileApiKeyEl = document.getElementById("sb-profile-api-key");
+      const profileAccessTokenEl = document.getElementById("sb-profile-access-token");
+      const profileApiSecretEl = document.getElementById("sb-profile-api-secret");
+      const profileStatusEl = document.getElementById("sb-profile-status");
+      const profileMsgEl = document.getElementById("sb-profile-msg");
+      const profileSaveBtn = document.getElementById("sb-profile-save");
+      const profileClearBtn = document.getElementById("sb-profile-clear");
+      const profileCloseBtn = document.getElementById("sb-profile-close");
+
+      function setMode(mode) {
+        const isSignup = mode === "signup";
+        if (tabLogin) tabLogin.classList.toggle("active", !isSignup);
+        if (tabSignup) tabSignup.classList.toggle("active", isSignup);
+        if (paneLogin) paneLogin.classList.toggle("active", !isSignup);
+        if (paneSignup) paneSignup.classList.toggle("active", isSignup);
+        if (isSignup && signupEmailEl && emailEl && !signupEmailEl.value) {
+          signupEmailEl.value = String(emailEl.value || "");
+        }
+        if (!isSignup && emailEl && signupEmailEl && !emailEl.value) {
+          emailEl.value = String(signupEmailEl.value || "");
+        }
+        setMessage("", false);
+      }
+
+      function setProfileMessage(msg, isError) {
+        if (!profileMsgEl) return;
+        profileMsgEl.textContent = msg || "";
+        profileMsgEl.style.color = isError ? "#fda4af" : "#86efac";
+      }
+
+      async function loadProfileData() {
+        try {
+          const res = await fetch("/api/user/profile", { cache: "no-store" });
+          if (!res.ok) {
+            setProfileMessage("Profile load failed.", true);
+            return;
+          }
+          const data = await res.json();
+          const bin = data && data.binance ? data.binance : {};
+          if (profileEmailEl) profileEmailEl.value = String(data.email || "");
+          if (profileDisplayEl) profileDisplayEl.value = String(data.display_name || "");
+          if (profileApiKeyEl) profileApiKeyEl.value = String(bin.api_key_masked || "");
+          if (profileAccessTokenEl) profileAccessTokenEl.value = String(bin.access_token_masked || "");
+          if (profileApiSecretEl) profileApiSecretEl.value = "";
+          if (profileStatusEl) {
+            const ready = !!bin.ready_for_real_trading;
+            const secretSet = !!bin.api_secret_set;
+            profileStatusEl.textContent = ready
+              ? "Binance profile ready for real-account wiring."
+              : (secretSet ? "API secret saved. Add API key/access token to complete setup." : "Add Binance keys to enable real-account wiring.");
+          }
+          setProfileMessage("", false);
+        } catch (_err) {
+          setProfileMessage("Profile load failed.", true);
+        }
+      }
+
+      if (tabLogin) tabLogin.addEventListener("click", function () { setMode("login"); });
+      if (tabSignup) tabSignup.addEventListener("click", function () { setMode("signup"); });
+      if (profileOpenBtn) profileOpenBtn.addEventListener("click", async function () {
+        if (profilePanel) profilePanel.style.display = "block";
+        await loadProfileData();
+      });
+      if (profileCloseBtn) profileCloseBtn.addEventListener("click", function () {
+        if (profilePanel) profilePanel.style.display = "none";
+      });
+
+      const lastEmail = String(localStorage.getItem("sb-auth-last-email") || "").trim();
+      if (lastEmail) {
+        if (emailEl && !emailEl.value) emailEl.value = lastEmail;
+        if (signupEmailEl && !signupEmailEl.value) signupEmailEl.value = lastEmail;
+      }
+      const activeSession = !!(sessionRes && sessionRes.data && sessionRes.data.session);
+      setMode(activeSession || lastEmail ? "login" : "signup");
+
+      if (loginBtn) loginBtn.addEventListener("click", async function () {
+        const email = String(emailEl && emailEl.value ? emailEl.value : "").trim();
+        const password = String(passEl && passEl.value ? passEl.value : "");
+        if (!email || !password) {
+          setMessage("Email/password required.", true);
+          return;
+        }
+        setMessage("Signing in...", false);
+        const result = await client.auth.signInWithPassword({ email: email, password: password });
+        if (result.error) {
+          setMessage(result.error.message || "Login failed.", true);
+          return;
+        }
+        try { localStorage.setItem("sb-auth-last-email", email); } catch (_err) {}
+        await renderSession(result.data ? result.data.session : null);
+      });
+
+      if (signupBtn) signupBtn.addEventListener("click", async function () {
+        const email = String(signupEmailEl && signupEmailEl.value ? signupEmailEl.value : "").trim();
+        const password = String(signupPassEl && signupPassEl.value ? signupPassEl.value : "");
+        const confirm = String(signupConfirmEl && signupConfirmEl.value ? signupConfirmEl.value : "");
+        if (!email || !password) {
+          setMessage("Email/password required.", true);
+          return;
+        }
+        if (password.length < 8) {
+          setMessage("Password must be at least 8 characters.", true);
+          return;
+        }
+        if (password !== confirm) {
+          setMessage("Password and confirm password do not match.", true);
+          return;
+        }
+        setMessage("Creating account...", false);
+        const result = await client.auth.signUp({ email: email, password: password });
+        if (result.error) {
+          setMessage(result.error.message || "Signup failed.", true);
+          return;
+        }
+        try { localStorage.setItem("sb-auth-last-email", email); } catch (_err) {}
+        if (result.data && result.data.session) {
+          await renderSession(result.data.session);
+          return;
+        }
+        if (emailEl) emailEl.value = email;
+        if (passEl) passEl.value = password;
+        setMode("login");
+        setMessage("Signup created. Verify email, then login.", false);
+      });
+
+      if (profileSaveBtn) profileSaveBtn.addEventListener("click", async function () {
+        const payload = {};
+        const displayName = String(profileDisplayEl && profileDisplayEl.value ? profileDisplayEl.value : "").trim();
+        const apiKey = String(profileApiKeyEl && profileApiKeyEl.value ? profileApiKeyEl.value : "").trim();
+        const accessToken = String(profileAccessTokenEl && profileAccessTokenEl.value ? profileAccessTokenEl.value : "").trim();
+        const apiSecret = String(profileApiSecretEl && profileApiSecretEl.value ? profileApiSecretEl.value : "").trim();
+        if (displayName) payload.display_name = displayName;
+        if (apiKey && apiKey.indexOf("*") === -1) payload.binance_api_key = apiKey;
+        if (accessToken && accessToken.indexOf("*") === -1) payload.binance_access_token = accessToken;
+        if (apiSecret) payload.binance_api_secret = apiSecret;
+        setProfileMessage("Saving profile...", false);
+        try {
+          const res = await fetch("/api/user/profile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+          if (!res.ok) {
+            const err = await res.text();
+            setProfileMessage(err || "Profile save failed.", true);
+            return;
+          }
+          setProfileMessage("Profile saved.", false);
+          await loadProfileData();
+        } catch (_err) {
+          setProfileMessage("Profile save failed.", true);
+        }
+      });
+
+      if (profileClearBtn) profileClearBtn.addEventListener("click", async function () {
+        const ok = window.confirm("Clear saved Binance API key, secret and access token?");
+        if (!ok) return;
+        setProfileMessage("Clearing keys...", false);
+        try {
+          const res = await fetch("/api/user/profile", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ clear_binance_keys: true }),
+          });
+          if (!res.ok) {
+            setProfileMessage("Could not clear keys.", true);
+            return;
+          }
+          await loadProfileData();
+          setProfileMessage("Saved keys cleared.", false);
+        } catch (_err) {
+          setProfileMessage("Could not clear keys.", true);
+        }
+      });
+
+      if (forgotBtn) forgotBtn.addEventListener("click", async function () {
+        const email = String(emailEl && emailEl.value ? emailEl.value : "").trim();
+        if (!email) {
+          setMessage("Enter email first, then click forgot password.", true);
+          return;
+        }
+        setMessage("Sending reset email...", false);
+        const out = await client.auth.resetPasswordForEmail(email, {
+          redirectTo: window.location.origin + "/",
+        });
+        if (out && out.error) {
+          setMessage(out.error.message || "Reset email failed.", true);
+          return;
+        }
+        setMessage("Password reset email sent. Check inbox/spam.", false);
+      });
+
+      if (logoutBtn) logoutBtn.addEventListener("click", async function () {
+        await client.auth.signOut();
+        if (profilePanel) profilePanel.style.display = "none";
+        await renderSession(null);
+      });
+
+      client.auth.onAuthStateChange(function (_event, session) {
+        void renderSession(session);
+      });
+    } catch (err) {
+      setMessage("Supabase auth init failed.", true);
+      console.error(err);
+    }
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", initAuthUi);
+  } else {
+    initAuthUi();
+  }
+})();
+</script>
+"""
+    return bootstrap.replace("__AUTH_CFG__", cfg_json)
+
+
+def _inject_html_auth_bootstrap(html: str) -> str:
+    if not (_auth_enabled() and _auth_provider() == "supabase"):
+        return html
+    snippet = _supabase_auth_bootstrap()
+    if "</head>" in html:
+        return html.replace("</head>", f"{snippet}\n</head>", 1)
+    return f"{snippet}\n{html}"
+
+
 def _read_html(name: str) -> str:
     p = STATIC_DIR / name
-    return p.read_text(encoding="utf-8") if p.exists() else f"<h1>{name} not found</h1>"
+    raw = p.read_text(encoding="utf-8") if p.exists() else f"<h1>{name} not found</h1>"
+    return _inject_html_auth_bootstrap(raw)
+
+
+def _render_asset_terminal_html(symbol: str = "ETHUSDT") -> str:
+    sym = _normalize_crypto_symbol(symbol)
+    if sym not in {"ETHUSDT", "SOLUSDT"}:
+        sym = "ETHUSDT"
+    short = _asset_short(sym)
+    html = _read_html("index.html")
+    html = html.replace("BTCUSDT", sym)
+    html = html.replace("btcusdt", sym.lower())
+    html = html.replace("<title>BTC Quant Terminal</title>", f"<title>{short} Quant Terminal</title>", 1)
+    html = html.replace("BTC Quant Terminal", f"{short} Quant Terminal", 1)
+
+    bootstrap = f"""
+<script>
+(function(){{
+  const ALT_SYMBOL = {json.dumps(sym)};
+  const ALT_SHORT = {json.dumps(short)};
+  window.__ALT_SYMBOL__ = ALT_SYMBOL;
+  window.__ALT_SHORT__ = ALT_SHORT;
+
+  function rewriteUrl(inputUrl){{
+    let url = String(inputUrl || "");
+    if(!url) return url;
+    try{{
+      if(url.startsWith("/api/btc/")){{
+        const u = new URL(url, window.location.origin);
+        if(!u.searchParams.has("symbol")) u.searchParams.set("symbol", ALT_SYMBOL);
+        url = u.pathname + u.search + u.hash;
+      }}
+      url = url.replace(/symbol=BTC\\b/g, "symbol=" + ALT_SHORT);
+      url = url.replace(/symbol=BTCUSDT/g, "symbol=" + ALT_SYMBOL);
+      url = url.replace(/btcusdt/g, ALT_SYMBOL.toLowerCase());
+      url = url.replace(/BTCUSDT/g, ALT_SYMBOL);
+    }}catch(_e){{}}
+    return url;
+  }}
+
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = function(input, init){{
+    try{{
+      if(typeof input === "string"){{
+        return nativeFetch(rewriteUrl(input), init);
+      }}
+      if(input && input.url){{
+        const next = rewriteUrl(input.url);
+        if(next !== input.url){{
+          return nativeFetch(new Request(next, input), init);
+        }}
+      }}
+    }}catch(_e){{}}
+    return nativeFetch(input, init);
+  }};
+
+  const NativeWebSocket = window.WebSocket;
+  function WrappedWebSocket(url, protocols){{
+    return protocols ? new NativeWebSocket(rewriteUrl(url), protocols) : new NativeWebSocket(rewriteUrl(url));
+  }}
+  WrappedWebSocket.prototype = NativeWebSocket.prototype;
+  Object.setPrototypeOf(WrappedWebSocket, NativeWebSocket);
+  window.WebSocket = WrappedWebSocket;
+
+  window.addEventListener("DOMContentLoaded", function(){{
+    try {{
+      const assetNameByShort = {{ ETH: "Ethereum", SOL: "Solana" }};
+      const assetName = assetNameByShort[ALT_SHORT] || ALT_SHORT;
+      const title = document.querySelector(".title");
+      if(title){{
+        title.innerHTML = '<span>' + ALT_SHORT + '</span> Quant Terminal <span style=\"color:#00c853\">●</span>';
+      }}
+      const priceLabel = Array.from(document.querySelectorAll(".grid .card .k"))
+        .find((el) => String(el.textContent || "").trim() === "Bitcoin Price (USDT)");
+      if(priceLabel){{
+        priceLabel.textContent = assetName + " Price (USDT)";
+      }}
+      const chartHead = document.querySelector(".head-title");
+      if(chartHead){{
+        chartHead.textContent = ALT_SYMBOL + " Trading Chart";
+      }}
+      const modalTitle = document.getElementById("pt-modal-title");
+      if(modalTitle){{
+        modalTitle.textContent = "▲ LONG " + ALT_SYMBOL;
+      }}
+    }} catch(_e) {{}}
+  }});
+}})();
+</script>
+"""
+    return html.replace("</head>", bootstrap + "\n</head>", 1)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -3769,6 +5749,16 @@ def index():
 @app.get("/terminal", response_class=HTMLResponse)
 def terminal_page():
     return _read_html("terminal.html")
+
+
+@app.get("/crypto-terminal", response_class=HTMLResponse)
+def crypto_terminal_page():
+    return _read_html("crypto_terminal.html")
+
+
+@app.get("/asset-terminal", response_class=HTMLResponse)
+def asset_terminal_page(symbol: str = "ETHUSDT"):
+    return _render_asset_terminal_html(symbol)
 
 
 @app.get("/portfolio", response_class=HTMLResponse)

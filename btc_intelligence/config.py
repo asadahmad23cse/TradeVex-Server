@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     redis_url: str = 'redis://localhost:6379'
     redis_state_enabled: bool = True
     redis_key_prefix: str = 'btc'
+    supabase_url: str = ''
+    supabase_anon_key: str = ''
+    supabase_service_role_key: str = ''
+    supabase_enabled: bool = False
 
     # Buffers.
     candles_1m_max: int = 500

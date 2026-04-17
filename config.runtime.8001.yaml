@@ -6,407 +6,48 @@ watchlist:
   - symbol: TCS
     yf_ticker: TCS.NS
     name: TCS
-  - symbol: HDFCBANK
-    yf_ticker: HDFCBANK.NS
-    name: HDFC Bank
   - symbol: INFY
     yf_ticker: INFY.NS
     name: Infosys
-  - symbol: ICICIBANK
-    yf_ticker: ICICIBANK.NS
-    name: ICICI Bank
-  - symbol: BHARTIARTL
-    yf_ticker: BHARTIARTL.NS
-    name: Bharti Airtel
-  - symbol: SBIN
-    yf_ticker: SBIN.NS
-    name: State Bank of India
-  - symbol: ITC
-    yf_ticker: ITC.NS
-    name: ITC
-  - symbol: LT
-    yf_ticker: LT.NS
-    name: Larsen & Toubro
-  - symbol: KOTAKBANK
-    yf_ticker: KOTAKBANK.NS
-    name: Kotak Mahindra Bank
   - symbol: HCLTECH
     yf_ticker: HCLTECH.NS
     name: HCL Technologies
-  - symbol: AXISBANK
-    yf_ticker: AXISBANK.NS
-    name: Axis Bank
-  - symbol: BAJFINANCE
-    yf_ticker: BAJFINANCE.NS
-    name: Bajaj Finance
-  - symbol: MARUTI
-    yf_ticker: MARUTI.NS
-    name: Maruti Suzuki
-  - symbol: SUNPHARMA
-    yf_ticker: SUNPHARMA.NS
-    name: Sun Pharma
-  - symbol: TITAN
-    yf_ticker: TITAN.NS
-    name: Titan
-  - symbol: ASIANPAINT
-    yf_ticker: ASIANPAINT.NS
-    name: Asian Paints
-  - symbol: NTPC
-    yf_ticker: NTPC.NS
-    name: NTPC
   - symbol: TATAMOTORS
     yf_ticker: TATAMOTORS.NS
     name: Tata Motors
-  - symbol: POWERGRID
-    yf_ticker: POWERGRID.NS
-    name: Power Grid
-  - symbol: ULTRACEMCO
-    yf_ticker: ULTRACEMCO.NS
-    name: UltraTech Cement
-  - symbol: HINDUNILVR
-    yf_ticker: HINDUNILVR.NS
-    name: Hindustan Unilever
-  - symbol: NESTLEIND
-    yf_ticker: NESTLEIND.NS
-    name: Nestle India
-  - symbol: ADANIPORTS
-    yf_ticker: ADANIPORTS.NS
-    name: Adani Ports
-  - symbol: WIPRO
-    yf_ticker: WIPRO.NS
-    name: Wipro
-  - symbol: TATASTEEL
-    yf_ticker: TATASTEEL.NS
-    name: Tata Steel
-  - symbol: ONGC
-    yf_ticker: ONGC.NS
-    name: ONGC
-  - symbol: JSWSTEEL
-    yf_ticker: JSWSTEEL.NS
-    name: JSW Steel
-  - symbol: M_M
-    yf_ticker: M&M.NS
-    name: Mahindra & Mahindra
-  - symbol: TECHM
-    yf_ticker: TECHM.NS
-    name: Tech Mahindra
-  - symbol: DRREDDY
-    yf_ticker: DRREDDY.NS
-    name: Dr. Reddy's
-  - symbol: CIPLA
-    yf_ticker: CIPLA.NS
-    name: Cipla
-  - symbol: COALINDIA
-    yf_ticker: COALINDIA.NS
-    name: Coal India
-  - symbol: BPCL
-    yf_ticker: BPCL.NS
-    name: BPCL
-  - symbol: GRASIM
-    yf_ticker: GRASIM.NS
-    name: Grasim Industries
-  - symbol: BAJAJFINSV
-    yf_ticker: BAJAJFINSV.NS
-    name: Bajaj Finserv
-  - symbol: EICHERMOT
-    yf_ticker: EICHERMOT.NS
-    name: Eicher Motors
-  - symbol: INDUSINDBK
-    yf_ticker: INDUSINDBK.NS
-    name: IndusInd Bank
-  - symbol: APOLLOHOSP
-    yf_ticker: APOLLOHOSP.NS
-    name: Apollo Hospitals
-  - symbol: HDFCLIFE
-    yf_ticker: HDFCLIFE.NS
-    name: HDFC Life
-  - symbol: SBILIFE
-    yf_ticker: SBILIFE.NS
-    name: SBI Life
-  - symbol: BRITANNIA
-    yf_ticker: BRITANNIA.NS
-    name: Britannia
-  - symbol: DIVISLAB
-    yf_ticker: DIVISLAB.NS
-    name: Divi's Labs
-  - symbol: ADANIENT
-    yf_ticker: ADANIENT.NS
-    name: Adani Enterprises
-  - symbol: HEROMOTOCO
-    yf_ticker: HEROMOTOCO.NS
-    name: Hero MotoCorp
-  - symbol: TATACONSUM
-    yf_ticker: TATACONSUM.NS
-    name: Tata Consumer
-  - symbol: BAJAJ_AUTO
-    yf_ticker: BAJAJ-AUTO.NS
-    name: Bajaj Auto
-  - symbol: WIPRO
-    yf_ticker: WIPRO.NS
-    name: Wipro
-  - symbol: HINDALCO
-    yf_ticker: HINDALCO.NS
-    name: Hindalco
-  - symbol: SHRIRAMFIN
-    yf_ticker: SHRIRAMFIN.NS
-    name: Shriram Finance
-  - symbol: HAVELLS
-    yf_ticker: HAVELLS.NS
-    name: Havells India
-  - symbol: VEDL
-    yf_ticker: VEDL.NS
-    name: Vedanta
-  - symbol: PIDILITIND
-    yf_ticker: PIDILITIND.NS
-    name: Pidilite Industries
-  - symbol: GODREJCP
-    yf_ticker: GODREJCP.NS
-    name: Godrej Consumer
-  - symbol: DLF
-    yf_ticker: DLF.NS
-    name: DLF
-  - symbol: TRENT
-    yf_ticker: TRENT.NS
-    name: Trent
-  - symbol: MARICO
-    yf_ticker: MARICO.NS
-    name: Marico
-  - symbol: DABUR
-    yf_ticker: DABUR.NS
-    name: Dabur India
-  - symbol: CHOLAFIN
-    yf_ticker: CHOLAFIN.NS
-    name: Cholamandalam Finance
-  - symbol: SIEMENS
-    yf_ticker: SIEMENS.NS
-    name: Siemens
-  - symbol: ABB
-    yf_ticker: ABB.NS
-    name: ABB India
-  - symbol: BEL
-    yf_ticker: BEL.NS
-    name: Bharat Electronics
-  - symbol: HAL
-    yf_ticker: HAL.NS
-    name: HAL
-  - symbol: INDIGO
-    yf_ticker: INDIGO.NS
-    name: InterGlobe Aviation
-  - symbol: BANKBARODA
-    yf_ticker: BANKBARODA.NS
-    name: Bank of Baroda
-  - symbol: IOC
-    yf_ticker: IOC.NS
-    name: Indian Oil
-  - symbol: PNB
-    yf_ticker: PNB.NS
-    name: Punjab National Bank
-  - symbol: GAIL
-    yf_ticker: GAIL.NS
-    name: GAIL India
-  - symbol: AMBUJACEM
-    yf_ticker: AMBUJACEM.NS
-    name: Ambuja Cements
-  - symbol: MCDOWELL_N
-    yf_ticker: MCDOWELL-N.NS
-    name: United Spirits
-  - symbol: BERGEPAINT
-    yf_ticker: BERGEPAINT.NS
-    name: Berger Paints
-  - symbol: COLPAL
-    yf_ticker: COLPAL.NS
-    name: Colgate-Palmolive
-  - symbol: NAUKRI
-    yf_ticker: NAUKRI.NS
-    name: Info Edge
-  - symbol: TVSMOTOR
-    yf_ticker: TVSMOTOR.NS
-    name: TVS Motor
-  - symbol: LUPIN
-    yf_ticker: LUPIN.NS
-    name: Lupin
-  - symbol: TORNTPHARM
-    yf_ticker: TORNTPHARM.NS
-    name: Torrent Pharma
-  - symbol: SBICARD
-    yf_ticker: SBICARD.NS
-    name: SBI Cards
-  - symbol: ICICIPRULI
-    yf_ticker: ICICIPRULI.NS
-    name: ICICI Pru Life
-  - symbol: ICICIGI
-    yf_ticker: ICICIGI.NS
-    name: ICICI GI
-  - symbol: POLYCAB
-    yf_ticker: POLYCAB.NS
-    name: Polycab India
-  - symbol: ZOMATO
-    yf_ticker: ZOMATO.NS
-    name: Zomato
-  - symbol: PAYTM
-    yf_ticker: PAYTM.NS
-    name: Paytm
-  - symbol: IRCTC
-    yf_ticker: IRCTC.NS
-    name: IRCTC
-  - symbol: IRFC
-    yf_ticker: IRFC.NS
-    name: IRFC
-  - symbol: DMART
-    yf_ticker: DMART.NS
-    name: DMart
-  - symbol: TATAPOWER
-    yf_ticker: TATAPOWER.NS
-    name: Tata Power
-  - symbol: ADANIGREEN
-    yf_ticker: ADANIGREEN.NS
-    name: Adani Green
-  - symbol: JIOFIN
-    yf_ticker: JIOFIN.NS
-    name: Jio Financial
-  - symbol: NHPC
-    yf_ticker: NHPC.NS
-    name: NHPC
-  - symbol: PFC
-    yf_ticker: PFC.NS
-    name: PFC
-  - symbol: RECLTD
-    yf_ticker: RECLTD.NS
-    name: REC
-  - symbol: CANBK
-    yf_ticker: CANBK.NS
-    name: Canara Bank
-  - symbol: UNIONBANK
-    yf_ticker: UNIONBANK.NS
-    name: Union Bank
-  - symbol: IDBI
-    yf_ticker: IDBI.NS
-    name: IDBI Bank
-  - symbol: MUTHOOTFIN
-    yf_ticker: MUTHOOTFIN.NS
-    name: Muthoot Finance
-  - symbol: PERSISTENT
-    yf_ticker: PERSISTENT.NS
-    name: Persistent Systems
-  - symbol: LTIM
-    yf_ticker: LTIM.NS
-    name: LTIMindtree
-  - symbol: COFORGE
-    yf_ticker: COFORGE.NS
-    name: Coforge
-  - symbol: MPHASIS
-    yf_ticker: MPHASIS.NS
-    name: Mphasis
-  - symbol: VOLTAS
-    yf_ticker: VOLTAS.NS
-    name: Voltas
   us_stocks:
-  - symbol: AAPL
-    yf_ticker: AAPL
-    name: Apple
-  - symbol: TSLA
-    yf_ticker: TSLA
-    name: Tesla
   - symbol: NVDA
     yf_ticker: NVDA
     name: NVIDIA
+  - symbol: AAPL
+    yf_ticker: AAPL
+    name: Apple
   - symbol: MSFT
     yf_ticker: MSFT
     name: Microsoft
-  - symbol: GOOGL
-    yf_ticker: GOOGL
-    name: Alphabet
-  - symbol: SPY
-    yf_ticker: SPY
-    name: S&P 500 ETF
+  - symbol: TSLA
+    yf_ticker: TSLA
+    name: Tesla
   - symbol: AMZN
     yf_ticker: AMZN
     name: Amazon
-  - symbol: META
-    yf_ticker: META
-    name: Meta Platforms
-  - symbol: AMD
-    yf_ticker: AMD
-    name: AMD
-  - symbol: NFLX
-    yf_ticker: NFLX
-    name: Netflix
-  - symbol: AVGO
-    yf_ticker: AVGO
-    name: Broadcom
-  - symbol: COST
-    yf_ticker: COST
-    name: Costco
-  - symbol: JPM
-    yf_ticker: JPM
-    name: JPMorgan Chase
-  - symbol: BAC
-    yf_ticker: BAC
-    name: Bank of America
-  - symbol: GS
-    yf_ticker: GS
-    name: Goldman Sachs
-  - symbol: WMT
-    yf_ticker: WMT
-    name: Walmart
-  - symbol: XOM
-    yf_ticker: XOM
-    name: Exxon Mobil
-  - symbol: UNH
-    yf_ticker: UNH
-    name: UnitedHealth
-  - symbol: PEP
-    yf_ticker: PEP
-    name: PepsiCo
-  - symbol: KO
-    yf_ticker: KO
-    name: Coca-Cola
-  - symbol: CRM
-    yf_ticker: CRM
-    name: Salesforce
-  - symbol: ORCL
-    yf_ticker: ORCL
-    name: Oracle
-  - symbol: QQQ
-    yf_ticker: QQQ
-    name: Nasdaq 100 ETF
-  - symbol: IWM
-    yf_ticker: IWM
-    name: Russell 2000 ETF
-  - symbol: TLT
-    yf_ticker: TLT
-    name: 20+ Year Treasury Bond ETF
-  forex:
-  - symbol: EURUSD
-    yf_ticker: EURUSD=X
-    av_from: EUR
-    av_to: USD
-    name: Euro/USD
-    pip_size: 0.0001
-  - symbol: GBPUSD
-    yf_ticker: GBPUSD=X
-    av_from: GBP
-    av_to: USD
-    name: GBP/USD
-    pip_size: 0.0001
-  - symbol: USDINR
-    yf_ticker: INR=X
-    av_from: USD
-    av_to: INR
-    name: USD/INR
-    pip_size: 0.01
-  - symbol: USDJPY
-    yf_ticker: JPY=X
-    av_from: USD
-    av_to: JPY
-    name: USD/JPY
-    pip_size: 0.01
-  - symbol: XAUUSD
-    yf_ticker: GC=F
-    av_from: XAU
-    av_to: USD
-    name: Gold/USD
-    pip_size: 0.01
+  crypto:
+  - symbol: BTC
+    binance_ticker: BTCUSDT
+    name: Bitcoin
+  - symbol: ETH
+    binance_ticker: ETHUSDT
+    name: Ethereum
+  - symbol: SOL
+    binance_ticker: SOLUSDT
+    name: Solana
+  - symbol: XRP
+    binance_ticker: XRPUSDT
+    name: Ripple
+  - symbol: BNB
+    binance_ticker: BNBUSDT
+    name: BNB
+  forex: []
 focus_assets:
 - symbol: XAUUSD
   yf_ticker: GC=F
@@ -480,13 +121,18 @@ slippage:
   forex_major: 5.0e-05
   forex_minor: 0.0001
 dashboard:
-  host: 127.0.0.1
-  port: 8001
+  host: 0.0.0.0
+  port: 8000
   auth:
     enabled: false
+    provider: supabase
+    allowed_emails:
+    - admin@gmail.com
     username: admin
     password: change-me
     jwt_secret: change-this-secret
+    supabase_url: ''
+    supabase_anon_key: ''
 wfo:
   min_train_days: 252
   oos_step_days: 21
@@ -656,3 +302,4 @@ optuna:
   alpha_trials: 30
   timeout_sec: 600
   db_path: data/optuna_study.db
+

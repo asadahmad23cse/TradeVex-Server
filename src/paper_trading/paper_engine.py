@@ -19,8 +19,8 @@ class PaperTradingEngine:
     Supports: Manual + Auto execution modes
     """
 
-    def __init__(self, initial_capital: float = 100000.0):
-        self.data_file = Path("data/paper_trading.json")
+    def __init__(self, initial_capital: float = 100000.0, data_file: str | Path | None = None):
+        self.data_file = Path(data_file) if data_file is not None else Path("data/paper_trading.json")
         self.data_file.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._state = self._load()

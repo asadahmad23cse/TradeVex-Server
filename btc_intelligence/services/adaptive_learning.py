@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import pickle
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import mean, pstdev
@@ -23,8 +24,8 @@ FACTOR_KEYS = ("regime", "momentum", "flow", "cost", "volatility")
 @dataclass
 class AdaptiveLearningConfig:
     learning_rate: float = 0.01
-    min_trades_required: int = 30
-    update_frequency: int = 20
+    min_trades_required: int = 20
+    update_frequency: int = 15
     max_change_per_update: float = 0.05
     smoothing_alpha: float = 0.20
     train_window: int = 60
@@ -53,13 +54,16 @@ class AdaptiveLearningEngine:
         }
         self.weights: dict[str, dict[str, float]] = {k: dict(v) for k, v in self.base_weights.items()}
         self.trade_history: dict[str, list[dict[str, Any]]] = {k: [] for k in REGIMES}
-        self.loss_clusters: dict[str, int] = {}
+        self.loss_clusters: dict[str, float] = {}
         self.condition_counts: dict[str, int] = {}
         self.last_update_trade_count: dict[str, int] = {k: 0 for k in REGIMES}
         self.last_validation: dict[str, dict[str, Any]] = {}
         self._enet_cache: dict[str, Any] | None = None
         self._enet_mtime: float = 0.0
         self._calibration_brier_refit_requested: bool = False
+        self._calibration_eval_cache: dict[str, tuple[float, int]] = {}  # regime -> (brier_oos, trade_count)
+        self._platt_iso_cache: dict[str, tuple[Any, Any, int]] = {}  # regime -> (platt, iso, trade_count)
+        self._platt_iso_dir: Path = self.state_path.parent / "platt_iso_models"
         self._load()
 
     def _load(self) -> None:
@@ -78,7 +82,7 @@ class AdaptiveLearningEngine:
                     self.trade_history[regime] = rows[-600:]
             clusters = payload.get("loss_clusters", {})
             if isinstance(clusters, dict):
-                self.loss_clusters = {str(k): int(v) for k, v in clusters.items()}
+                self.loss_clusters = {str(k): float(v) for k, v in clusters.items()}
             condition_counts = payload.get("condition_counts", {})
             if isinstance(condition_counts, dict):
                 self.condition_counts = {str(k): int(v) for k, v in condition_counts.items()}
@@ -89,6 +93,16 @@ class AdaptiveLearningEngine:
             lv = payload.get("last_validation", {})
             if isinstance(lv, dict):
                 self.last_validation = lv
+            eval_cache = payload.get("calibration_eval_cache", {})
+            if isinstance(eval_cache, dict):
+                for regime in REGIMES:
+                    row = eval_cache.get(regime)
+                    if isinstance(row, dict):
+                        self._calibration_eval_cache[regime] = (
+                            float(row.get("brier_oos", 0.25)),
+                            int(row.get("trade_count", 0)),
+                        )
+            self._load_platt_iso_models()
         except Exception as exc:
             logger.warning("AdaptiveLearningEngine load failed: %s", exc)
 
@@ -96,10 +110,14 @@ class AdaptiveLearningEngine:
         payload = {
             "weights": self.weights,
             "trade_history": {k: v[-600:] for k, v in self.trade_history.items()},
-            "loss_clusters": self.loss_clusters,
+            "loss_clusters": {k: round(float(v), 4) for k, v in self.loss_clusters.items()},
             "condition_counts": self.condition_counts,
             "last_update_trade_count": self.last_update_trade_count,
             "last_validation": self.last_validation,
+            "calibration_eval_cache": {
+                reg: {"brier_oos": round(float(v[0]), 6), "trade_count": int(v[1])}
+                for reg, v in self._calibration_eval_cache.items()
+            },
         }
         try:
             self.state_path.write_text(json.dumps(payload, ensure_ascii=True, indent=2), encoding="utf-8")
@@ -220,10 +238,21 @@ class AdaptiveLearningEngine:
 
         baseline = self._evaluate_weights(test_rows, current_weights)
         candidate = self._evaluate_weights(test_rows, candidate_weights)
+        # Early phase (< 100 trades): relax improvement gates to allow faster learning
+        # Mature phase (100+): standard strict gates to prevent overfitting
+        n_total = len(rows)
+        if n_total < 100:
+            metric_gate = 0.005  # halved improvement threshold
+            wr_gate = -0.04     # allow 4% win rate drop
+            brier_gate = 0.02   # allow 2% brier degradation
+        else:
+            metric_gate = 0.01
+            wr_gate = -0.02
+            brier_gate = 0.01
         improved = (
-            candidate["metric"] > (baseline["metric"] + 0.01)
-            and candidate["win_rate"] >= (baseline["win_rate"] - 0.02)
-            and candidate["brier"] <= (baseline["brier"] + 0.01)
+            candidate["metric"] > (baseline["metric"] + metric_gate)
+            and candidate["win_rate"] >= (baseline["win_rate"] + wr_gate)
+            and candidate["brier"] <= (baseline["brier"] + brier_gate)
         )
 
         self.last_validation[regime] = {
@@ -273,11 +302,12 @@ class AdaptiveLearningEngine:
         cond_key = self._condition_key(regime_bucket, volatility_state, flow_state, direction)
         self.condition_counts[cond_key] = int(self.condition_counts.get(cond_key, 0)) + 1
         if float(pnl_pct) < 0:
-            self.loss_clusters[cond_key] = int(self.loss_clusters.get(cond_key, 0)) + 1
+            self.loss_clusters[cond_key] = float(self.loss_clusters.get(cond_key, 0.0)) + 1.0
         else:
-            # decay count on wins to avoid permanent overblocking.
-            if cond_key in self.loss_clusters:
-                self.loss_clusters[cond_key] = max(0, int(self.loss_clusters[cond_key]) - 1)
+            # Gradual decay on wins (0.25 per win instead of 1) to avoid
+            # prematurely unblocking genuinely bad patterns.
+            if cond_key in self.loss_clusters and self.loss_clusters[cond_key] > 0:
+                self.loss_clusters[cond_key] = max(0.0, float(self.loss_clusters[cond_key]) - 0.25)
 
         self._walk_forward_validate_and_apply(regime_bucket)
         self._save()
@@ -426,6 +456,40 @@ class AdaptiveLearningEngine:
             logger.debug("Platt/isotonic fit failed: %s", exc)
             return None, None
 
+    def _platt_iso_path(self, regime_bucket: str) -> Path:
+        return self._platt_iso_dir / f"{regime_bucket}.pkl"
+
+    def _save_platt_iso_model(self, regime_bucket: str, platt: Any, iso: Any, trade_count: int) -> None:
+        path = self._platt_iso_path(regime_bucket)
+        payload = {"trade_count": int(trade_count), "platt": platt, "iso": iso}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("wb") as f:
+                pickle.dump(payload, f)
+        except Exception as exc:
+            logger.debug("Platt/isotonic model save failed for %s: %s", regime_bucket, exc)
+
+    def _load_platt_iso_models(self) -> None:
+        try:
+            if not self._platt_iso_dir.exists():
+                return
+            for regime_bucket in REGIMES:
+                path = self._platt_iso_path(regime_bucket)
+                if not path.exists():
+                    continue
+                with path.open("rb") as f:
+                    payload = pickle.load(f)
+                if not isinstance(payload, dict):
+                    continue
+                platt = payload.get("platt")
+                iso = payload.get("iso")
+                trade_count = int(payload.get("trade_count", 0))
+                if platt is None or iso is None or trade_count <= 0:
+                    continue
+                self._platt_iso_cache[regime_bucket] = (platt, iso, trade_count)
+        except Exception as exc:
+            logger.debug("Platt/isotonic model load failed: %s", exc)
+
     def _apply_platt_iso(self, p0: float, platt: Any, iso: Any) -> float:
         if platt is None or iso is None:
             return float(max(0.0, min(1.0, p0)))
@@ -473,22 +537,42 @@ class AdaptiveLearningEngine:
         def _labels(batch: list[dict[str, Any]]) -> list[float]:
             return [1.0 if float(r.get("pnl_pct", 0.0)) > 0 else 0.0 for r in batch]
 
-        mi_train = _meta_inputs(train_rows)
-        y_train = _labels(train_rows)
-        platt_tr, iso_tr = self._fit_platt_isotonic(mi_train, y_train)
-
+        cache_key = regime_bucket
+        cached = self._platt_iso_cache.get(cache_key)
+        cached_full_ok = bool(cached and cached[2] == len(rows))
+        eval_cached = self._calibration_eval_cache.get(cache_key)
         brier_oos = float(stats.get("brier", 0.25))
-        if platt_tr is not None and iso_tr is not None and len(val_rows) >= 5:
-            y_val = np.asarray(_labels(val_rows), dtype=float)
-            preds = np.asarray(
-                [self._apply_platt_iso(x, platt_tr, iso_tr) for x in _meta_inputs(val_rows)],
-                dtype=float,
-            )
-            brier_oos = float(np.mean((preds - y_val) ** 2))
+        if eval_cached and eval_cached[1] == len(rows):
+            brier_oos = float(eval_cached[0])
+        elif cached_full_ok:
+            # Model already loaded (potentially from disk checkpoint); avoid re-fitting
+            # just for telemetry on every call.
+            self._calibration_eval_cache[cache_key] = (float(brier_oos), len(rows))
+            self._save()
+        else:
+            mi_train = _meta_inputs(train_rows)
+            y_train = _labels(train_rows)
+            platt_tr, iso_tr = self._fit_platt_isotonic(mi_train, y_train)
+            if platt_tr is not None and iso_tr is not None and len(val_rows) >= 5:
+                y_val = np.asarray(_labels(val_rows), dtype=float)
+                preds = np.asarray(
+                    [self._apply_platt_iso(x, platt_tr, iso_tr) for x in _meta_inputs(val_rows)],
+                    dtype=float,
+                )
+                brier_oos = float(np.mean((preds - y_val) ** 2))
+            self._calibration_eval_cache[cache_key] = (float(brier_oos), len(rows))
+            self._save()
 
         mi_all = _meta_inputs(rows)
         y_all = _labels(rows)
-        platt_full, iso_full = self._fit_platt_isotonic(mi_all, y_all)
+        # Use cached Platt/Isotonic models if trade count unchanged
+        if cached_full_ok:
+            platt_full, iso_full = cached[0], cached[1]
+        else:
+            platt_full, iso_full = self._fit_platt_isotonic(mi_all, y_all)
+            if platt_full is not None and iso_full is not None:
+                self._platt_iso_cache[cache_key] = (platt_full, iso_full, len(rows))
+                self._save_platt_iso_model(cache_key, platt_full, iso_full, len(rows))
         if platt_full is None or iso_full is None:
             out = self._histogram_calibrate(regime_bucket, p)
             out["brier_score"] = round(brier_oos, 6)
@@ -568,11 +652,11 @@ class AdaptiveLearningEngine:
     ) -> tuple[bool, str]:
         regime_bucket = self._normalize_regime_bucket(regime)
         key = self._condition_key(regime_bucket, volatility_state, flow_state, direction)
-        losses = int(self.loss_clusters.get(key, 0))
+        losses = float(self.loss_clusters.get(key, 0.0))
         observations = int(self.condition_counts.get(key, 0))
         min_obs = max(int(self.config.cluster_loss_threshold) + 2, 5)
         if losses >= self.config.cluster_loss_threshold and observations >= min_obs:
-            return True, f"Condition cluster blocked ({losses}/{observations} losses): {key}"
+            return True, f"Condition cluster blocked ({losses:.2f}/{observations} losses): {key}"
         return False, ""
 
     def meta_decision(

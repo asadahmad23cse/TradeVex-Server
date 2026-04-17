@@ -5,7 +5,7 @@ After=network.target redis.service
 [Service]
 User=root
 WorkingDirectory=/root/TradeVex-Server
-ExecStart=/root/TradeVex-Server/venv/bin/python main.py --mode live
+ExecStart=/root/TradeVex-Server/venv/bin/python main.py --mode live --config config.runtime.8001.yaml
 Restart=always
 RestartSec=10
 StandardOutput=append:/var/log/tradevex.out.log

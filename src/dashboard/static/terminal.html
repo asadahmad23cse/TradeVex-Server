@@ -20,6 +20,10 @@
 .mode-btn.active{background:#f97316;border-color:#f97316;color:#fff}
 .mode-btn:hover:not(.active){border-color:#f97316;color:#f97316}
 .mode-subtitle{font-size:10px;font-weight:400;opacity:.8}
+.mode-state{display:inline-flex;align-items:center;justify-content:center;padding:1px 7px;border-radius:999px;border:1px solid #334155;font-size:9px;font-weight:800;letter-spacing:.25px;margin-top:2px}
+.mode-state.active{color:#34d399;border-color:rgba(52,211,153,.7);background:rgba(52,211,153,.12)}
+.mode-state.hold{color:#94a3b8;border-color:rgba(148,163,184,.45);background:rgba(100,116,139,.16)}
+.mode-btn.hold-scope{border-color:#475569;background:#1a2334;color:#94a3b8}
 .btn{padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:#1b2638;color:var(--txt);font-size:12px;cursor:pointer}.btn:hover{border-color:#3b82f6}
 .ticker-bar{background:#0a0f1a;border:1px solid var(--line);border-radius:8px;overflow:hidden;height:28px;display:flex;align-items:center;margin-bottom:10px}
 .ticker-inner{display:flex;gap:32px;animation:ticker-scroll 60s linear infinite;white-space:nowrap;padding:0 20px}
@@ -29,6 +33,9 @@
 .ticker-item:hover .ticker-sym{color:#f97316}
 .ticker-sym{color:#94a3b8;font-weight:600}
 .ticker-price{color:#f1f5f9}
+.ticker-scope{display:inline-flex;align-items:center;justify-content:center;padding:1px 6px;border-radius:999px;font-size:9px;font-weight:800;letter-spacing:.2px}
+.ticker-scope.active{border:1px solid rgba(52,211,153,.6);color:#34d399;background:rgba(52,211,153,.12)}
+.ticker-scope.hold{border:1px solid rgba(148,163,184,.45);color:#94a3b8;background:rgba(100,116,139,.16)}
 .ticker-chg.pos{color:#34d399}
 .ticker-chg.neg{color:#f87171}
 .strip{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:10px}.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px}.k{font-size:11px;color:var(--muted)}.v{font-family:"JetBrains Mono",monospace;font-size:15px;font-weight:700}
@@ -417,6 +424,38 @@ body{
 .crypto-row .meta{
   font-size:11px;
 }
+.crypto-scope{display:inline-flex;align-items:center;justify-content:center;padding:1px 6px;border-radius:999px;font-size:9px;font-weight:800;letter-spacing:.25px;margin-left:6px}
+.crypto-scope.active{color:#34d399;border:1px solid rgba(52,211,153,.7);background:rgba(52,211,153,.12)}
+.crypto-scope.hold{color:#94a3b8;border:1px solid rgba(148,163,184,.45);background:rgba(100,116,139,.16)}
+.crypto-row.scope-hold{
+  border-color:rgba(100,116,139,.45)!important;
+  background:linear-gradient(180deg,#0f1623 0%,#0c1320 100%)!important;
+}
+.crypto-row.scope-hold .name,.crypto-row.scope-hold .meta,.crypto-row.scope-hold [data-crypto-price],.crypto-row.scope-hold [data-crypto-change]{
+  color:#93a2b8!important;
+}
+.crypto-row.scope-hold .stock-signal .sig-mini{
+  border-color:#64748b!important;
+  color:#93a2b8!important;
+  background:rgba(100,116,139,.15)!important;
+}
+.sqab.scope-hold{
+  border-color:#475569!important;
+  color:#94a3b8!important;
+  background:rgba(71,85,105,.18)!important;
+}
+.sqab.scope-hold:hover{
+  background:rgba(71,85,105,.25)!important;
+  color:#cbd5e1!important;
+}
+.scope-note{
+  font-size:10px;
+  color:#94a3b8;
+  padding:6px 8px;
+  border:1px dashed rgba(100,116,139,.45);
+  border-radius:8px;
+  background:rgba(15,23,36,.6);
+}
 .crypto-row [data-crypto-price]{
   font-family:"JetBrains Mono",monospace;
   font-size:14px;
@@ -511,8 +550,8 @@ body{
     <div class="logo">⚡ Quant Terminal</div>
     <div style="position:relative"><input id="search" class="search" placeholder="Search stock/ticker (RELIANCE, INFY.NS)"><div id="results" class="results"></div></div>
     <div class="terminal-mode-switcher">
-      <button id="mode-stocks" class="mode-btn active" onclick="switchTerminalMode('stocks')">📈 Stocks Terminal<span class="mode-subtitle">NSE • NYSE • NASDAQ</span></button>
-      <button id="mode-crypto" class="mode-btn" onclick="switchTerminalMode('crypto')">₿ Crypto Terminal<span class="mode-subtitle">24/7 Live • BTC • ETH • Altcoins</span></button>
+      <button id="mode-stocks" class="mode-btn hold-scope active" onclick="switchTerminalMode('stocks')">📈 Stocks Terminal<span class="mode-subtitle">NSE • NYSE • NASDAQ (Paused)</span><span class="mode-state hold">HOLD</span></button>
+      <button id="mode-crypto" class="mode-btn" onclick="switchTerminalMode('crypto')">₿ Crypto Terminal<span class="mode-subtitle">24/7 Live • BTC • ETH • SOL</span><span class="mode-state active">ACTIVE</span></button>
     </div>
     <div style="display:flex;align-items:center;gap:8px">
       <span id="ws-status" class="sub" style="color:#f59e0b">● CONNECTING</span>
@@ -534,8 +573,9 @@ body{
 
   <div class="main">
     <div id="stocks-panel" class="panel">
-      <div class="head"><div class="title">Market Universe</div><div class="sub">NSE/BSE Focus</div></div>
+      <div class="head"><div class="title">Market Universe</div><div class="sub">NSE/BSE Focus • HOLD</div></div>
       <div class="left-body">
+        <div class="scope-note">Stocks are on HOLD scope in this phase. Crypto top-3 is primary.</div>
         <div class="tabs3">
           <button class="tbtn active" data-l="watchlist">Watchlist</button>
           <button class="tbtn" data-l="screener">Screener</button>
@@ -818,8 +858,8 @@ body{
           <option value="RELIANCE">RELIANCE</option>
           <option value="TCS">TCS</option>
           <option value="INFY">INFY</option>
-          <option value="HDFCBANK">HDFCBANK</option>
-          <option value="ICICIBANK">ICICIBANK</option>
+          <option value="HCLTECH">HCLTECH</option>
+          <option value="TATAMOTORS">TATAMOTORS</option>
         </select>
         <label class="k">Expiry</label>
         <select id="fo-expiry" class="sel" style="width:180px"><option value="nearest">nearest</option></select>
@@ -979,15 +1019,12 @@ body{
 const BUY="#34d399", SELL="#f87171", HOLD="#60a5fa";
 const TF={ "5m":{i:"5m",p:"5d"}, "15m":{i:"15m",p:"5d"}, "1h":{i:"1h",p:"1mo"}, "1D":{i:"1d",p:"1y"}, "1W":{i:"1wk",p:"5y"} };
 const INDIA_STOCKS=[
-  ["Reliance","RELIANCE.NS","Energy"],["TCS","TCS.NS","IT"],["Infosys","INFY.NS","IT"],["HDFC Bank","HDFCBANK.NS","Banking"],["ICICI Bank","ICICIBANK.NS","Banking"],
-  ["SBI","SBIN.NS","Banking"],["Bharti Airtel","BHARTIARTL.NS","Telecom"],["ITC","ITC.NS","Energy"],["Kotak Bank","KOTAKBANK.NS","Banking"],["L&T","LT.NS","Energy"],
-  ["Wipro","WIPRO.NS","IT"],["HCL Tech","HCLTECH.NS","IT"],["Axis Bank","AXISBANK.NS","Banking"],["Maruti","MARUTI.NS","Auto"],["Bajaj Finance","BAJFINANCE.NS","Banking"],
-  ["Titan","TITAN.NS","Auto"],["Nestle","NESTLEIND.NS","FMCG"],["Power Grid","POWERGRID.NS","Energy"],["UltraTech","ULTRACEMCO.NS","Cement"],["Tata Motors","TATAMOTORS.NS","Auto"]
+  ["Reliance","RELIANCE.NS","Energy"],["TCS","TCS.NS","IT"],["Infosys","INFY.NS","IT"],
+  ["HCL Tech","HCLTECH.NS","IT"],["Tata Motors","TATAMOTORS.NS","Auto"]
 ];
 const US_STOCKS=[
-  ["Apple Inc","AAPL","US Tech"],["Microsoft","MSFT","US Tech"],["Alphabet","GOOGL","US Tech"],["Nvidia","NVDA","US Tech"],["Tesla","TSLA","US Auto"],
-  ["Amazon","AMZN","US Retail"],["Meta Platforms","META","US Tech"],["JPMorgan Chase","JPM","US Banking"],["Goldman Sachs","GS","US Banking"],["AMD","AMD","US Tech"],
-  ["Netflix","NFLX","US Media"],["SPY","SPY","US ETF"],["QQQ","QQQ","US ETF"],["IWM","IWM","US ETF"],["TLT","TLT","US ETF"]
+  ["Nvidia","NVDA","US Tech"],["Apple Inc","AAPL","US Tech"],["Microsoft","MSFT","US Tech"],
+  ["Tesla","TSLA","US Auto"],["Amazon","AMZN","US Retail"]
 ];
 const W={
   indices:[["NIFTY 50","^NSEI","Index"],["BANK NIFTY","^NSEBANK","Index"],["SENSEX","^BSESN","Index"]],
@@ -997,15 +1034,12 @@ const W={
 const CRYPTO_ASSETS=[
   {symbol:"BTCUSDT",name:"Bitcoin",short:"BTC",icon:"B",color:"#f7931a"},
   {symbol:"ETHUSDT",name:"Ethereum",short:"ETH",icon:"E",color:"#627eea"},
-  {symbol:"BNBUSDT",name:"BNB",short:"BNB",icon:"N",color:"#f3ba2f"},
   {symbol:"SOLUSDT",name:"Solana",short:"SOL",icon:"S",color:"#9945ff"},
   {symbol:"XRPUSDT",name:"XRP",short:"XRP",icon:"X",color:"#346aa9"},
-  {symbol:"ADAUSDT",name:"Cardano",short:"ADA",icon:"A",color:"#0033ad"},
-  {symbol:"AVAXUSDT",name:"Avalanche",short:"AVAX",icon:"V",color:"#e84142"},
-  {symbol:"DOGEUSDT",name:"Dogecoin",short:"DOGE",icon:"D",color:"#c2a633"},
-  {symbol:"DOTUSDT",name:"Polkadot",short:"DOT",icon:"O",color:"#e6007a"},
-  {symbol:"MATICUSDT",name:"Polygon",short:"MATIC",icon:"M",color:"#8247e5"}
+  {symbol:"BNBUSDT",name:"BNB",short:"BNB",icon:"N",color:"#f3ba2f"}
 ];
+const CRYPTO_PRIMARY_SET=new Set(["BTCUSDT","ETHUSDT","SOLUSDT"]);
+const CRYPTO_HOLD_SET=new Set(["XRPUSDT","BNBUSDT"]);
 const ALL=[...W.indices,...W.india,...W.us,...CRYPTO_ASSETS.map(a=>[a.name,a.short,"Crypto"])].map(x=>({name:x[0],ticker:x[1],sector:x[2]}));
 const SCREEN=[...W.india,...W.us].map(x=>({name:x[0],ticker:x[1],sector:x[2]}));
 const S={ticker:"RELIANCE.NS",name:"Reliance",tf:"15m",market:"india",chart:[],rows:new Map(),sdata:[],sort:{k:"confidence",d:"desc"},reqId:0};
@@ -1050,6 +1084,9 @@ let foChart,foSeries;
 const $=id=>document.getElementById(id);
 const _apiCache = new Map();
 const _apiInFlight = new Map();
+const isPrimaryCryptoSymbol=(symbol)=>CRYPTO_PRIMARY_SET.has(String(symbol||"").toUpperCase());
+const isHoldScopeCryptoSymbol=(symbol)=>CRYPTO_HOLD_SET.has(String(symbol||"").toUpperCase());
+const isStockScopeTicker=(ticker)=>!String(ticker||"").toUpperCase().endsWith("USDT");
 function _ttlForUrl(url){
   if(url.includes("/api/chart-data")) return 45000;
   if(url.includes("/api/stock-signal")) return 12000;
@@ -1119,7 +1156,7 @@ function getCurrencyForTicker(ticker){
   if(t.endsWith(".NS")||t.endsWith(".BO"))return "₹";
   if(t.startsWith("^NSE")||t.startsWith("^BSE"))return "₹";
   if(t==="NIFTY"||t==="SENSEX"||t==="BANKNIFTY")return "₹";
-  const US_STOCK_SET=new Set(["AAPL","MSFT","GOOGL","NVDA","TSLA","AMZN","META","JPM","GS","AMD","NFLX","SPY","QQQ","IWM","TLT","XOM","BA","DIS","UBER","COIN"]);
+  const US_STOCK_SET=new Set(["NVDA","AAPL","MSFT","TSLA","AMZN"]);
   if(US_STOCK_SET.has(t))return "$";
   if(t.startsWith("^"))return "₹";
   if(t.includes("="))return "$";
@@ -1175,6 +1212,23 @@ function applyModeVisibility(mode){
   if(ct)ct.style.display=isCrypto?"":"none";
   if(bs)bs.classList.toggle("active",!isCrypto);
   if(bc)bc.classList.toggle("active",isCrypto);
+}
+function applyScopeButtonState(){
+  const inHoldScope=APP_STATE.mode==="crypto"&&isHoldScopeCryptoSymbol(APP_STATE.ticker);
+  const buy=$("btn-sig-buy"),sell=$("btn-sig-sell");
+  [buy,sell].forEach(btn=>{
+    if(!btn)return;
+    btn.disabled=inHoldScope;
+    btn.classList.toggle("scope-hold",inHoldScope);
+    btn.title=inHoldScope?"This asset is in HOLD scope for now":"";
+  });
+  const tradeBtns=[$("btn-paper-trade"),$("paper-exec-active")];
+  tradeBtns.forEach(btn=>{
+    if(!btn)return;
+    btn.disabled=inHoldScope;
+    btn.style.opacity=inHoldScope?"0.6":"";
+    btn.title=inHoldScope?"Trading is paused for this HOLD-scope asset":"";
+  });
 }
 function updateChartHeader(){
   const n=$("t-name");
@@ -1240,6 +1294,7 @@ function setActiveAsset(ticker,assetClass,name){
   if(!APP_STATE.isCrypto)localStorage.setItem("lastStockTicker",APP_STATE.ticker);
   syncLegacyFromState();
   applyModeVisibility(APP_STATE.mode);
+  applyScopeButtonState();
   updateChartHeader();
   updateCurrencySymbols();
   updatePaperActiveStock();
@@ -1369,17 +1424,28 @@ function openAssetDashboard(t,n,opts={}){
   if(!tickerRaw)return;
   const ticker=tickerRaw.toUpperCase();
   const inNewTab=opts?.newTab!==false;
-  const openUrl=(url)=>{ if(inNewTab) window.open(url,"_blank","noopener,noreferrer"); else location.href=url; };
+  const openUrl=(url)=>{
+    const target=String(url||"/");
+    if(inNewTab){
+      const w=window.open(target,"_blank","noopener,noreferrer");
+      if(!w)location.href=target;
+      return;
+    }
+    location.href=target;
+  };
   const cryptoByShort=CRYPTO_ASSETS.find(a=>a.short===ticker);
   const cryptoBySymbol=CRYPTO_ASSETS.find(a=>a.symbol===ticker);
+  const aliasToUsdt={BTC:"BTCUSDT",ETH:"ETHUSDT",SOL:"SOLUSDT",XRP:"XRPUSDT",BNB:"BNBUSDT"};
   const cryptoAsset=cryptoByShort||cryptoBySymbol||null;
-  const cryptoSymbol=cryptoAsset?.symbol||(ticker.endsWith("USDT")?ticker:"");
-  if(ticker==="BTC"||ticker==="BTCUSDT"){
+  const cryptoSymbol=cryptoAsset?.symbol||aliasToUsdt[ticker]||(ticker.endsWith("USDT")?ticker:"");
+  if(cryptoSymbol==="BTCUSDT"){
     openUrl("/");
     return;
   }
   if(cryptoSymbol){
-    openUrl(`/terminal?mode=crypto&symbol=${encodeURIComponent(cryptoSymbol)}&name=${encodeURIComponent(cryptoAsset?.name||n||cryptoSymbol)}`);
+    const deepSymbols=new Set(["ETHUSDT","SOLUSDT"]);
+    const targetPath=deepSymbols.has(cryptoSymbol)?"/asset-terminal":"/crypto-terminal";
+    openUrl(`${targetPath}?symbol=${encodeURIComponent(cryptoSymbol)}&name=${encodeURIComponent(cryptoAsset?.name||n||cryptoSymbol)}`);
     return;
   }
   openUrl(`/stock-terminal?ticker=${encodeURIComponent(tickerRaw)}&name=${encodeURIComponent(n||tickerRaw)}`);
@@ -1435,11 +1501,9 @@ function buildWatchlistInstant(stocks,containerId="watchlist"){
   container.innerHTML=(stocks||[]).map(a=>{
     const ticker=String(a[1]);
     const name=String(a[0]);
-    const cached=getCachedPrice(ticker);
-    const priceText=cached?.price?formatAssetPrice(ticker,cached.price):`${getCurrencyForTicker(ticker)} ---`;
-    const changeNum=Number(cached?.change_pct||0);
-    const changeText=cached?`${changeNum>=0?"+":""}${changeNum.toFixed(2)}%`:"--";
-    const changeColor=cached?(changeNum>=0?BUY:SELL):"#475569";
+    const priceText="--";
+    const changeText="HOLD";
+    const changeColor="#94a3b8";
     return `<div class="row watchlist-row" data-ticker="${ticker}" data-name="${name}">
       <div class="wl-main">
         <div class="wl-signal-col stock-signal" data-signal-for="${ticker}">
@@ -1493,6 +1557,12 @@ function updateWatchlistRow(ticker,price,change_pct,signal){
   const esc=(window.CSS&&typeof CSS.escape==="function")?CSS.escape(t):t;
   const priceEl=document.querySelector(`[data-price-for="${esc}"]`);
   const changeEl=document.querySelector(`[data-change-for="${esc}"]`);
+  if(isStockScopeTicker(t)){
+    if(priceEl)priceEl.textContent="--";
+    if(changeEl){changeEl.textContent="HOLD";changeEl.style.color="#94a3b8"}
+    updateSignalBadgeForTicker(t,"HOLD");
+    return;
+  }
   if(priceEl&&Number(price)>0)priceEl.textContent=formatAssetPrice(ticker,price);
   if(changeEl){const cp=Number(change_pct||0);changeEl.textContent=(cp>=0?"+":"")+cp.toFixed(2)+"%";changeEl.style.color=cp>=0?BUY:SELL}
   if(signal)updateSignalBadgeForTicker(t,signal);
@@ -1501,6 +1571,12 @@ function getCachedSignalBadge(ticker){const c=signalBadgeCache[ticker];if(c&&Dat
 function setCachedSignalBadge(ticker,data){signalBadgeCache[ticker]={data,ts:Date.now()}}
 async function fetchAndUpdatePrice(ticker){
   const localTicker=String(ticker);
+  if(isStockScopeTicker(localTicker)){
+    const result={price:0,change_pct:0,signal:"HOLD"};
+    setCachedPrice(localTicker,result);
+    updateWatchlistRow(localTicker,0,0,"HOLD");
+    return result;
+  }
   const cached=getCachedPrice(localTicker);
   if(cached&&cached.price){
     updateWatchlistRow(localTicker,cached.price,cached.change_pct||0,cached.signal||"HOLD");
@@ -1550,6 +1626,11 @@ async function fetchAndUpdateSignalBadge(ticker){
   const localTicker=String(ticker);
   const row=S.rows.get(localTicker);
   if(!row)return;
+  if(isStockScopeTicker(localTicker)){
+    setCachedSignalBadge(localTicker,{signal:"HOLD"});
+    updateWatchlistRow(localTicker,0,0,"HOLD");
+    return;
+  }
   const cached=getCachedSignalBadge(localTicker);
   if(cached){
     const cp=getCachedPrice(localTicker)||{};
@@ -1578,6 +1659,11 @@ async function loadWatchlistSignals(tickers){
 async function fetchAndUpdateCryptoSignalBadge(symbol){
   const s=String(symbol||"").toUpperCase();
   if(!s)return;
+  if(isHoldScopeCryptoSymbol(s)){
+    setCachedSignalBadge(s,{signal:"HOLD"});
+    updateSignalBadgeForTicker(s,"HOLD");
+    return;
+  }
   const cached=getCachedSignalBadge(s);
   if(cached?.signal){
     updateSignalBadgeForTicker(s,cached.signal);
@@ -1618,13 +1704,18 @@ async function refreshWatch(opts={}){buildWatchlistInstant(watchAssets(),"watchl
 function buildCryptoWatchlist(){
   const wrap=$("crypto-watchlist");
   if(!wrap)return;
-  wrap.innerHTML=CRYPTO_ASSETS.map(a=>`<div class="crypto-row watchlist-row" data-csym="${a.symbol}">
+  wrap.innerHTML=CRYPTO_ASSETS.map(a=>{
+    const primary=isPrimaryCryptoSymbol(a.symbol);
+    const scopeCls=primary?"":" scope-hold";
+    const scopeTag=primary?'<span class="crypto-scope active">ACTIVE</span>':'<span class="crypto-scope hold">HOLD</span>';
+    return `<div class="crypto-row watchlist-row${scopeCls}" data-csym="${a.symbol}">
     <div class="wl-main">
       <div class="wl-signal-col stock-signal" data-signal-for="${a.symbol}"><span class="sig-mini hold">HOLD</span></div>
-      <div class="wl-info"><span class="crypto-icon" style="color:${a.color}">${a.icon}</span><span class="name">${a.short}</span><div class="meta">${a.name}</div></div>
+      <div class="wl-info"><span class="crypto-icon" style="color:${a.color}">${a.icon}</span><span class="name">${a.short}</span><div class="meta">${a.name}${scopeTag}</div></div>
       <div class="wl-quote mono"><div data-crypto-price="${a.symbol}">$ --</div><div class="k" data-crypto-change="${a.symbol}">--</div></div>
     </div>
-  </div>`).join("");
+  </div>`;
+  }).join("");
   wrap.querySelectorAll(".crypto-row").forEach(r=>{
     const main=r.querySelector(".wl-main");
     const clickHandler=()=>{
@@ -1641,23 +1732,17 @@ function buildCryptoWatchlist(){
 function updateCryptoRow(symbol,price,changePct){const priceEl=document.querySelector(`[data-crypto-price="${symbol}"]`);const changeEl=document.querySelector(`[data-crypto-change="${symbol}"]`);if(priceEl){priceEl.textContent=price>100?`$${price.toLocaleString("en-US",{maximumFractionDigits:2})}`:`$${price.toFixed(4)}`}if(changeEl){changeEl.textContent=(changePct>=0?"+":"")+changePct.toFixed(2)+"%";changeEl.style.color=changePct>=0?BUY:SELL}}
 function updateStocksTopBar(data){
   const cardMap=[
-    {label:"NIFTY 50",id:"m-nifty",value:data?.NIFTY_50?.price,change:data?.NIFTY_50?.change_pct},
-    {label:"SENSEX",id:"m-sensex",value:data?.SENSEX?.price,change:data?.SENSEX?.change_pct},
-    {label:"BANK NIFTY",id:"m-bank",value:data?.NIFTY_BANK?.price,change:data?.NIFTY_BANK?.change_pct},
-    {label:"India VIX",id:"m-vix",value:data?.INDIA_VIX?.price,change:data?.INDIA_VIX?.change_pct}
+    {label:"NIFTY 50",id:"m-nifty"},
+    {label:"SENSEX",id:"m-sensex"},
+    {label:"BANK NIFTY",id:"m-bank"},
+    {label:"India VIX",id:"m-vix"}
   ];
   ["m-l1","m-l2","m-l3","m-l4"].forEach((id,idx)=>{const el=$(id);if(el)el.textContent=cardMap[idx].label});
   cardMap.forEach(c=>{
     const el=$(c.id);
     if(!el)return;
-    if(typeof c.value==="number"&&Number.isFinite(c.value)){
-      const change=Number(c.change||0);
-      el.textContent=`${c.value.toLocaleString("en-IN",{maximumFractionDigits:2})} (${pct(change)})`;
-      el.style.color=change>=0?BUY:SELL;
-    }else{
-      el.textContent="Data unavailable";
-      el.style.color="#94a3b8";
-    }
+    el.textContent="HOLD";
+    el.style.color="#94a3b8";
   });
 }
 function updateCryptoTopBar(btcPrice,ethPrice,fg,mcap){
@@ -1688,22 +1773,29 @@ async function loadTickerBar(){
         t:a.symbol,
         n:a.short||a.name||a.symbol,
         name:a.name||a.short||a.symbol,
-        assetClass:"crypto"
+        assetClass:"crypto",
+        scope:isPrimaryCryptoSymbol(a.symbol)?"active":"hold"
       }))
     : [
         {t:"RELIANCE.NS",n:"RELIANCE",name:"Reliance",assetClass:"indian_stock"},
         {t:"TCS.NS",n:"TCS",name:"TCS",assetClass:"indian_stock"},
         {t:"INFY.NS",n:"INFY",name:"Infosys",assetClass:"indian_stock"},
-        {t:"HDFCBANK.NS",n:"HDFC",name:"HDFC Bank",assetClass:"indian_stock"},
-        {t:"SBIN.NS",n:"SBIN",name:"SBI",assetClass:"indian_stock"},
+        {t:"HCLTECH.NS",n:"HCLTECH",name:"HCL Technologies",assetClass:"indian_stock"},
+        {t:"TATAMOTORS.NS",n:"TATAMOTORS",name:"Tata Motors",assetClass:"indian_stock"},
+        {t:"NVDA",n:"NVDA",name:"NVIDIA",assetClass:"us_stock"},
         {t:"AAPL",n:"AAPL",name:"Apple",assetClass:"us_stock"},
         {t:"MSFT",n:"MSFT",name:"Microsoft",assetClass:"us_stock"},
-        {t:"NVDA",n:"NVDA",name:"NVIDIA",assetClass:"us_stock"},
-        {t:"TSLA",n:"TSLA",name:"Tesla",assetClass:"us_stock"}
+        {t:"TSLA",n:"TSLA",name:"Tesla",assetClass:"us_stock"},
+        {t:"AMZN",n:"AMZN",name:"Amazon",assetClass:"us_stock"}
       ];
   const inner=$("ticker-inner");
   if(!inner)return;
   inner.dataset.mode=isCryptoMode?"crypto":"stocks";
+  if(!isCryptoMode){
+    const items=tickers.map(t=>`<div class="ticker-item" onclick="setActiveAsset('${t.t}','${t.assetClass}','${String(t.name||t.n||t.t).replace(/'/g,"\\'")}')"><span class="ticker-sym">${t.n}</span><span class="ticker-scope hold">HOLD</span></div>`);
+    inner.innerHTML=items.join("")+items.join("");
+    return;
+  }
   try{
     const tickerStr=tickers.map(x=>x.t).join(",");
     const prices=await json(`/api/prices/batch?tickers=${encodeURIComponent(tickerStr)}`,{timeoutMs:10000,cacheTtlMs:60000});
@@ -1716,7 +1808,8 @@ async function loadTickerBar(){
       if(!Number.isFinite(price)||price<=0)return "";
       const cur=getCurrencyForTicker(t.t);
       const locale=cur==="$"?"en-US":"en-IN";
-      return `<div class="ticker-item" onclick="setActiveAsset('${t.t}','${t.assetClass}','${String(t.name||t.n||t.t).replace(/'/g,"\\'")}')"><span class="ticker-sym">${t.n}</span><span class="ticker-price">${cur}${price.toLocaleString(locale,{maximumFractionDigits:2})}</span></div>`;
+      const scopeTag=t.scope?`<span class="ticker-scope ${t.scope}">${t.scope==="active"?"ON":"HOLD"}</span>`:"";
+      return `<div class="ticker-item" onclick="setActiveAsset('${t.t}','${t.assetClass}','${String(t.name||t.n||t.t).replace(/'/g,"\\'")}')"><span class="ticker-sym">${t.n}</span>${scopeTag}<span class="ticker-price">${cur}${price.toLocaleString(locale,{maximumFractionDigits:2})}</span></div>`;
     }).filter(Boolean);
     if(!items.length){
       inner.innerHTML=`<span class="k">${isCryptoMode?"No crypto prices available":"No stock prices available"}</span>`;
@@ -1923,7 +2016,7 @@ function initChart(){const c=$("chart");chart=LightweightCharts.createChart(c,{w
 function showChartLoading(){const st=$("status");if(st)st.textContent=`${APP_STATE.tf} | Loading chart...`;candle.setData([]);s20.setData([]);s50.setData([]);$("t-ltp").textContent="Loading...";$("t-chg").textContent="";$("t-vol").textContent="Vol: --"}
 function showChartSkeleton(){const n=$("t-name");if(n)n.textContent=`${APP_STATE.name||"Loading"} (${APP_STATE.ticker||"--"})`;const p=getCachedPrice(APP_STATE.ticker);$("t-ltp").textContent=p?.price?money(p.price,APP_STATE.currency):"Loading...";$("t-chg").textContent=p?.change_pct!=null?pct(Number(p.change_pct)):"";$("t-vol").textContent="Vol: --"}
 function renderMarkersData(j){if(!Array.isArray(j)){candle.setMarkers([]);return}candle.setMarkers(j.map(m=>({time:Number(m.time),position:m.position,color:m.color||(m.text==="BUY"?BUY:SELL),shape:m.shape||(m.text==="BUY"?"arrowUp":"arrowDown"),text:""})).filter(x=>Number.isFinite(x.time)))}
-function renderChartData(j){if(!j||!Array.isArray(j.data)||!j.data.length){candle.setData([]);s20.setData([]);s50.setData([]);$("t-ltp").textContent="Data unavailable";$("t-chg").textContent="";$("t-vol").textContent="Vol: --";return false}const d=parse(j.data);if(!d.length){$("t-ltp").textContent="Data unavailable";$("t-chg").textContent="";$("t-vol").textContent="Vol: --";return false}S.chart=d;candle.setData(d);s20.setData(sma(d,20));s50.setData(sma(d,50));chart.timeScale().fitContent();const x=d[d.length-1],y=d.length>1?d[d.length-2]:x,lastClose=Number(x.close||0),prevClose=Number(y.close||0),ch=prevClose>0?((lastClose-prevClose)/prevClose*100):0;$("t-ltp").textContent=money(lastClose,APP_STATE.currency);$("t-chg").textContent=pct(ch);$("t-chg").style.color=ch>=0?BUY:SELL;$("t-vol").textContent=`Vol: ${Number(x.volume||0).toLocaleString(APP_STATE.currency==="$"?"en-US":"en-IN")}`;updateChartHeader();return true}
+function renderChartData(j){if(!j||!Array.isArray(j.data)||!j.data.length){candle.setData([]);s20.setData([]);s50.setData([]);$("t-ltp").textContent="Data unavailable";$("t-chg").textContent="";$("t-vol").textContent="Vol: --";return false}const d=parse(j.data);if(!d.length){$("t-ltp").textContent="Data unavailable";$("t-chg").textContent="";$("t-vol").textContent="Vol: --";return false}S.chart=d;candle.setData(d);s20.setData(sma(d,20));s50.setData(sma(d,50));chart.timeScale().fitContent();const x=d[d.length-1],y=d.length>1?d[d.length-2]:x,lastClose=Number(x.close||0),prevClose=Number(y.close||0),ch=prevClose>0?((lastClose-prevClose)/prevClose*100):0;if(isStockScopeTicker(APP_STATE.ticker)){$("t-ltp").textContent="--";$("t-chg").textContent="HOLD";$("t-chg").style.color="#94a3b8";$("t-vol").textContent="Vol: --"}else{$("t-ltp").textContent=money(lastClose,APP_STATE.currency);$("t-chg").textContent=pct(ch);$("t-chg").style.color=ch>=0?BUY:SELL;$("t-vol").textContent=`Vol: ${Number(x.volume||0).toLocaleString(APP_STATE.currency==="$"?"en-US":"en-IN")}`}updateChartHeader();return true}
 async function loadChart(ticker=APP_STATE.ticker,tf=APP_STATE.tf){
   const t=String(ticker||APP_STATE.ticker);
   const frame=String(tf||APP_STATE.tf||"15m");
@@ -3148,16 +3241,19 @@ function boot(){
   const query=new URLSearchParams(location.search);
   const modeParam=String(query.get("mode")||"").toLowerCase();
   const symbolParam=String(query.get("symbol")||"").toUpperCase();
+  const hasExplicitCryptoSymbol=Boolean(symbolParam);
   const tickerParam=String(query.get("ticker")||"").toUpperCase();
   const nameParam=String(query.get("name")||"");
-  const savedMode=String(localStorage.getItem("terminalMode")||"stocks").toLowerCase();
   const savedTicker=localStorage.getItem("lastTicker")||"RELIANCE.NS";
   const savedClass=localStorage.getItem("lastAssetClass")||inferAssetClass(savedTicker);
-  const startMode=modeParam==="crypto"?"crypto":(tickerParam?"stocks":modeParam==="stocks"?"stocks":(savedMode==="crypto"?"crypto":"stocks"));
+  const startMode=modeParam==="stocks"?"stocks":(tickerParam?"stocks":"crypto");
   APP_STATE.tf="15m";
   if(startMode==="crypto"){
     const cFromQuery=CRYPTO_ASSETS.find(a=>a.symbol===symbolParam||a.short===symbolParam);
-    const targetSymbol=cFromQuery?.symbol||(symbolParam&&symbolParam.endsWith("USDT")?symbolParam:"BTCUSDT");
+    let targetSymbol=cFromQuery?.symbol||(symbolParam&&symbolParam.endsWith("USDT")?symbolParam:"BTCUSDT");
+    if(!hasExplicitCryptoSymbol&&!isPrimaryCryptoSymbol(targetSymbol)){
+      targetSymbol="BTCUSDT";
+    }
     APP_STATE.ticker=targetSymbol;
     APP_STATE.assetClass="crypto";
     APP_STATE.name=nameParam||CRYPTO_ASSETS.find(a=>a.symbol===targetSymbol)?.name||targetSymbol;

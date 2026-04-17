@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ETH Quant Terminal</title>
+<link href="https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+:root{
+  --bg:#070b12;--panel:rgba(13,21,34,.9);--line:rgba(148,163,184,.22);--txt:#e2e8f0;--muted:#94a3b8;
+  --buy:#34d399;--sell:#f87171;--hold:#60a5fa;--accent:#f7931a
+}
+*{box-sizing:border-box}
+body{
+  margin:0;color:var(--txt);font-family:"Sora",system-ui,sans-serif;
+  background:
+    radial-gradient(1000px 560px at -5% -10%,rgba(247,147,26,.2),transparent 64%),
+    radial-gradient(1000px 560px at 110% -8%,rgba(56,189,248,.14),transparent 62%),
+    linear-gradient(180deg,#060b13 0%,#091120 100%);
+}
+.wrap{max-width:1500px;margin:0 auto;padding:16px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px}
+.title{font-size:32px;font-weight:800;letter-spacing:.02em}
+.title span{color:var(--accent)}
+.links{display:flex;gap:8px;flex-wrap:wrap}
+.pill{padding:6px 10px;border-radius:999px;border:1px solid var(--line);background:#0d1728;color:var(--txt);font-size:11px;font-weight:700;text-decoration:none}
+.pill:hover{border-color:#60a5fa}
+.asset-tabs{display:flex;gap:8px;flex-wrap:wrap;padding:10px}
+.asset-btn{padding:8px 14px;border-radius:9px;border:1px solid var(--line);background:#0f1724;color:var(--muted);font-size:12px;font-weight:700;cursor:pointer}
+.asset-btn.active{color:#fff;border-color:#f7931a;background:rgba(247,147,26,.16)}
+.stats{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:10px;margin:10px 0}
+.stat{padding:10px}
+.k{font-size:11px;color:var(--muted)}
+.v{font-family:"JetBrains Mono",monospace;font-size:22px;font-weight:800}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:10px}
+.head{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.tf{display:flex;gap:6px;flex-wrap:wrap}
+.tf button{padding:5px 9px;border-radius:8px;border:1px solid var(--line);background:#0f1724;color:var(--muted);font-size:11px;cursor:pointer}
+.tf button.active{background:#1f2b3d;border-color:#60a5fa;color:#fff}
+#chart{height:560px}
+.side{padding:10px;display:grid;gap:8px;align-content:start}
+.signal-box{padding:12px;border:1px solid var(--line);border-radius:10px;background:#0f1724}
+.signal{font-size:28px;font-weight:800}
+.signal.buy{color:var(--buy)}.signal.sell{color:var(--sell)}.signal.hold{color:var(--hold)}
+.row{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:8px;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:#0f1724;font-size:12px}
+.bar{height:10px;flex:1;background:rgba(148,163,184,.2);border:1px solid rgba(148,163,184,.2);border-radius:999px;overflow:hidden}
+.fill{height:100%;width:0;background:var(--hold)}
+.reason{padding:10px;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:#0f1724;font-size:12px;line-height:1.45;color:#cbd5e1}
+.gate-list{display:grid;gap:6px}
+.gate{display:flex;justify-content:space-between;align-items:center;font-size:11px;padding:6px 8px;border:1px solid rgba(148,163,184,.16);border-radius:7px;background:#0f1724}
+.badge{padding:1px 8px;border-radius:999px;border:1px solid;font-size:10px;font-weight:700}
+.pass{color:#22c55e;border-color:#15803d;background:rgba(34,197,94,.12)}
+.fail{color:#f87171;border-color:#b91c1c;background:rgba(248,113,113,.12)}
+.ctx-grid{margin-top:10px;display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.ctx-box{padding:10px}
+.ctx-title{font-size:11px;color:var(--muted);margin-bottom:6px}
+.ctx-value{font-size:14px;font-weight:700}
+.mono{font-family:"JetBrains Mono",monospace}
+.news{margin-top:10px;padding:10px}
+.news-list{max-height:220px;overflow:auto;display:grid;gap:8px}
+.news-item{padding:8px;border:1px solid rgba(148,163,184,.16);border-radius:8px;background:#0f1724}
+.news-item a{color:#93c5fd;text-decoration:none;font-size:12px;font-weight:600}
+.news-item a:hover{text-decoration:underline}
+.muted{color:var(--muted);font-size:11px}
+@media (max-width:1260px){
+  .stats{grid-template-columns:repeat(3,minmax(0,1fr))}
+}
+@media (max-width:1080px){
+  .layout{grid-template-columns:1fr}
+  .ctx-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+  #chart{height:420px}
+}
+@media (max-width:720px){
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .ctx-grid{grid-template-columns:1fr}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <div id="page-title" class="title"><span>ETH</span> Quant Terminal</div>
+    <div class="links">
+      <a class="pill" href="/">BTC Terminal</a>
+      <a class="pill" href="/terminal?mode=crypto">Multi-Asset Terminal</a>
+    </div>
+  </div>
+
+  <div class="card asset-tabs" id="asset-tabs"></div>
+
+  <div class="stats">
+    <div class="card stat"><div class="k">Last Price</div><div id="s-price" class="v">$ --</div></div>
+    <div class="card stat"><div class="k">24h Change</div><div id="s-change" class="v" style="font-size:18px">--</div></div>
+    <div class="card stat"><div class="k">24h Volume</div><div id="s-volume" class="v" style="font-size:18px">--</div></div>
+    <div class="card stat"><div class="k">Regime</div><div id="s-regime" class="v" style="font-size:18px">--</div></div>
+    <div class="card stat"><div class="k">Net Alpha</div><div id="s-netalpha" class="v" style="font-size:18px">--</div></div>
+    <div class="card stat"><div class="k">On-chain Pulse</div><div id="s-onchain" class="v" style="font-size:18px">--</div></div>
+  </div>
+
+  <div class="layout">
+    <div class="card">
+      <div class="head">
+        <div id="chart-title" style="font-weight:800">ETHUSDT Chart</div>
+        <div class="tf" id="tf-wrap">
+          <button data-tf="5m">5m</button>
+          <button data-tf="15m" class="active">15m</button>
+          <button data-tf="1h">1h</button>
+          <button data-tf="4h">4h</button>
+          <button data-tf="1d">1D</button>
+        </div>
+      </div>
+      <div id="chart"></div>
+    </div>
+
+    <div class="card side">
+      <div class="signal-box">
+        <div class="k">Validated Signal</div>
+        <div id="sig" class="signal hold">HOLD</div>
+      </div>
+      <div class="row"><span class="k">Confidence</span><div style="display:flex;gap:8px;align-items:center;flex:1"><div class="bar"><div id="conf-fill" class="fill"></div></div><span id="conf-val">0%</span></div></div>
+      <div class="row"><span class="k">Gate Pass Ratio</span><div style="display:flex;gap:8px;align-items:center;flex:1"><div class="bar"><div id="gate-fill" class="fill"></div></div><span id="gate-val">0%</span></div></div>
+      <div class="row"><span class="k">Entry</span><span id="entry">--</span></div>
+      <div class="row"><span class="k">Stop Loss</span><span id="sl">--</span></div>
+      <div class="row"><span class="k">Take Profit</span><span id="tp">--</span></div>
+      <div class="row"><span class="k">Regime</span><span id="regime">--</span></div>
+      <div class="row"><span class="k">Conf Threshold</span><span id="conf-th">--</span></div>
+      <div class="k" style="margin-top:4px">Gate Status</div>
+      <div id="gate-list" class="gate-list"></div>
+      <div class="reason"><div class="k" style="margin-bottom:6px">Reason</div><div id="reason">Loading...</div></div>
+    </div>
+  </div>
+
+  <div class="ctx-grid">
+    <div class="card ctx-box"><div class="ctx-title">Decision</div><div id="ctx-decision" class="ctx-value">--</div></div>
+    <div class="card ctx-box"><div class="ctx-title">Trend</div><div id="ctx-trend" class="ctx-value">--</div></div>
+    <div class="card ctx-box"><div class="ctx-title">Money Flow</div><div id="ctx-money-flow" class="ctx-value">--</div></div>
+    <div class="card ctx-box"><div class="ctx-title">Smart Money</div><div id="ctx-smart-money" class="ctx-value">--</div></div>
+    <div class="card ctx-box"><div class="ctx-title">Liquidity</div><div id="ctx-liquidity" class="ctx-value">--</div></div>
+    <div class="card ctx-box"><div class="ctx-title">On-chain</div><div id="ctx-onchain" class="ctx-value">--</div></div>
+  </div>
+
+  <div class="card news">
+    <div class="k" style="margin-bottom:8px">Crypto News</div>
+    <div id="news-list" class="news-list"><div class="muted">Loading news...</div></div>
+  </div>
+</div>
+
+<script>
+const ASSETS={
+  ETHUSDT:{short:"ETH",name:"Ethereum"},
+  SOLUSDT:{short:"SOL",name:"Solana"}
+};
+const $=id=>document.getElementById(id);
+const qp=new URLSearchParams(location.search);
+let symbol=String(qp.get("symbol")||"ETHUSDT").toUpperCase();
+let tf="15m";
+if(!ASSETS[symbol])symbol="ETHUSDT";
+if(symbol==="BTCUSDT"){location.href="/";}
+
+let chart,candles,sma20,sma50,lastSignal=null;
+
+function fmtPrice(v){
+  const n=Number(v||0);
+  if(!Number.isFinite(n)||n<=0)return "--";
+  return "$"+n.toLocaleString("en-US",{maximumFractionDigits:n>=100?2:4});
+}
+function toPct(v){
+  const n=Number(v||0);
+  if(!Number.isFinite(n))return "--";
+  return (n>=0?"+":"")+n.toFixed(2)+"%";
+}
+function signalClass(sig){
+  const s=String(sig||"HOLD").toUpperCase();
+  if(s==="LONG"||s==="BUY")return "buy";
+  if(s==="SHORT"||s==="SELL")return "sell";
+  return "hold";
+}
+function signalLabel(sig){
+  const s=String(sig||"HOLD").toUpperCase();
+  if(s==="LONG")return "BUY";
+  if(s==="SHORT")return "SELL";
+  return s;
+}
+function setUpdated(){const now=new Date().toLocaleTimeString("en-IN");$("s-onchain").dataset.updated=now;}
+
+function buildAssetTabs(){
+  const wrap=$("asset-tabs");
+  wrap.innerHTML=Object.keys(ASSETS).map(s=>{
+    const a=ASSETS[s];
+    return `<button class="asset-btn ${s===symbol?"active":""}" data-symbol="${s}">${a.short}</button>`;
+  }).join("");
+  wrap.querySelectorAll(".asset-btn").forEach(btn=>{
+    btn.onclick=()=>{
+      const s=String(btn.dataset.symbol||"ETHUSDT");
+      location.href=`/crypto-terminal?symbol=${encodeURIComponent(s)}`;
+    };
+  });
+}
+
+function initChart(){
+  chart=LightweightCharts.createChart($("chart"),{
+    width:$("chart").clientWidth,
+    height:$("chart").clientHeight,
+    layout:{background:{type:"solid",color:"transparent"},textColor:"#94a3b8",fontFamily:"Sora"},
+    grid:{vertLines:{color:"rgba(148,163,184,.08)"},horzLines:{color:"rgba(148,163,184,.08)"}},
+    rightPriceScale:{borderColor:"rgba(148,163,184,.25)"},
+    timeScale:{borderColor:"rgba(148,163,184,.25)",timeVisible:true}
+  });
+  candles=chart.addCandlestickSeries({
+    upColor:"#34d399",downColor:"#f87171",borderUpColor:"#34d399",borderDownColor:"#f87171",wickUpColor:"#34d399",wickDownColor:"#f87171"
+  });
+  sma20=chart.addLineSeries({color:"#facc15",lineWidth:1,priceLineVisible:false,lastValueVisible:false});
+  sma50=chart.addLineSeries({color:"#60a5fa",lineWidth:1,priceLineVisible:false,lastValueVisible:false});
+  window.addEventListener("resize",()=>chart.applyOptions({width:$("chart").clientWidth,height:$("chart").clientHeight}));
+}
+
+function calcSma(rows,p){
+  let s=0,out=[];
+  for(let i=0;i<rows.length;i++){
+    s+=rows[i].close;
+    if(i>=p)s-=rows[i-p].close;
+    if(i>=p-1)out.push({time:rows[i].time,value:Number((s/p).toFixed(4))});
+  }
+  return out;
+}
+
+async function loadCandles(){
+  const res=await fetch(`/api/crypto/candles?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}&limit=360`);
+  const data=await res.json();
+  const rows=Array.isArray(data?.data)?data.data:[];
+  if(!rows.length){candles.setData([]);sma20.setData([]);sma50.setData([]);return;}
+  const mapped=rows.map(r=>({
+    time:Number(r.time||0),
+    open:Number(r.open||0),
+    high:Number(r.high||0),
+    low:Number(r.low||0),
+    close:Number(r.close||0),
+    volume:Number(r.volume||0)
+  })).filter(r=>r.time>0);
+  candles.setData(mapped);
+  sma20.setData(calcSma(mapped,20));
+  sma50.setData(calcSma(mapped,50));
+  chart.timeScale().fitContent();
+}
+
+async function loadTicker(){
+  const res=await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${encodeURIComponent(symbol)}`);
+  const t=await res.json();
+  const price=Number(t?.lastPrice||0);
+  const ch=Number(t?.priceChangePercent||0);
+  const vol=Number(t?.quoteVolume||0);
+  $("s-price").textContent=fmtPrice(price);
+  $("s-change").textContent=toPct(ch);
+  $("s-change").style.color=ch>=0?"#34d399":"#f87171";
+  $("s-volume").textContent="$"+vol.toLocaleString("en-US",{maximumFractionDigits:0});
+}
+
+function renderGates(checks){
+  const list=$("gate-list");
+  const keys=[
+    ["data_quality","Data Quality"],
+    ["confidence_gate","Confidence"],
+    ["cost_gate","Cost"],
+    ["regime_gate","Regime"],
+    ["mtf_alignment","MTF"],
+    ["onchain_gate","On-chain"],
+    ["liquidity_gate","Liquidity"]
+  ];
+  const passCount=keys.reduce((n,[k])=>n+(checks&&checks[k]?1:0),0);
+  const ratio=keys.length?Math.round((passCount/keys.length)*100):0;
+  $("gate-fill").style.width=`${ratio}%`;
+  $("gate-fill").style.background=ratio>=70?"#34d399":ratio>=40?"#f59e0b":"#f87171";
+  $("gate-val").textContent=`${ratio}%`;
+  list.innerHTML=keys.map(([k,label])=>{
+    const ok=Boolean(checks&&checks[k]);
+    return `<div class="gate"><span>${label}</span><span class="badge ${ok?"pass":"fail"}">${ok?"PASS":"FAIL"}</span></div>`;
+  }).join("");
+}
+
+function renderSignal(data){
+  lastSignal=data||{};
+  const validated=signalLabel(data?.validated_signal||"HOLD");
+  const raw=signalLabel(data?.signal||"HOLD");
+  const conf=Number(data?.confidence||0);
+  const sigEl=$("sig");
+  sigEl.textContent=validated;
+  sigEl.className=`signal ${signalClass(validated)}`;
+
+  $("conf-fill").style.width=`${Math.max(0,Math.min(100,conf)).toFixed(0)}%`;
+  $("conf-fill").style.background=conf>=70?"#34d399":conf>=50?"#f59e0b":"#60a5fa";
+  $("conf-val").textContent=`${Math.max(0,Math.min(100,conf)).toFixed(0)}%`;
+  $("entry").textContent=fmtPrice(data?.entry_price);
+  $("sl").textContent=fmtPrice(data?.stop_loss);
+  $("tp").textContent=fmtPrice(data?.take_profit);
+  $("regime").textContent=String(data?.regime||"--");
+  $("conf-th").textContent=Number(data?.adjusted_confidence_threshold||0)>0?`${Number(data.adjusted_confidence_threshold).toFixed(1)}%`:"--";
+  $("reason").textContent=String(data?.reason||"--");
+  $("s-regime").textContent=String(data?.regime||"--");
+  $("s-netalpha").textContent=Number(data?.net_alpha_score||0).toFixed(4);
+
+  const onchain=((data?.market_context||{}).onchain||{});
+  if(onchain&&onchain.available){
+    $("s-onchain").textContent=`${Number(onchain.activity_score||0).toFixed(0)} / 100`;
+  }else{
+    $("s-onchain").textContent="--";
+  }
+
+  const checks=(data?.gate_status||{});
+  renderGates(checks);
+
+  const ctx=(data?.market_context||{});
+  const trend=(ctx.price_change_1h>=0?"+":"")+Number(ctx.price_change_1h||0).toFixed(2)+"% / 1h";
+  const flow=(Number(ctx.cmf||0)>=0?"POSITIVE ":"NEGATIVE ")+`(${Number(ctx.cmf||0).toFixed(4)})`;
+  const smart=String(ctx.smart_money_state||"--");
+  const liqNode=(ctx.liquidity||{});
+  const liqScore=liqNode.binance?.liquidity_score ?? liqNode.jupiter?.liquidity_score ?? liqNode.liquidity_score;
+  const onchainPulse=onchain.activity_score;
+  $("ctx-decision").textContent=`${validated} (raw ${raw})`;
+  $("ctx-trend").textContent=trend;
+  $("ctx-money-flow").textContent=flow;
+  $("ctx-smart-money").textContent=smart;
+  $("ctx-liquidity").textContent=Number(liqScore||0)>0?`${Number(liqScore).toFixed(0)} / 100`:"--";
+  $("ctx-onchain").textContent=Number(onchainPulse||0)>0?`${Number(onchainPulse).toFixed(0)} / 100`:"--";
+}
+
+async function loadDeepSignal(){
+  const res=await fetch(`/api/crypto/deep-signal?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(tf)}`);
+  const data=await res.json();
+  renderSignal(data||{});
+}
+
+async function loadNews(){
+  const short=ASSETS[symbol].short;
+  const r=await fetch(`/api/news?symbol=${encodeURIComponent(short)}&asset_class=crypto&limit=10`);
+  const data=await r.json();
+  const news=Array.isArray(data?.news)?data.news:[];
+  const list=$("news-list");
+  if(!news.length){list.innerHTML='<div class="muted">No news available.</div>';return;}
+  list.innerHTML=news.map(n=>`<div class="news-item"><a href="${n.url||"#"}" target="_blank" rel="noopener">${n.title||"Untitled"}</a><div class="muted">${(n.source||"Unknown")} | ${String(n.published||"").slice(0,19).replace("T"," ")}</div></div>`).join("");
+}
+
+async function refreshAll(){
+  try{
+    await Promise.all([loadTicker(),loadCandles(),loadDeepSignal(),loadNews()]);
+  }catch(_e){}
+  setUpdated();
+}
+
+function initTf(){
+  document.querySelectorAll("#tf-wrap button").forEach(btn=>{
+    btn.onclick=async()=>{
+      document.querySelectorAll("#tf-wrap button").forEach(x=>x.classList.remove("active"));
+      btn.classList.add("active");
+      tf=String(btn.dataset.tf||"15m");
+      await Promise.all([loadCandles(),loadDeepSignal()]);
+      setUpdated();
+    };
+  });
+}
+
+function boot(){
+  const a=ASSETS[symbol];
+  $("page-title").innerHTML=`<span>${a.short}</span> Quant Terminal`;
+  $("chart-title").textContent=`${symbol} Chart`;
+  document.title=`${a.short} Quant Terminal`;
+  buildAssetTabs();
+  initTf();
+  initChart();
+  refreshAll();
+  setInterval(()=>{if(!document.hidden){loadTicker();loadDeepSignal();}},15000);
+  setInterval(()=>{if(!document.hidden){loadCandles();}},30000);
+  setInterval(()=>{if(!document.hidden){loadNews();}},180000);
+}
+boot();
+</script>
+</body>
+</html>
