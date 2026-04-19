@@ -36,8 +36,18 @@ COOLDOWN_MINUTES = {
     "same_direction": 45,
     "any_signal": 10,
 }
-BEARISH_REGIMES = {"BEARISH TREND", "HIGH_VOL_BEAR", "BEAR", "CAPITULATION"}
-BULLISH_REGIMES = {"BULLISH TREND", "HIGH_VOL_BULL", "BULL", "DISTRIBUTION"}
+# Pure directional trend regimes.
+BEARISH_REGIMES = {"BEARISH TREND", "HIGH_VOL_BEAR", "BEAR"}
+BULLISH_REGIMES = {"BULLISH TREND", "HIGH_VOL_BULL", "BULL"}
+
+# Contrarian reversal regimes:
+#   CAPITULATION favors LONG (extreme negative funding in bearish structure)
+#   DISTRIBUTION favors SHORT (extreme positive funding in bullish structure)
+LONG_CONTRARIAN_REGIMES = {"CAPITULATION"}
+SHORT_CONTRARIAN_REGIMES = {"DISTRIBUTION"}
+
+LONG_FAVORED_REGIMES = BULLISH_REGIMES | LONG_CONTRARIAN_REGIMES
+SHORT_FAVORED_REGIMES = BEARISH_REGIMES | SHORT_CONTRARIAN_REGIMES
 BASE_CONFIDENCE_THRESHOLD = 0.65
 
 # Multiplier applied to BASE_CONFIDENCE_THRESHOLD per regime.
@@ -265,12 +275,12 @@ class BitcoinMarketService:
         #   NEUTRAL regimes (SIDEWAYS, RANGE) → moderate multiplier as before.
         _base_mult = REGIME_CONFIDENCE_MULTIPLIER.get(regime, 1.0)
         _with_trend = (
-            (regime in BEARISH_REGIMES and signal == "SHORT")
-            or (regime in BULLISH_REGIMES and signal == "LONG")
+            (signal == "LONG" and regime in LONG_FAVORED_REGIMES)
+            or (signal == "SHORT" and regime in SHORT_FAVORED_REGIMES)
         )
         _counter_trend = (
-            (regime in BEARISH_REGIMES and signal == "LONG")
-            or (regime in BULLISH_REGIMES and signal == "SHORT")
+            (signal == "LONG" and regime in SHORT_FAVORED_REGIMES)
+            or (signal == "SHORT" and regime in LONG_FAVORED_REGIMES)
         )
         if _with_trend:
             # Regime already confirms direction → lower the bar by 15%
@@ -311,13 +321,13 @@ class BitcoinMarketService:
 
         # 1) Regime gate
         if signal in {"LONG", "SHORT"}:
-            if regime in BEARISH_REGIMES and signal == "LONG":
+            if signal == "LONG" and regime in SHORT_FAVORED_REGIMES:
                 signal = "WAIT"
-                reason = "regime_conflict: LONG blocked in BEARISH regime"
+                reason = f"regime_conflict: LONG blocked in {regime} regime"
                 blocked_by = "regime_gate"
-            elif regime in BULLISH_REGIMES and signal == "SHORT":
+            elif signal == "SHORT" and regime in LONG_FAVORED_REGIMES:
                 signal = "WAIT"
-                reason = "regime_conflict: SHORT blocked in BULLISH regime"
+                reason = f"regime_conflict: SHORT blocked in {regime} regime"
                 blocked_by = "regime_gate"
 
         # 2) Regime confidence gate
@@ -442,10 +452,10 @@ class BitcoinMarketService:
             reason = f"HOLD: Asia session low confidence ({confidence:.0f}% < 75% required)"
 
         if signal in {"LONG", "SHORT"} and len(feat) > 50:
-            if signal == "LONG" and trend_bearish:
+            if signal == "LONG" and trend_bearish and regime not in LONG_CONTRARIAN_REGIMES:
                 signal = "HOLD"
                 reason = "HOLD: LONG signal rejected - price below EMA21 < EMA50 (bearish structure)"
-            elif signal == "SHORT" and trend_bullish:
+            elif signal == "SHORT" and trend_bullish and regime not in SHORT_CONTRARIAN_REGIMES:
                 signal = "HOLD"
                 reason = "HOLD: SHORT signal rejected - price above EMA21 > EMA50 (bullish structure)"
 

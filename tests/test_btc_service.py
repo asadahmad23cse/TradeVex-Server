@@ -463,6 +463,176 @@ class BitcoinMarketServiceTests(unittest.TestCase):
         self.assertEqual(payload.get("blocked_by"), "regime_gate")
         self.assertIn("regime_conflict", str(payload.get("reason", "")))
 
+    def test_capitulation_regime_allows_contrarian_long(self) -> None:
+        svc = BitcoinMarketService({})
+        idx = pd.date_range("2026-03-01", periods=180, freq="5min", tz="UTC")
+        close = np.linspace(70000.0, 65000.0, len(idx))
+        recent = pd.DataFrame(
+            {
+                "Open": close + 8.0,
+                "High": close + 20.0,
+                "Low": close - 20.0,
+                "Close": close,
+                "Volume": np.full(len(idx), 180.0),
+            },
+            index=idx,
+        )
+
+        class _DQ:
+            severe = False
+
+            @staticmethod
+            def to_dict() -> dict:
+                return {"severe": False}
+
+        svc.get_recent_frame = lambda interval="5m", limit=1200: recent  # type: ignore[method-assign]
+        svc._anomaly.inspect_and_clean = lambda df, *_: (df, _DQ())  # type: ignore[method-assign]
+        svc._engineer.compute_all_features = lambda df, timeframe="intraday": pd.DataFrame(  # type: ignore[method-assign]
+            {
+                "Close": df["Close"],
+                "ATR_14": df["Close"] * 0.003,
+                "Volatility_20": pd.Series(0.4, index=df.index),
+                "Volume_Ratio": pd.Series(1.3, index=df.index),
+                "OBV_Slope": pd.Series(3.0, index=df.index),
+                "CMF": pd.Series(0.05, index=df.index),
+                "RSI_14": pd.Series(35.0, index=df.index),
+            },
+            index=df.index,
+        )
+        svc._alpha.score = lambda *_args, **_kwargs: {  # type: ignore[method-assign]
+            "signal": "BUY",
+            "strength": "MODERATE",
+            "confidence": 55.0,
+            "alpha_score": 0.65,
+            "factor_scores": {},
+            "ic_weights": {},
+        }
+        svc._cost.net_alpha = lambda **_kwargs: (0.28, 0.01, True)  # type: ignore[method-assign]
+        svc._fear_greed.get_snapshot = lambda: {  # type: ignore[method-assign]
+            "value": 35,
+            "label": "Fear",
+            "z_score": 0.0,
+            "source": "rsi_fallback",
+            "as_of": None,
+        }
+        svc._mtf_bias.check_alignment = lambda *args, **kwargs: {  # type: ignore[method-assign]
+            "alignment_ok": True,
+            "bias_4h": "NEUTRAL",
+            "bias_1d": "NEUTRAL",
+            "block_reason": None,
+            "alignment_score": 1.0,
+        }
+
+        with patch.object(btc_service_module, "datetime", _FixedDateTime), patch(
+            "src.data.futures_data.get_futures_sentiment",
+            return_value={
+                "funding_rate_pct": -0.04,
+                "funding_rate_z": -2.0,
+                "funding_sentiment": "MILD_SHORT",
+                "open_interest_btc": 120000.0,
+                "oi_delta_pct_1h": 0.5,
+                "oi_delta_pct_4h": 0.7,
+                "liquidation_event": False,
+                "liquidation_bias": "NONE",
+                "liquidation_score": 0.1,
+                "mark_price": float(close[-1]),
+            },
+        ), patch.object(btc_service_module, "check_open_signals"), patch.object(
+            btc_service_module, "record_signal"
+        ):
+            payload = svc.get_realtime_signal(interval="5m")
+
+        self.assertEqual(payload.get("regime"), "CAPITULATION")
+        self.assertEqual(payload["signal"], "LONG")
+        self.assertTrue(payload["validated"])
+        self.assertIsNone(payload.get("blocked_by"))
+        self.assertLess(float(payload.get("adjusted_confidence_threshold", 100.0)), 55.0)
+
+    def test_distribution_regime_allows_contrarian_short(self) -> None:
+        svc = BitcoinMarketService({})
+        idx = pd.date_range("2026-03-01", periods=180, freq="5min", tz="UTC")
+        close = np.linspace(65000.0, 70000.0, len(idx))
+        recent = pd.DataFrame(
+            {
+                "Open": close - 8.0,
+                "High": close + 20.0,
+                "Low": close - 20.0,
+                "Close": close,
+                "Volume": np.full(len(idx), 180.0),
+            },
+            index=idx,
+        )
+
+        class _DQ:
+            severe = False
+
+            @staticmethod
+            def to_dict() -> dict:
+                return {"severe": False}
+
+        svc.get_recent_frame = lambda interval="5m", limit=1200: recent  # type: ignore[method-assign]
+        svc._anomaly.inspect_and_clean = lambda df, *_: (df, _DQ())  # type: ignore[method-assign]
+        svc._engineer.compute_all_features = lambda df, timeframe="intraday": pd.DataFrame(  # type: ignore[method-assign]
+            {
+                "Close": df["Close"],
+                "ATR_14": df["Close"] * 0.003,
+                "Volatility_20": pd.Series(0.4, index=df.index),
+                "Volume_Ratio": pd.Series(1.3, index=df.index),
+                "OBV_Slope": pd.Series(-3.0, index=df.index),
+                "CMF": pd.Series(-0.05, index=df.index),
+                "RSI_14": pd.Series(65.0, index=df.index),
+            },
+            index=df.index,
+        )
+        svc._alpha.score = lambda *_args, **_kwargs: {  # type: ignore[method-assign]
+            "signal": "SELL",
+            "strength": "MODERATE",
+            "confidence": 55.0,
+            "alpha_score": 0.65,
+            "factor_scores": {},
+            "ic_weights": {},
+        }
+        svc._cost.net_alpha = lambda **_kwargs: (0.28, 0.01, True)  # type: ignore[method-assign]
+        svc._fear_greed.get_snapshot = lambda: {  # type: ignore[method-assign]
+            "value": 65,
+            "label": "Greed",
+            "z_score": 0.0,
+            "source": "rsi_fallback",
+            "as_of": None,
+        }
+        svc._mtf_bias.check_alignment = lambda *args, **kwargs: {  # type: ignore[method-assign]
+            "alignment_ok": True,
+            "bias_4h": "NEUTRAL",
+            "bias_1d": "NEUTRAL",
+            "block_reason": None,
+            "alignment_score": 1.0,
+        }
+
+        with patch.object(btc_service_module, "datetime", _FixedDateTime), patch(
+            "src.data.futures_data.get_futures_sentiment",
+            return_value={
+                "funding_rate_pct": 0.04,
+                "funding_rate_z": 2.0,
+                "funding_sentiment": "MILD_LONG",
+                "open_interest_btc": 120000.0,
+                "oi_delta_pct_1h": 0.5,
+                "oi_delta_pct_4h": 0.7,
+                "liquidation_event": False,
+                "liquidation_bias": "NONE",
+                "liquidation_score": 0.1,
+                "mark_price": float(close[-1]),
+            },
+        ), patch.object(btc_service_module, "check_open_signals"), patch.object(
+            btc_service_module, "record_signal"
+        ):
+            payload = svc.get_realtime_signal(interval="5m")
+
+        self.assertEqual(payload.get("regime"), "DISTRIBUTION")
+        self.assertEqual(payload["signal"], "SHORT")
+        self.assertTrue(payload["validated"])
+        self.assertIsNone(payload.get("blocked_by"))
+        self.assertLess(float(payload.get("adjusted_confidence_threshold", 100.0)), 55.0)
+
     def test_short_pnl_sl_and_tp1_behaviour(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         orig_history_file = signal_history.HISTORY_FILE
