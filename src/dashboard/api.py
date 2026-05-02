@@ -70,6 +70,7 @@ except Exception:
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+ADMIN_EMAILS = {"techieasad01@gmail.com"}
 
 if load_dotenv is not None:
     load_dotenv()
@@ -291,6 +292,65 @@ def _is_supabase_email_allowed(email: str) -> bool:
     return email.strip().lower() in allowed
 
 
+def _supabase_requires_active_subscription() -> bool:
+    cfg = _auth_config()
+    raw = os.getenv("DASHBOARD_REQUIRE_ACTIVE_SUBSCRIPTION", "")
+    if str(raw).strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    return bool(cfg.get("require_active_subscription", False))
+
+
+def _parse_supabase_timestamp(value: Any) -> datetime | None:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    try:
+        if raw.endswith("Z"):
+            raw = raw[:-1] + "+00:00"
+        parsed = datetime.fromisoformat(raw)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+async def _verify_supabase_profile_access(conf: dict[str, str], token: str, user_id: str) -> bool:
+    if not _supabase_requires_active_subscription():
+        return True
+    try:
+        async with httpx.AsyncClient(timeout=6.0, trust_env=False) as client:
+            res = await client.get(
+                f"{conf['url']}/rest/v1/users",
+                params={
+                    "id": f"eq.{user_id}",
+                    "select": "is_active,subscription_expires_at",
+                    "limit": "1",
+                },
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "apikey": conf["anon_key"],
+                    "Accept": "application/json",
+                },
+            )
+        if res.status_code != 200:
+            logger.warning("Supabase profile access check failed: status=%s", res.status_code)
+            return False
+        rows = res.json() if res.content else []
+        if not isinstance(rows, list) or not rows:
+            return False
+        row = rows[0] or {}
+        if row.get("is_active") is False:
+            return False
+        expires_at = _parse_supabase_timestamp(row.get("subscription_expires_at"))
+        if expires_at is None:
+            return False
+        return expires_at > datetime.now(timezone.utc)
+    except Exception as exc:
+        logger.warning("Supabase profile access check failed: %s", exc)
+        return False
+
+
 def _email_from_jwt_unverified(token: str) -> str:
     try:
         parts = str(token or "").split(".")
@@ -372,6 +432,11 @@ async def _verify_supabase_token(token: str) -> bool:
         if not user_id:
             return False
         if not _is_supabase_email_allowed(email):
+            return False
+        if email in ADMIN_EMAILS:
+            _supabase_token_cache[token] = (now + 45.0, user_id, email)
+            return True
+        if not await _verify_supabase_profile_access(conf, token, user_id):
             return False
         _supabase_token_cache[token] = (now + 45.0, user_id, email)
         return True
@@ -5681,6 +5746,38 @@ def _supabase_auth_bootstrap() -> str:
     return "";
   }
 
+  function readHandoffTokens() {
+    const out = { accessToken: "", refreshToken: "" };
+    try {
+      const hash = window.location.hash && window.location.hash.startsWith("#")
+        ? new URLSearchParams(window.location.hash.slice(1))
+        : new URLSearchParams();
+      const query = new URLSearchParams(window.location.search || "");
+      out.accessToken = hash.get("access_token") || query.get("access_token") || "";
+      out.refreshToken = hash.get("refresh_token") || query.get("refresh_token") || "";
+    } catch (_err) {}
+    return out;
+  }
+
+  function hasCompleteHandoff(handoff) {
+    return !!(handoff && handoff.accessToken && handoff.refreshToken);
+  }
+
+  function shouldForcePortalEntry(handoff) {
+    return window.location.hostname === "terminal.tradevex.live" && !hasCompleteHandoff(handoff);
+  }
+
+  function clearHandoffTokens() {
+    try {
+      const url = new URL(window.location.href);
+      url.hash = "";
+      url.searchParams.delete("access_token");
+      url.searchParams.delete("refresh_token");
+      url.searchParams.delete("source");
+      window.history.replaceState({}, document.title, url.pathname + url.search);
+    } catch (_err) {}
+  }
+
   currentToken = readStoredToken();
 
   function isInternalApi(urlValue) {
@@ -5864,30 +5961,20 @@ def _supabase_auth_bootstrap() -> str:
     const profilePanel = document.getElementById("sb-profile-panel");
     const email = session && session.user ? (session.user.email || session.user.id || "") : "";
     currentToken = session && session.access_token ? session.access_token : "";
+    
     if (!session) {
-      if (overlay) overlay.style.display = "flex";
-      if (document.body) document.body.classList.add("sb-auth-locked");
-      if (userChip) userChip.style.display = "none";
-      if (userEmail) userEmail.textContent = "";
-      if (profileOpen) profileOpen.style.display = "none";
-      if (profilePanel) profilePanel.style.display = "none";
+      window.location.href = "https://tradevex.live/terminal";
       return;
     }
 
     const canAccess = await verifyDashboardAccess(currentToken);
     if (!canAccess) {
-      if (overlay) overlay.style.display = "flex";
-      if (document.body) document.body.classList.add("sb-auth-locked");
-      if (userChip) userChip.style.display = "none";
-      if (userEmail) userEmail.textContent = "";
-      if (profileOpen) profileOpen.style.display = "none";
-      if (profilePanel) profilePanel.style.display = "none";
-      setMessage("This account is not authorized for this terminal.", true);
       try {
         const c = await loadSupabaseClient();
         await c.auth.signOut();
       } catch (_err) {}
       currentToken = "";
+      window.location.href = "https://tradevex.live/terminal?error=unauthorized";
       return;
     }
 
@@ -5937,6 +6024,30 @@ def _supabase_auth_bootstrap() -> str:
     }
     try {
       const client = await loadSupabaseClient();
+      const handoff = readHandoffTokens();
+      if (shouldForcePortalEntry(handoff)) {
+        try { await client.auth.signOut(); } catch (_err) {}
+        currentToken = "";
+        window.location.replace("https://tradevex.live/");
+        return;
+      }
+      if (handoff.accessToken || handoff.refreshToken) {
+        if (handoff.accessToken && handoff.refreshToken) {
+          const handoffRes = await client.auth.setSession({
+            access_token: handoff.accessToken,
+            refresh_token: handoff.refreshToken,
+          });
+          clearHandoffTokens();
+          if (handoffRes && handoffRes.error) {
+            setMessage("Secure terminal link expired. Please log in again from tradevex.live.", true);
+          } else {
+            currentToken = handoff.accessToken;
+          }
+        } else {
+          clearHandoffTokens();
+          setMessage("Incomplete terminal handoff. Please log in again from tradevex.live.", true);
+        }
+      }
       const sessionRes = await client.auth.getSession();
       await renderSession(sessionRes && sessionRes.data ? sessionRes.data.session : null);
 

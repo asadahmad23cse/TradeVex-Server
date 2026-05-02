@@ -114,14 +114,15 @@ dashboard:
   host: "127.0.0.1"
   port: 8000
   auth:
-    enabled: false
+    enabled: true
     provider: "supabase"   # "local" | "supabase"
-    allowed_emails: ["admin@gmail.com"]  # only these emails can access
+    allowed_emails: []  # optional allowlist; empty allows authenticated active subscribers
+    require_active_subscription: true
     username: "admin"
     password: "change-me"
     jwt_secret: "change-this-secret"
-    supabase_url: ""       # fallback to SUPABASE_URL env
-    supabase_anon_key: ""  # fallback to SUPABASE_ANON_KEY env
+    supabase_url: "https://cfhoqvebeyawyyufsxuu.supabase.co"       # fallback to SUPABASE_URL env
+    supabase_anon_key: "sb_publishable_zRyfWpy4msJl9g3A_ZTKuA_lX9SnA8L"  # fallback to SUPABASE_ANON_KEY env
 
 wfo:
   min_train_days: 252
