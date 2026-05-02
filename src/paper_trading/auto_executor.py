@@ -9,12 +9,15 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
+import urllib3
 
 from src.paper_trading.paper_engine import PaperTradingEngine
 
 logger = logging.getLogger(__name__)
+SUPPORTED_CRYPTO_TICKERS = {"BTCUSDT", "ETHUSDT", "SOLUSDT"}
 
 
 class AutoExecutor:
@@ -65,6 +68,8 @@ class AutoExecutor:
 
         # 2) check new signals
         for ticker in tickers:
+            if not self._market_is_open(ticker):
+                continue
             sig = self._fetch_signal(ticker)
             if not sig:
                 continue
@@ -85,13 +90,20 @@ class AutoExecutor:
                 cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
             watch = cfg.get("watchlist", {}) if isinstance(cfg, dict) else {}
             out: list[str] = []
-            for bucket in ("indian_stocks", "us_stocks", "crypto"):
-                for item in watch.get(bucket, []):
-                    symbol = str(item.get("symbol") or item.get("yf_ticker") or "").upper().strip()
-                    if symbol:
-                        out.append(symbol)
+            for item in watch.get("indian_stocks", []):
+                symbol = str(item.get("yf_ticker") or item.get("symbol") or "").upper().strip()
+                if symbol:
+                    out.append(symbol)
+            for item in watch.get("us_stocks", []):
+                symbol = str(item.get("yf_ticker") or item.get("symbol") or "").upper().strip()
+                if symbol:
+                    out.append(symbol)
+            for item in watch.get("crypto", []):
+                symbol = str(item.get("binance_ticker") or item.get("symbol") or "").upper().strip()
+                if symbol in SUPPORTED_CRYPTO_TICKERS:
+                    out.append(symbol)
             if not out:
-                out = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "AAPL", "MSFT", "BTC"]
+                out = ["RELIANCE.NS", "TCS.NS", "INFY.NS", "AAPL", "MSFT", "BTCUSDT"]
             seen = set()
             dedup = []
             for t in out:
@@ -100,7 +112,7 @@ class AutoExecutor:
                     dedup.append(t)
             return dedup
         except Exception:
-            return ["RELIANCE.NS", "TCS.NS", "INFY.NS", "AAPL", "MSFT", "BTC"]
+            return ["RELIANCE.NS", "TCS.NS", "INFY.NS", "AAPL", "MSFT", "BTCUSDT"]
 
     def _fetch_signal(self, ticker: str) -> dict | None:
         t = str(ticker).upper().strip()
@@ -112,16 +124,50 @@ class AutoExecutor:
                 raw = svc.get_realtime_signal(interval="15m")
                 sig = str(raw.get("validated_signal") or raw.get("signal") or "HOLD").upper()
                 return {
-                    "ticker": "BTC",
+                    "ticker": "BTCUSDT",
                     "signal": sig,
                     "entry_price": raw.get("entry") or raw.get("entry_price"),
                     "stop_loss": raw.get("stop_loss"),
                     "take_profit": raw.get("take_profit") or raw.get("tp2") or raw.get("tp1"),
                     "confidence": raw.get("confidence", 0),
+                    "alpha_score": raw.get("alpha_score", raw.get("confidence", 0)),
+                    "regime": raw.get("regime"),
                     "asset_class": "crypto",
                     "strength": raw.get("strength", ""),
                     "sqs": raw.get("sqs"),
+                    "position_sizing": raw.get("position_sizing"),
+                    "meta_controls": raw.get("meta_controls"),
+                    "last_calibration_timestamp": raw.get("last_calibration_timestamp"),
                 }
+
+            if t in {"ETH", "ETHUSDT", "SOL", "SOLUSDT"}:
+                from src.dashboard.altcoin_service import AltcoinMarketService
+
+                sym = {"ETH": "ETHUSDT", "SOL": "SOLUSDT"}.get(t, t)
+                svc = AltcoinMarketService({})
+                raw = svc.get_realtime_signal(symbol=sym, interval="15m")
+                sig = str(raw.get("validated_signal") or raw.get("signal") or "HOLD").upper()
+                validation = raw.get("validation") if isinstance(raw.get("validation"), dict) else {}
+                validation_score = self._to_float(validation.get("score"), 0.0) * 100.0
+                return {
+                    "ticker": sym,
+                    "signal": sig,
+                    "entry_price": raw.get("entry") or raw.get("entry_price"),
+                    "stop_loss": raw.get("stop_loss"),
+                    "take_profit": raw.get("take_profit") or raw.get("tp2") or raw.get("tp1"),
+                    "confidence": raw.get("confidence", 0),
+                    "alpha_score": raw.get("alpha_score", raw.get("confidence", 0)),
+                    "regime": raw.get("regime"),
+                    "asset_class": "crypto",
+                    "strength": raw.get("strength", ""),
+                    "sqs": validation_score or raw.get("sqs") or raw.get("confidence", 0),
+                    "position_sizing": raw.get("position_sizing"),
+                    "meta_controls": raw.get("meta_controls"),
+                    "last_calibration_timestamp": raw.get("last_calibration_timestamp"),
+                }
+
+            if t.endswith("USDT"):
+                return None
 
             from src.dashboard.api import get_stock_signal
 
@@ -139,7 +185,20 @@ class AutoExecutor:
         t = str(ticker).upper().strip()
         try:
             if t in {"BTC", "BTCUSDT"}:
-                r = requests.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": "BTCUSDT"}, timeout=8)
+                r = self._public_binance_get(
+                    "https://api.binance.com/api/v3/ticker/price",
+                    params={"symbol": "BTCUSDT"},
+                    timeout=8,
+                )
+                r.raise_for_status()
+                return self._to_float(r.json().get("price"), 0.0)
+            if t in {"ETH", "ETHUSDT", "SOL", "SOLUSDT"}:
+                sym = {"ETH": "ETHUSDT", "SOL": "SOLUSDT"}.get(t, t)
+                r = self._public_binance_get(
+                    "https://api.binance.com/api/v3/ticker/price",
+                    params={"symbol": sym},
+                    timeout=8,
+                )
                 r.raise_for_status()
                 return self._to_float(r.json().get("price"), 0.0)
 
@@ -153,6 +212,14 @@ class AutoExecutor:
             return 0.0
         return 0.0
 
+    @staticmethod
+    def _public_binance_get(url: str, **kwargs: Any) -> requests.Response:
+        try:
+            return requests.get(url, **kwargs)
+        except requests.exceptions.SSLError:
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+            return requests.get(url, verify=False, **kwargs)
+
     def _is_duplicate(self, ticker: str, direction: str) -> bool:
         key = f"{ticker}:{direction}"
         ts = self._last_signals.get(key, 0.0)
@@ -162,9 +229,11 @@ class AutoExecutor:
         self._last_signals[f"{ticker}:{direction}"] = time.time()
 
     def _try_execute(self, ticker: str, signal: dict) -> dict | None:
-        t = str(ticker or signal.get("ticker") or "").upper().strip()
+        t = str(signal.get("ticker") or ticker or "").upper().strip()
         direction = self._normalize_direction(signal.get("signal"))
         if direction not in {"LONG", "SHORT"}:
+            return None
+        if not self._market_is_open(t):
             return None
 
         confidence = self._to_float(signal.get("confidence"), 0.0)
@@ -183,8 +252,13 @@ class AutoExecutor:
             "stop_loss": signal.get("stop_loss"),
             "take_profit": signal.get("take_profit"),
             "confidence": confidence,
+            "alpha_score": signal.get("alpha_score", confidence),
+            "regime": signal.get("regime"),
             "asset_class": signal.get("asset_class") or self._asset_class(t),
             "strength": signal.get("strength", ""),
+            "position_sizing": signal.get("position_sizing"),
+            "meta_controls": signal.get("meta_controls"),
+            "last_calibration_timestamp": signal.get("last_calibration_timestamp"),
         }
 
         if str(self.engine.mode).lower() == "auto":
@@ -206,11 +280,16 @@ class AutoExecutor:
                 "ticker": t,
                 "signal": direction,
                 "confidence": confidence,
+                "alpha_score": payload.get("alpha_score", confidence),
+                "regime": payload.get("regime"),
                 "entry_price": self._to_float(payload.get("entry_price"), 0.0),
                 "stop_loss": self._to_float(payload.get("stop_loss"), 0.0),
                 "take_profit": self._to_float(payload.get("take_profit"), 0.0),
                 "asset_class": payload.get("asset_class"),
                 "strength": payload.get("strength"),
+                "position_sizing": payload.get("position_sizing"),
+                "meta_controls": payload.get("meta_controls"),
+                "last_calibration_timestamp": payload.get("last_calibration_timestamp"),
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "expires_ts": time.time() + 60 * 60,
             }
@@ -247,8 +326,13 @@ class AutoExecutor:
                 "stop_loss": row.get("stop_loss"),
                 "take_profit": row.get("take_profit"),
                 "confidence": row.get("confidence"),
+                "alpha_score": row.get("alpha_score"),
+                "regime": row.get("regime"),
                 "asset_class": row.get("asset_class"),
                 "strength": row.get("strength"),
+                "position_sizing": row.get("position_sizing"),
+                "meta_controls": row.get("meta_controls"),
+                "last_calibration_timestamp": row.get("last_calibration_timestamp"),
             }
             result = self.engine.execute_trade(payload, mode="manual")
             if result.get("success"):
@@ -276,9 +360,33 @@ class AutoExecutor:
         t = str(ticker).upper()
         if t.endswith((".NS", ".BO")):
             return "indian_stock"
-        if t in {"BTC", "BTCUSDT", "ETH", "ETHUSDT"}:
+        if t in {"BTC", "ETH", "SOL"}:
+            t = f"{t}USDT"
+        if t in SUPPORTED_CRYPTO_TICKERS:
             return "crypto"
         return "us_stock"
+
+    @staticmethod
+    def _market_is_open(ticker: str, now_utc: datetime | None = None) -> bool:
+        t = str(ticker or "").upper().strip()
+        if t in {"BTC", "ETH", "SOL"}:
+            t = f"{t}USDT"
+        if t in SUPPORTED_CRYPTO_TICKERS:
+            return True
+        now = now_utc or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        if t.endswith((".NS", ".BO")):
+            local = now.astimezone(ZoneInfo("Asia/Kolkata"))
+            if local.weekday() >= 5:
+                return False
+            minutes = local.hour * 60 + local.minute
+            return (9 * 60 + 15) <= minutes <= (15 * 60 + 30)
+        local = now.astimezone(ZoneInfo("America/New_York"))
+        if local.weekday() >= 5:
+            return False
+        minutes = local.hour * 60 + local.minute
+        return (9 * 60 + 30) <= minutes <= (16 * 60)
 
     @staticmethod
     def _normalize_direction(signal: Any) -> str:
@@ -295,4 +403,3 @@ class AutoExecutor:
             return float(v)
         except Exception:
             return default
-

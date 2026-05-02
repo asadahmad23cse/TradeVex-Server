@@ -1153,15 +1153,19 @@ body {
   display:flex;
   align-items:center;
   justify-content:center;
+  flex-wrap:wrap;
+  row-gap:4px;
   gap:8px;
   color:rgba(255,255,255,.85);
   font-size:12px;
 }
+.pt-stat-item{white-space:nowrap;}
 .pt-stat-item strong{font-weight:700;color:#f3f7ff;}
 .pt-stat-sep{color:rgba(255,255,255,.28);}
 #pt-topbar-right{display:flex;align-items:center;gap:8px;}
 #pt-btn-long,
 #pt-btn-short,
+#pt-btn-auto,
 #pt-btn-reset{
   font-family:"JetBrains Mono","Fira Code","Consolas","SFMono-Regular",monospace;
   border-radius:6px;
@@ -1184,6 +1188,20 @@ body {
   padding:8px 20px;
 }
 #pt-btn-short:hover{background:#ff446644;}
+#pt-btn-auto{
+  background:#1f293744;
+  border:1px solid rgba(148,163,184,.45);
+  color:#94a3b8;
+  font-weight:700;
+  padding:8px 12px;
+}
+#pt-btn-auto.pt-auto-on{
+  background:#00ff8822;
+  border-color:#00ff88;
+  color:#00ff88;
+}
+#pt-btn-auto:hover{background:rgba(148,163,184,.18);}
+#pt-btn-auto.pt-auto-on:hover{background:#00ff8844;}
 #pt-btn-reset{
   background:rgba(255,255,255,.08);
   border:1px solid rgba(255,255,255,.2);
@@ -1462,10 +1480,72 @@ body {
   margin-top:12px;
   color:#bcc8da;
   font-size:12px;
+  display:grid;
+  gap:4px;
+}
+#pt-size-controls{
+  border:1px solid rgba(255,255,255,.1);
+  border-radius:8px;
+  background:rgba(255,255,255,.02);
+  padding:10px;
+  margin-bottom:4px;
+}
+.pt-size-controls-title{
+  color:#aebcd2;
+  font-size:11px;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  margin-bottom:8px;
+}
+.pt-size-mode-row{
+  display:flex;
+  align-items:center;
+  gap:14px;
+  margin-bottom:8px;
+}
+.pt-size-mode-row label{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  color:#d7e2f2;
+  font-size:12px;
+}
+.pt-size-mode-row input[type="radio"]{
+  accent-color:var(--long,#00ff88);
+}
+.pt-size-input-row{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:8px;
+}
+.pt-size-input-wrap{
+  display:grid;
+  gap:4px;
+}
+.pt-size-input-wrap label{
+  color:#9bb0ca;
+  font-size:11px;
+}
+.pt-size-input-wrap input{
+  background:#0a0e1a;
+  border:1px solid rgba(255,255,255,.1);
+  border-radius:8px;
+  color:#e6edf7;
+  padding:7px 8px;
+  font-family:"JetBrains Mono","Fira Code","Consolas","SFMono-Regular",monospace;
+  font-size:12px;
+}
+.pt-size-input-wrap input:disabled{
+  opacity:.55;
+  cursor:not-allowed;
 }
 #pt-modal-size{
   font-family:"JetBrains Mono","Fira Code","Consolas","SFMono-Regular",monospace;
   color:#e6edf7;
+}
+#pt-modal-risk{
+  font-size:11px;
+  color:#8fa2bf;
 }
 #pt-modal-error{
   margin-top:10px;
@@ -1519,6 +1599,9 @@ body {
   }
   #pt-bottom-row{
     flex-direction:column;
+  }
+  .pt-size-input-row{
+    grid-template-columns:1fr;
   }
 }
 
@@ -2232,6 +2315,33 @@ body {
   box-shadow: 0 0 12px rgba(240,69,90,.2);
 }
 
+#pt-btn-auto {
+  background: rgba(148,163,184,.08);
+  border: 1px solid var(--line-2);
+  color: var(--text-3);
+  font-weight: 700;
+  font-size: 10.5px;
+  letter-spacing: .04em;
+  padding: 7px 12px;
+  height: 34px;
+}
+
+#pt-btn-auto.pt-auto-on {
+  background: var(--long-dim);
+  border-color: var(--long-border);
+  color: var(--long);
+}
+
+#pt-btn-auto:hover {
+  background: rgba(148,163,184,.14);
+  color: var(--text-2);
+}
+
+#pt-btn-auto.pt-auto-on:hover {
+  background: rgba(0,217,126,.22);
+  box-shadow: 0 0 12px rgba(0,217,126,.18);
+}
+
 #pt-btn-reset {
   background: transparent;
   border: 1px solid var(--line-2);
@@ -2638,7 +2748,7 @@ body {
     <div id="funding-row" style="display:flex; gap:16px; padding:4px 12px; color:#8b949e; font-size:13px;">
       <span>Funding: <span id="funding-rate" style="font-family:monospace">—</span></span>
       <span>Sentiment: <span id="funding-sentiment">—</span></span>
-      <span>OI: <span id="open-interest" style="font-family:monospace">—</span> BTC</span>
+      <span>OI: <span id="open-interest" style="font-family:monospace">—</span> <span id="open-interest-unit">BTC</span></span>
     </div>
 
     <div class="grid">
@@ -2982,11 +3092,16 @@ body {
         <div id="pt-topbar-middle">
           <span class="pt-stat-item">Capital: <strong id="pt-capital">$10,000.00</strong></span>
           <span class="pt-stat-sep">|</span>
+          <span class="pt-stat-item">Default Cap: <strong id="pt-trade-budget">$1,000.00 (10% cap)</strong></span>
+          <span class="pt-stat-sep">|</span>
+          <span class="pt-stat-item">Default Risk: <strong id="pt-risk-budget">$200.00 (2%)</strong></span>
+          <span class="pt-stat-sep">|</span>
           <span class="pt-stat-item">Today PnL: <strong id="pt-today-pnl" class="pt-pnl-pos">+$0.00</strong></span>
           <span class="pt-stat-sep">|</span>
           <span class="pt-stat-item">Total PnL: <strong id="pt-total-pnl" class="pt-pnl-pos">+$0.00</strong></span>
         </div>
         <div id="pt-topbar-right">
+          <button id="pt-btn-auto" type="button" title="Toggle automatic paper execution">AUTO OFF</button>
           <button id="pt-btn-long" type="button">▲ LONG</button>
           <button id="pt-btn-short" type="button">▼ SHORT</button>
           <button id="pt-btn-reset" type="button">↺ Reset</button>
@@ -3273,7 +3388,8 @@ body {
 
     <div class="trade-stats-panel">
       <div class="trade-stats-grid">
-        <div class="trade-stat">Total Trades:<b id="stat-total-trades">0</b></div>
+        <div class="trade-stat">Executed Trades:<b id="stat-total-trades">0</b></div>
+        <div class="trade-stat">Blocked Today:<b id="stat-blocked-signals">0</b></div>
         <div class="trade-stat">Win Rate:<b id="stat-win-rate">0.0%</b></div>
         <div class="trade-stat">Total P&L:<b id="stat-total-pnl">0.00%</b></div>
         <div class="trade-stat">Avg Win:<b id="stat-avg-win">0.00%</b></div>
@@ -3284,7 +3400,7 @@ body {
         <div class="trade-stat">Best Trade:<b id="stat-best-trade">0.00%</b></div>
         <div class="trade-stat">Worst Trade:<b id="stat-worst-trade">0.00%</b></div>
         <div class="trade-stat">Avg Duration:<b id="stat-avg-duration">0s</b></div>
-        <div class="trade-stat">Open Positions:<b id="stat-open-positions">0</b></div>
+        <div class="trade-stat">Open Signals:<b id="stat-open-positions">0</b></div>
       </div>
     </div>
 
@@ -3327,7 +3443,9 @@ body {
         <span>| Win Rate: <b id="eq-win-rate">0.0%</b></span>
         <span>| Max DD: <b id="eq-max-dd">0.00%</b></span>
         <span>| Sharpe: <b id="eq-sharpe">0.00</b></span>
-        <span>| Trades: <b id="eq-trades">0</b></span>
+        <span>| Executed: <b id="eq-trades">0</b></span>
+        <span>| Blocked Today: <b id="eq-blocked">0</b></span>
+        <span>| Open Signals: <b id="eq-open-signals">0</b></span>
       </div>
       <div style="
     width: 100%;
@@ -3415,7 +3533,26 @@ body {
         <div class="pt-auto-row"><span>R:R</span><span id="pt-manual-rr" class="val">--</span></div>
       </div>
       <div id="pt-modal-size-row">
-        Size: <span id="pt-modal-size">--</span>
+        <div id="pt-size-controls">
+          <div class="pt-size-controls-title">Capital Per Trade</div>
+          <div class="pt-size-mode-row">
+            <label><input type="radio" name="pt-size-mode" id="pt-size-mode-auto" value="auto" checked> Auto</label>
+            <label><input type="radio" name="pt-size-mode" id="pt-size-mode-pct" value="pct"> %</label>
+            <label><input type="radio" name="pt-size-mode" id="pt-size-mode-usd" value="usd"> $</label>
+          </div>
+          <div class="pt-size-input-row">
+            <div class="pt-size-input-wrap">
+              <label for="pt-size-pct">Capital %</label>
+              <input id="pt-size-pct" type="number" min="0.1" max="100" step="0.1" value="10.0" placeholder="10.0">
+            </div>
+            <div class="pt-size-input-wrap">
+              <label for="pt-size-usd">Capital $</label>
+              <input id="pt-size-usd" type="number" min="1" step="1" value="10000" placeholder="10000">
+            </div>
+          </div>
+        </div>
+        <div>Estimated Position: <span id="pt-modal-size">--</span></div>
+        <div id="pt-modal-risk">Risk @ SL: --</div>
       </div>
       <div id="pt-modal-error"></div>
       <button id="pt-modal-execute" class="pt-long" type="button">EXECUTE LONG @ $--</button>
@@ -3553,6 +3690,7 @@ let sessionDayKey = null;
 let sessionHigh = null;
 let sessionLow = null;
 let latestHistorySignals = [];
+let latestHistoryStats = null;
 let latestDecisionIntel = null;
 let latestOrderflow = null;
 let _gaugeBootReady = false;
@@ -3588,6 +3726,18 @@ function apiTtl(url){
   if(url.includes("/api/btc/news")) return 120000;
   return 8000;
 }
+
+function cacheBustUrl(url){
+  try{
+    const u = new URL(String(url), window.location.origin);
+    u.searchParams.set("_ts", String(Date.now()));
+    return u.pathname + u.search + u.hash;
+  }catch(_e){
+    const sep = String(url).includes("?") ? "&" : "?";
+    return `${url}${sep}_ts=${Date.now()}`;
+  }
+}
+
 async function fetchJSON(url, opts = {}){
   const ttl = Number(opts.ttlMs ?? apiTtl(String(url)));
   const timeoutMs = Number(opts.timeoutMs ?? 8000);
@@ -3604,7 +3754,15 @@ async function fetchJSON(url, opts = {}){
     const ctrl = new AbortController();
     const timer = setTimeout(()=>ctrl.abort(), timeoutMs);
     try{
-      const res = await fetch(url, { signal: ctrl.signal });
+      const fetchUrl = opts.noCache ? cacheBustUrl(url) : url;
+      const fetchOpts = { signal: ctrl.signal };
+      if(opts.noCache){
+        fetchOpts.cache = "no-store";
+        fetchOpts.headers = { "Cache-Control": "no-cache", "Pragma": "no-cache", ...(opts.headers || {}) };
+      }else if(opts.headers){
+        fetchOpts.headers = opts.headers;
+      }
+      const res = await fetch(fetchUrl, fetchOpts);
       if(!res.ok) return null;
       const data = await res.json();
       if(useCache && ttl > 0) API_CACHE.set(key, { ts: Date.now(), data });
@@ -3624,14 +3782,42 @@ let paperPositionsTimer = null;
 let paperPanelInitialized = false;
 let _ptModalAutoPlan = null;
 let _ptModalAutoRaw = null;
-// BTC-only PnL cache — set by refreshPaperPortfolio, stops refreshPaperPositions from overwriting with all-assets value
-let _btcOnlyTotalPnl = 0;
-let _btcOnlyTodayPnl  = 0;
+let _ptLatestCapital = 100000;
+let _ptSymbolTotalPnl = 0;
+let _ptSymbolTodayPnl  = 0;
+const PT_RISK_PCT = 0.02;
+const PT_MAX_EXPOSURE_PCT = 0.10;
+const PT_MIN_CUSTOM_PCT = 0.1;
+const PT_MAX_CUSTOM_PCT = 100;
+const PT_MIN_CUSTOM_USD = 1;
+let _ptUserSizeMode = "auto";
+let _ptAutoMode = "manual";
 window._ptModalDirection = "LONG";
 window._ptModalTab = "auto";
 
 function ptEl(id){
   return document.getElementById(id);
+}
+
+function ptActiveSymbol(){
+  return String(window.__ALT_SYMBOL__ || "BTCUSDT").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function ptActiveShort(){
+  const symbol = ptActiveSymbol();
+  return symbol.endsWith("USDT") ? symbol.slice(0, -4) : symbol;
+}
+
+function ptTradeTicker(row){
+  return String(row?.ticker || row?.asset || row?.symbol || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+function ptIsActiveTicker(row){
+  const ticker = ptTradeTicker(row);
+  if(!ticker) return false;
+  const symbol = ptActiveSymbol();
+  const short = ptActiveShort();
+  return ticker === symbol || ticker === short || ticker === `${short}USDT`;
 }
 
 function ptNum(value, fallback = NaN){
@@ -3653,6 +3839,106 @@ function ptPercent(value, digits = 2){
   return `${n >= 0 ? "+" : ""}${n.toFixed(digits)}%`;
 }
 
+function ptGetModalSizingChoice(){
+  const modeAuto = ptEl("pt-size-mode-auto");
+  const modePct = ptEl("pt-size-mode-pct");
+  const modeUsd = ptEl("pt-size-mode-usd");
+  const pctInput = ptEl("pt-size-pct");
+  const usdInput = ptEl("pt-size-usd");
+
+  let mode = _ptUserSizeMode || "auto";
+  if(modePct?.checked) mode = "pct";
+  if(modeUsd?.checked) mode = "usd";
+  if(modeAuto?.checked) mode = "auto";
+
+  let pct = ptNum(pctInput?.value, NaN);
+  if(Number.isFinite(pct)){
+    pct = Math.max(PT_MIN_CUSTOM_PCT, Math.min(PT_MAX_CUSTOM_PCT, pct));
+    if(pctInput) pctInput.value = pct.toFixed(1);
+  }
+
+  let usd = ptNum(usdInput?.value, NaN);
+  if(Number.isFinite(usd)){
+    usd = Math.max(PT_MIN_CUSTOM_USD, usd);
+    if(usdInput) usdInput.value = usd.toFixed(2);
+  }
+
+  _ptUserSizeMode = mode;
+  return { mode, pct, usd };
+}
+
+function ptSyncSizingInputs(){
+  let mode = (_ptUserSizeMode || "auto").toLowerCase();
+  if(mode !== "auto" && mode !== "pct" && mode !== "usd"){
+    mode = "auto";
+    _ptUserSizeMode = "auto";
+  }
+  const pctInput = ptEl("pt-size-pct");
+  const usdInput = ptEl("pt-size-usd");
+  if(pctInput) pctInput.disabled = mode !== "pct";
+  if(usdInput) usdInput.disabled = mode !== "usd";
+}
+
+function ptCalcSizing(capital, entryPrice, stopLoss, choice = null){
+  const cap = ptNum(capital, NaN);
+  const entry = ptNum(entryPrice, NaN);
+  const sl = ptNum(stopLoss, NaN);
+  if(!(Number.isFinite(cap) && cap > 0 && Number.isFinite(entry) && entry > 0)){
+    return null;
+  }
+  const sizeChoice = choice || { mode: "auto", pct: NaN, usd: NaN };
+  const mode = String(sizeChoice.mode || "auto").toLowerCase();
+  const riskDist = Math.abs(entry - sl);
+  const riskBudget = cap * PT_RISK_PCT;
+  const maxTradeValue = cap * PT_MAX_EXPOSURE_PCT;
+
+  if(mode === "usd"){
+    const usd = ptNum(sizeChoice.usd, NaN);
+    if(!(Number.isFinite(usd) && usd >= PT_MIN_CUSTOM_USD)){
+      return null;
+    }
+    const usedCapital = Math.min(usd, cap);
+    const qty = usedCapital / entry;
+    const usedPct = cap > 0 ? (usedCapital / cap) * 100 : 0;
+    const riskAtSl = (Number.isFinite(sl) && sl > 0 && riskDist > 0) ? (qty * riskDist) : NaN;
+    const riskPct = (Number.isFinite(riskAtSl) && cap > 0) ? ((riskAtSl / cap) * 100) : NaN;
+    return { cap, entry, sl, qty, usedCapital, usedPct, riskAtSl, riskPct, maxTradeValue, riskBudget, source: "user-usd", mode: "usd" };
+  }
+
+  if(mode === "pct"){
+    const pct = ptNum(sizeChoice.pct, NaN);
+    if(!(Number.isFinite(pct) && pct >= PT_MIN_CUSTOM_PCT)){
+      return null;
+    }
+    const clampedPct = Math.max(PT_MIN_CUSTOM_PCT, Math.min(PT_MAX_CUSTOM_PCT, pct));
+    const usedCapital = cap * (clampedPct / 100);
+    const qty = usedCapital / entry;
+    const usedPct = clampedPct;
+    const riskAtSl = (Number.isFinite(sl) && sl > 0 && riskDist > 0) ? (qty * riskDist) : NaN;
+    const riskPct = (Number.isFinite(riskAtSl) && cap > 0) ? ((riskAtSl / cap) * 100) : NaN;
+    return { cap, entry, sl, qty, usedCapital, usedPct, riskAtSl, riskPct, maxTradeValue, riskBudget, source: "user-pct", mode: "pct" };
+  }
+
+  const qtyByCap = maxTradeValue / entry;
+  let qty = qtyByCap;
+  let source = "cap";
+  if(Number.isFinite(sl) && sl > 0 && riskDist > 0){
+    const qtyByRisk = riskBudget / riskDist;
+    if(Number.isFinite(qtyByRisk) && qtyByRisk > 0 && qtyByRisk < qty){
+      qty = qtyByRisk;
+      source = "risk";
+    }
+  }
+  if(!(Number.isFinite(qty) && qty > 0)){
+    return null;
+  }
+  const usedCapital = qty * entry;
+  const usedPct = cap > 0 ? (usedCapital / cap) * 100 : 0;
+  const riskAtSl = (Number.isFinite(sl) && sl > 0 && riskDist > 0) ? (qty * riskDist) : NaN;
+  const riskPct = (Number.isFinite(riskAtSl) && cap > 0) ? ((riskAtSl / cap) * 100) : NaN;
+  return { cap, entry, sl, qty, usedCapital, usedPct, riskAtSl, riskPct, maxTradeValue, riskBudget, source, mode: "auto" };
+}
+
 function ptSetSignedClass(el, value){
   if(!el) return;
   const n = ptNum(value);
@@ -3665,12 +3951,42 @@ function ptSetSignedClass(el, value){
   }
 }
 
+function ptUpdateAutoButton(mode, running){
+  const btn = ptEl("pt-btn-auto");
+  if(!btn) return;
+  const isAuto = String(mode || "manual").toLowerCase() === "auto";
+  _ptAutoMode = isAuto ? "auto" : "manual";
+  btn.classList.toggle("pt-auto-on", isAuto);
+  btn.textContent = isAuto ? "AUTO ON" : "AUTO OFF";
+  btn.title = isAuto
+    ? (running ? "Automatic paper execution is running" : "Automatic paper execution is enabled and will resume")
+    : "Automatic paper execution is off";
+}
+
 function ptUpdateTopbar(data){
   if(!data || typeof data !== "object") return;
   const capitalEl = ptEl("pt-capital");
+  const tradeBudgetEl = ptEl("pt-trade-budget");
+  const riskBudgetEl = ptEl("pt-risk-budget");
   const todayEl = ptEl("pt-today-pnl");
   const totalEl = ptEl("pt-total-pnl");
-  if(capitalEl) capitalEl.textContent = ptMoney(data.capital, false);
+  const capital = ptNum(data.capital, NaN);
+  if(Number.isFinite(capital) && capital > 0){
+    _ptLatestCapital = capital;
+  }
+  if(capitalEl) capitalEl.textContent = ptMoney(capital, false);
+  if(tradeBudgetEl){
+    const tradeBudget = Number.isFinite(capital) ? (capital * PT_MAX_EXPOSURE_PCT) : NaN;
+    tradeBudgetEl.textContent = Number.isFinite(tradeBudget)
+      ? `${ptMoney(tradeBudget, false)} (${Math.round(PT_MAX_EXPOSURE_PCT * 100)}% cap)`
+      : "--";
+  }
+  if(riskBudgetEl){
+    const riskBudget = Number.isFinite(capital) ? (capital * PT_RISK_PCT) : NaN;
+    riskBudgetEl.textContent = Number.isFinite(riskBudget)
+      ? `${ptMoney(riskBudget, false)} (${Math.round(PT_RISK_PCT * 100)}%)`
+      : "--";
+  }
   if(todayEl){
     const today = ptNum(data.today_pnl, 0);
     todayEl.textContent = ptMoney(today, true);
@@ -3685,7 +4001,7 @@ function ptUpdateTopbar(data){
 
 function ptUpdatePositionRow(row, position){
   if(!row || !position) return;
-  const ticker = String(position.ticker || row.dataset.ticker || "BTCUSDT");
+  const ticker = String(position.ticker || row.dataset.ticker || ptActiveSymbol());
   const direction = String(position.direction || row.dataset.direction || "LONG").toUpperCase();
   const entry = ptNum(position.entry_price ?? row.dataset.entry, 0);
   const current = ptNum(position.current_price, ptNum(window.lastBtcPrice, entry));
@@ -3783,6 +4099,95 @@ function ptModalButtonText(direction, price){
   return `EXECUTE ${side} @ $${pxText}`;
 }
 
+function ptSanitizeLevelsForSide(side, entryMid, slRaw, tpRaw){
+  const entry = ptNum(entryMid, NaN);
+  if(!(Number.isFinite(entry) && entry > 0)){
+    return { sl: ptNum(slRaw, NaN), tp: ptNum(tpRaw, NaN) };
+  }
+
+  let sl = ptNum(slRaw, NaN);
+  let tp = ptNum(tpRaw, NaN);
+  const dist = Math.max(entry * 0.006, 1);
+
+  if(side === "LONG"){
+    if(Number.isFinite(sl) && Number.isFinite(tp) && sl > entry && tp < entry){
+      const tmp = sl; sl = tp; tp = tmp;
+    }
+    if(!(Number.isFinite(sl) && sl > 0 && sl < entry)) sl = entry - dist;
+    if(!(Number.isFinite(tp) && tp > entry)) tp = entry + dist;
+  }else{
+    if(Number.isFinite(sl) && Number.isFinite(tp) && sl < entry && tp > entry){
+      const tmp = sl; sl = tp; tp = tmp;
+    }
+    if(!(Number.isFinite(sl) && sl > entry)) sl = entry + dist;
+    if(!(Number.isFinite(tp) && tp > 0 && tp < entry)) tp = Math.max(1, entry - dist);
+  }
+  return { sl, tp };
+}
+
+function ptValidateOrderGeometry(side, entry, sl, tp){
+  const e = ptNum(entry, NaN);
+  const s = ptNum(sl, NaN);
+  const t = ptNum(tp, NaN);
+  if(!(Number.isFinite(e) && e > 0 && Number.isFinite(s) && s > 0 && Number.isFinite(t) && t > 0)){
+    return { ok: false, msg: "Please enter valid Entry, Stop Loss and Take Profit." };
+  }
+  if(side === "LONG" && !(s < e && t > e)){
+    return { ok: false, msg: "LONG ke liye SL entry se neeche aur TP entry se upar hona chahiye." };
+  }
+  if(side === "SHORT" && !(s > e && t < e)){
+    return { ok: false, msg: "SHORT ke liye SL entry se upar aur TP entry se neeche hona chahiye." };
+  }
+  return { ok: true };
+}
+
+function ptValidateLiveExecution(side, entry, sl, tp, entryLow = NaN, entryHigh = NaN){
+  const geometry = ptValidateOrderGeometry(side, entry, sl, tp);
+  if(!geometry.ok) return geometry;
+
+  const e = ptNum(entry, NaN);
+  const s = ptNum(sl, NaN);
+  const t = ptNum(tp, NaN);
+  const live = ptNum(window.lastBtcPrice ?? lastPrice, NaN);
+  const asset = ptActiveShort();
+  if(!(Number.isFinite(live) && live > 0)){
+    return { ok: true, live: NaN };
+  }
+
+  const low = ptNum(entryLow, NaN);
+  const high = ptNum(entryHigh, NaN);
+  const tolerance = Math.max(e * 0.0005, 5);
+  if(Number.isFinite(low) && low > 0 && Number.isFinite(high) && high > 0){
+    const zoneLow = Math.min(low, high);
+    const zoneHigh = Math.max(low, high);
+    if(live < zoneLow - tolerance || live > zoneHigh + tolerance){
+      return {
+        ok: false,
+        live,
+        msg: `Plan stale hai: live ${asset} ${ptMoney(live, false)} entry zone ${ptMoney(zoneLow, false)} - ${ptMoney(zoneHigh, false)} se bahar hai. Refresh/new setup ka wait karo.`,
+      };
+    }
+  }
+
+  if(side === "LONG"){
+    if(live <= s){
+      return { ok: false, live, msg: `Trade blocked: live ${asset} ${ptMoney(live, false)} LONG stop loss ${ptMoney(s, false)} ke already neeche hai.` };
+    }
+    if(live >= t){
+      return { ok: false, live, msg: `Trade blocked: live ${asset} ${ptMoney(live, false)} LONG take profit ${ptMoney(t, false)} ke already upar hai.` };
+    }
+  }else{
+    if(live >= s){
+      return { ok: false, live, msg: `Trade blocked: live ${asset} ${ptMoney(live, false)} SHORT stop loss ${ptMoney(s, false)} ke already upar hai.` };
+    }
+    if(live <= t){
+      return { ok: false, live, msg: `Trade blocked: live ${asset} ${ptMoney(live, false)} SHORT take profit ${ptMoney(t, false)} ke already neeche hai.` };
+    }
+  }
+
+  return { ok: true, live };
+}
+
 function ptResolveExecutionPlan(raw, direction){
   const side = String(direction || "LONG").toUpperCase();
   const cur = ptNum(window.lastBtcPrice ?? lastPrice, 0);
@@ -3809,6 +4214,9 @@ function ptResolveExecutionPlan(raw, direction){
   const dist = Math.max(mid * 0.006, 1);
   if(!Number.isFinite(sl) || sl <= 0) sl = side === "LONG" ? (mid - dist) : (mid + dist);
   if(!Number.isFinite(tp) || tp <= 0) tp = side === "LONG" ? (mid + dist) : (mid - dist);
+  const sane = ptSanitizeLevelsForSide(side, mid, sl, tp);
+  sl = sane.sl;
+  tp = sane.tp;
   if(!Number.isFinite(rr) || rr <= 0){
     const risk = Math.abs(sl - mid);
     const reward = Math.abs(tp - mid);
@@ -3839,13 +4247,48 @@ function ptRenderAutoPlan(plan){
   if(confEl) confEl.textContent = `${Math.round(plan.conf)}%`;
 }
 
-function ptUpdateModalSizeDisplay(entryPrice){
+function ptUpdateModalSizeDisplay(entryPrice, stopLoss){
   const sizeEl = ptEl("pt-modal-size");
+  const riskEl = ptEl("pt-modal-risk");
   if(!sizeEl) return;
-  const planEntry = ptNum(entryPrice, ptNum(window.lastBtcPrice ?? lastPrice, 0));
-  const suggested = ptNum(_ptModalAutoRaw?.suggested_size, ptNum(_ptModalAutoRaw?.size, NaN));
-  if(!Number.isFinite(suggested) || suggested <= 0 || !Number.isFinite(planEntry) || planEntry <= 0){
+
+  const choice = ptGetModalSizingChoice();
+  ptSyncSizingInputs();
+  const entry = ptNum(entryPrice, ptNum(window.lastBtcPrice ?? lastPrice, 0));
+  const sl = ptNum(stopLoss, NaN);
+  const capital = ptNum(_ptModalAutoRaw?.capital, ptNum(_ptLatestCapital, 100000));
+  const sizing = ptCalcSizing(capital, entry, sl, choice);
+  if(sizing){
+    const usdText = sizing.usedCapital.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 });
+    let modeText = "auto sizing";
+    if(sizing.mode === "usd") modeText = "custom $ sizing";
+    else if(sizing.mode === "pct") modeText = "custom % sizing";
+    else modeText = sizing.source === "risk" ? "auto risk-capped" : "auto capital-capped";
+    sizeEl.textContent = `${sizing.qty.toFixed(4)} ${ptActiveShort()} (~$${usdText}, ${sizing.usedPct.toFixed(2)}% capital, ${modeText})`;
+    if(riskEl){
+      if(Number.isFinite(sizing.riskAtSl)){
+        let txt = `Risk @ SL: ${ptMoney(sizing.riskAtSl, false)} (${sizing.riskPct.toFixed(2)}% capital)`;
+        if(sizing.mode !== "auto" && Number.isFinite(sizing.riskBudget) && sizing.riskAtSl > sizing.riskBudget){
+          txt += ` • Above default risk budget ${ptMoney(sizing.riskBudget, false)}`;
+        }
+        riskEl.textContent = txt;
+      }else{
+        riskEl.textContent = `Risk @ SL: ${ptMoney(sizing.riskBudget, false)} max (${Math.round(PT_RISK_PCT * 100)}% rule)`;
+      }
+    }
+    return;
+  }
+
+  if(choice.mode !== "auto"){
     sizeEl.textContent = "--";
+    if(riskEl) riskEl.textContent = "Risk @ SL: enter valid custom capital";
+    return;
+  }
+
+  const suggested = ptNum(_ptModalAutoRaw?.suggested_size, ptNum(_ptModalAutoRaw?.size, NaN));
+  if(!Number.isFinite(suggested) || suggested <= 0 || !Number.isFinite(entry) || entry <= 0){
+    sizeEl.textContent = "--";
+    if(riskEl) riskEl.textContent = "Risk @ SL: --";
     return;
   }
 
@@ -3853,20 +4296,49 @@ function ptUpdateModalSizeDisplay(entryPrice){
   let usd = NaN;
   if(suggested <= 1){
     qty = suggested;
-    usd = qty * planEntry;
+    usd = qty * entry;
   }else if(suggested <= 100){
-    const capital = ptNum(_ptModalAutoRaw?.capital, 10000);
     usd = capital * (suggested / 100);
-    qty = usd / planEntry;
+    qty = usd / entry;
   }else{
     usd = suggested;
-    qty = usd / planEntry;
+    qty = usd / entry;
   }
   if(!Number.isFinite(qty) || !Number.isFinite(usd)){
     sizeEl.textContent = "--";
+    if(riskEl) riskEl.textContent = "Risk @ SL: --";
     return;
   }
-  sizeEl.textContent = `${qty.toFixed(4)} BTC (~$${usd.toLocaleString("en-US", { maximumFractionDigits: 0 })})`;
+  sizeEl.textContent = `${qty.toFixed(4)} ${ptActiveShort()} (~$${usd.toLocaleString("en-US", { maximumFractionDigits: 2, minimumFractionDigits: 2 })})`;
+  if(riskEl){
+    const riskDist = Math.abs(entry - sl);
+    const riskUsd = (Number.isFinite(riskDist) && riskDist > 0) ? (qty * riskDist) : NaN;
+    const riskPct = (Number.isFinite(riskUsd) && capital > 0) ? ((riskUsd / capital) * 100) : NaN;
+    riskEl.textContent = Number.isFinite(riskUsd)
+      ? `Risk @ SL: ${ptMoney(riskUsd, false)} (${riskPct.toFixed(2)}% capital)`
+      : "Risk @ SL: --";
+  }
+}
+
+function ptApplyModalSizingToPayload(payload){
+  const choice = ptGetModalSizingChoice();
+  ptSyncSizingInputs();
+  if(choice.mode === "usd"){
+    if(!(Number.isFinite(choice.usd) && choice.usd >= PT_MIN_CUSTOM_USD)){
+      throw new Error("Enter valid custom capital in USD.");
+    }
+    payload.sizing_mode = "usd";
+    payload.capital_to_use = Number(choice.usd.toFixed(2));
+  }else if(choice.mode === "pct"){
+    if(!(Number.isFinite(choice.pct) && choice.pct >= PT_MIN_CUSTOM_PCT)){
+      throw new Error("Enter valid capital percent (min 0.1%).");
+    }
+    payload.sizing_mode = "pct";
+    payload.capital_pct = Number(choice.pct.toFixed(4));
+  }else{
+    payload.sizing_mode = "auto";
+  }
+  return choice;
 }
 
 function switchModalTab(tab){
@@ -3884,8 +4356,15 @@ function switchModalTab(tab){
   const entryVal = ptNum(next === "auto"
     ? ((_ptModalAutoPlan?.entryLow + _ptModalAutoPlan?.entryHigh) / 2)
     : ptNum(ptEl("pt-manual-entry")?.value), ptNum(window.lastBtcPrice ?? lastPrice, 0));
+  const slVal = ptNum(next === "auto"
+    ? _ptModalAutoPlan?.sl
+    : ptNum(ptEl("pt-manual-sl")?.value), NaN);
   const execBtn = ptEl("pt-modal-execute");
-  if(execBtn) execBtn.textContent = ptModalButtonText(window._ptModalDirection, entryVal);
+  if(execBtn){
+    execBtn.textContent = ptModalButtonText(window._ptModalDirection, entryVal);
+    execBtn.disabled = false;
+  }
+  ptUpdateModalSizeDisplay(entryVal, slVal);
 }
 
 function calculateManualRR(){
@@ -3895,7 +4374,7 @@ function calculateManualRR(){
   const rrEl = ptEl("pt-manual-rr");
   const execBtn = ptEl("pt-modal-execute");
   if(execBtn) execBtn.textContent = ptModalButtonText(window._ptModalDirection, entry);
-  ptUpdateModalSizeDisplay(entry);
+  ptUpdateModalSizeDisplay(entry, sl);
   if(!rrEl) return;
   const risk = Math.abs(sl - entry);
   const reward = Math.abs(tp - entry);
@@ -3922,9 +4401,17 @@ async function openTradeModal(direction){
   const entryInput = ptEl("pt-manual-entry");
   const slInput = ptEl("pt-manual-sl");
   const tpInput = ptEl("pt-manual-tp");
+  const sizeModeAuto = ptEl("pt-size-mode-auto");
+  const sizeModePct = ptEl("pt-size-mode-pct");
+  const sizeModeUsd = ptEl("pt-size-mode-usd");
+  const sizePctInput = ptEl("pt-size-pct");
+  const sizeUsdInput = ptEl("pt-size-usd");
 
   const cur = ptNum(window.lastBtcPrice ?? lastPrice, 0);
   const defaultDist = Math.max(cur * 0.006, 1);
+  const seedCapital = ptNum(_ptLatestCapital, 100000);
+  const defaultPct = Math.max(PT_MIN_CUSTOM_PCT, PT_MAX_EXPOSURE_PCT * 100);
+  const defaultUsd = Math.max(PT_MIN_CUSTOM_USD, seedCapital * PT_MAX_EXPOSURE_PCT);
   if(entryInput) entryInput.value = Number.isFinite(cur) && cur > 0 ? cur.toFixed(2) : "";
   if(slInput){
     const v = side === "LONG" ? cur - defaultDist : cur + defaultDist;
@@ -3934,9 +4421,26 @@ async function openTradeModal(direction){
     const v = side === "LONG" ? cur + defaultDist : cur - defaultDist;
     tpInput.value = Number.isFinite(v) && v > 0 ? v.toFixed(2) : "";
   }
+  if(sizePctInput){
+    const existingPct = ptNum(sizePctInput.value, NaN);
+    sizePctInput.value = Number.isFinite(existingPct) && existingPct > 0 ? existingPct.toFixed(1) : defaultPct.toFixed(1);
+  }
+  if(sizeUsdInput){
+    const existingUsd = ptNum(sizeUsdInput.value, NaN);
+    sizeUsdInput.value = Number.isFinite(existingUsd) && existingUsd > 0 ? existingUsd.toFixed(2) : defaultUsd.toFixed(2);
+  }
+  let activeMode = (_ptUserSizeMode || "auto").toLowerCase();
+  if(activeMode !== "auto" && activeMode !== "pct" && activeMode !== "usd"){
+    activeMode = "auto";
+  }
+  _ptUserSizeMode = activeMode;
+  if(sizeModeAuto) sizeModeAuto.checked = activeMode === "auto";
+  if(sizeModePct) sizeModePct.checked = activeMode === "pct";
+  if(sizeModeUsd) sizeModeUsd.checked = activeMode === "usd";
+  ptSyncSizingInputs();
   calculateManualRR();
 
-  if(titleEl) titleEl.textContent = `${side === "LONG" ? "▲" : "▼"} ${side} BTCUSDT`;
+  if(titleEl) titleEl.textContent = `${side === "LONG" ? "▲" : "▼"} ${side} ${ptActiveSymbol()}`;
   if(execBtn){
     execBtn.classList.remove("pt-long", "pt-short");
     execBtn.classList.add(side === "LONG" ? "pt-long" : "pt-short");
@@ -3955,52 +4459,68 @@ async function openTradeModal(direction){
       fetchJSON("/api/btc/signal", { noCache: true, ttlMs: 0, timeoutMs: 10000 }),
       fetchJSON("/api/paper/portfolio", { noCache: true, ttlMs: 0, timeoutMs: 10000 }),
     ]);
-    const raw = (planA && typeof planA === "object" ? planA : null)
-      || (planB && typeof planB === "object" ? planB : null)
-      || (sig && typeof sig === "object" ? sig : {})
-      || {};
+    const raw = {
+      ...((sig && typeof sig === "object") ? sig : {}),
+      ...((planB && typeof planB === "object") ? planB : {}),
+      ...((planA && typeof planA === "object") ? planA : {}),
+    };
     _ptModalAutoRaw = {
       ...(raw || {}),
       suggested_size: ptNum(pf?.suggested_size, ptNum(raw?.suggested_size)),
-      capital: ptNum(pf?.capital, 10000),
+      capital: ptNum(pf?.capital, ptNum(pf?.metrics?.capital, ptNum(_ptLatestCapital, 100000))),
     };
+    if(sizeUsdInput){
+      const latestCapital = ptNum(_ptModalAutoRaw?.capital, seedCapital);
+      const suggestedUsd = Math.max(PT_MIN_CUSTOM_USD, latestCapital * PT_MAX_EXPOSURE_PCT);
+      const currentUsd = ptNum(sizeUsdInput.value, NaN);
+      if(!Number.isFinite(currentUsd) || currentUsd <= 0 || _ptUserSizeMode === "auto"){
+        sizeUsdInput.value = suggestedUsd.toFixed(2);
+      }
+    }
     _ptModalAutoPlan = ptResolveExecutionPlan(raw || {}, side);
     ptRenderAutoPlan(_ptModalAutoPlan);
-    ptUpdateModalSizeDisplay((_ptModalAutoPlan.entryLow + _ptModalAutoPlan.entryHigh) / 2);
-    if(execBtn) execBtn.textContent = ptModalButtonText(side, (_ptModalAutoPlan.entryLow + _ptModalAutoPlan.entryHigh) / 2);
+    const planEntryMid = (_ptModalAutoPlan.entryLow + _ptModalAutoPlan.entryHigh) / 2;
+    ptUpdateModalSizeDisplay(planEntryMid, _ptModalAutoPlan.sl);
+    const planGuard = ptValidateLiveExecution(side, planEntryMid, _ptModalAutoPlan.sl, _ptModalAutoPlan.tp, _ptModalAutoPlan.entryLow, _ptModalAutoPlan.entryHigh);
+    if(execBtn){
+      execBtn.textContent = ptModalButtonText(side, planEntryMid);
+      execBtn.disabled = !planGuard.ok;
+    }
+    if(!planGuard.ok) ptSetModalError(planGuard.msg);
   }catch(err){
     _ptModalAutoPlan = ptResolveExecutionPlan({}, side);
     ptRenderAutoPlan(_ptModalAutoPlan);
     ptSetModalError(`Plan fetch failed: ${err?.message || "Unknown error"}`);
-    ptUpdateModalSizeDisplay((_ptModalAutoPlan.entryLow + _ptModalAutoPlan.entryHigh) / 2);
+    ptUpdateModalSizeDisplay((_ptModalAutoPlan.entryLow + _ptModalAutoPlan.entryHigh) / 2, _ptModalAutoPlan.sl);
     if(execBtn) execBtn.textContent = ptModalButtonText(side, (_ptModalAutoPlan.entryLow + _ptModalAutoPlan.entryHigh) / 2);
   }
 }
 
-function tradeFromExecutionPlan() {
-  // Read SL and TP values already displayed in the card
+function ptReadExecutionPlanCard(){
   const slText  = document.getElementById("ep-sl")?.textContent  || "";
   const tp1Text = document.getElementById("ep-tp1")?.textContent || "";
   const entryText = document.getElementById("ep-entry")?.textContent || "";
+  const sl = parseFloat(slText.replace(/[$,]/g, ""));
+  const tp = parseFloat(tp1Text.replace(/[$,]/g, ""));
+  const entryParts = entryText.split("-").map(s => parseFloat(s.replace(/[$,\s]/g, ""))).filter(Number.isFinite);
+  const entryLow = entryParts.length >= 2 ? entryParts[0] : parseFloat(entryText.replace(/[$,]/g, ""));
+  const entryHigh = entryParts.length >= 2 ? entryParts[1] : entryLow;
+  const entryMid = Number.isFinite(entryLow) && Number.isFinite(entryHigh) ? ((entryLow + entryHigh) / 2) : NaN;
+  const direction = (tp > entryMid) ? "LONG" : "SHORT";
+  return { sl, tp, entryLow, entryHigh, entryMid, direction };
+}
 
-  // Parse numbers (remove $ and commas)
-  const sl  = parseFloat(slText.replace(/[$,]/g, ""));
-  const tp1 = parseFloat(tp1Text.replace(/[$,]/g, ""));
-
-  // Parse entry midpoint from "71,577 - 71,737"
-  const entryParts = entryText.split("-").map(s =>
-    parseFloat(s.replace(/[$,\s]/g, ""))
-  );
-  const entryMid = entryParts.length === 2
-    ? (entryParts[0] + entryParts[1]) / 2
-    : parseFloat(entryText.replace(/[$,]/g, ""));
-
-  // Determine direction: if TP > entry = LONG, if TP < entry = SHORT
-  const direction = (tp1 > entryMid) ? "LONG" : "SHORT";
+function tradeFromExecutionPlan() {
+  const plan = ptReadExecutionPlanCard();
+  const guard = ptValidateLiveExecution(plan.direction, plan.entryMid, plan.sl, plan.tp, plan.entryLow, plan.entryHigh);
+  if(!guard.ok){
+    showPaperToast("⚠️", "Plan stale:", guard.msg);
+    return;
+  }
 
   // Open existing modal — it handles everything else
   if(typeof openTradeModal === "function"){
-    openTradeModal(direction);
+    openTradeModal(plan.direction);
   }
 }
 
@@ -4019,6 +4539,8 @@ function closeTradeModal(){
   if(rrEl) rrEl.textContent = "--";
   const sizeEl = ptEl("pt-modal-size");
   if(sizeEl) sizeEl.textContent = "--";
+  const riskEl = ptEl("pt-modal-risk");
+  if(riskEl) riskEl.textContent = "Risk @ SL: --";
 }
 
 async function executeModalTrade(){
@@ -4032,25 +4554,31 @@ async function executeModalTrade(){
     const plan = _ptModalAutoPlan || ptResolveExecutionPlan({}, side);
     const midpoint = (plan.entryLow + plan.entryHigh) / 2;
     payload = {
-      ticker: "BTCUSDT",
+      ticker: ptActiveSymbol(),
       direction: side,
       signal: side,
       entry_price: Number(midpoint.toFixed(2)),
       stop_loss: Number(plan.sl.toFixed(2)),
       take_profit: Number(plan.tp.toFixed(2)),
       confidence: Number(plan.conf.toFixed(2)),
+      alpha_score: ptNum(_ptModalAutoRaw?.alpha_score, Number(plan.conf.toFixed(2))),
+      regime: _ptModalAutoRaw?.regime || _ptModalAutoRaw?.market_regime || "",
       mode: "auto",
+      execution_source: "execution_plan",
+      entry_zone_low: Number(plan.entryLow.toFixed(2)),
+      entry_zone_high: Number(plan.entryHigh.toFixed(2)),
     };
   }else{
     const entry = ptNum(ptEl("pt-manual-entry")?.value);
     const sl = ptNum(ptEl("pt-manual-sl")?.value);
     const tp = ptNum(ptEl("pt-manual-tp")?.value);
-    if(!(entry > 0 && sl > 0 && tp > 0)){
-      ptSetModalError("Please enter valid Entry, Stop Loss and Take Profit.");
+    const geometryCheck = ptValidateOrderGeometry(side, entry, sl, tp);
+    if(!geometryCheck.ok){
+      ptSetModalError(geometryCheck.msg);
       return;
     }
     payload = {
-      ticker: "BTCUSDT",
+      ticker: ptActiveSymbol(),
       direction: side,
       signal: side,
       entry_price: Number(entry.toFixed(2)),
@@ -4058,6 +4586,36 @@ async function executeModalTrade(){
       take_profit: Number(tp.toFixed(2)),
       mode: "manual",
     };
+  }
+
+  const geometryCheck = ptValidateOrderGeometry(side, payload.entry_price, payload.stop_loss, payload.take_profit);
+  if(!geometryCheck.ok){
+    ptSetModalError(geometryCheck.msg);
+    return;
+  }
+
+  const liveCheck = ptValidateLiveExecution(
+    side,
+    payload.entry_price,
+    payload.stop_loss,
+    payload.take_profit,
+    payload.entry_zone_low,
+    payload.entry_zone_high,
+  );
+  if(!liveCheck.ok){
+    ptSetModalError(liveCheck.msg);
+    showPaperToast("⚠️", "Trade blocked:", liveCheck.msg);
+    return;
+  }
+  if(Number.isFinite(liveCheck.live) && liveCheck.live > 0){
+    payload.current_price_snapshot = Number(liveCheck.live.toFixed(2));
+  }
+
+  try{
+    ptApplyModalSizingToPayload(payload);
+  }catch(err){
+    ptSetModalError(err?.message || "Invalid trade size settings.");
+    return;
   }
 
   try{
@@ -4070,7 +4628,14 @@ async function executeModalTrade(){
       throw new Error(data?.message || data?.error || "Trade execution failed");
     }
     closeTradeModal();
-    showPaperToast("✅", side, `@ $${Number(payload.entry_price).toLocaleString()}`, data?.size !== undefined ? `(size ${data.size})` : "");
+    const usedUsd = ptNum(data?.capital_used, ptNum(data?.value, NaN));
+    const usedPct = ptNum(data?.capital_used_pct, NaN);
+    const qty = ptNum(data?.quantity, NaN);
+    const usageText = Number.isFinite(usedUsd)
+      ? `used ${ptMoney(usedUsd, false)}${Number.isFinite(usedPct) ? ` (${usedPct.toFixed(2)}%)` : ""}`
+      : "";
+    const qtyText = Number.isFinite(qty) ? `qty ${qty.toFixed(4)} ${ptActiveShort()}` : "";
+    showPaperToast("✅", side, `@ $${Number(payload.entry_price).toLocaleString()}`, qtyText, usageText);
     // Refresh immediately so open position shows right away
     await refreshPaperPortfolio();
     refreshPaperTrades();
@@ -4096,6 +4661,7 @@ function initPaperTradingPanel(){
 
   const longBtn = ptEl("pt-btn-long");
   const shortBtn = ptEl("pt-btn-short");
+  const autoBtn = ptEl("pt-btn-auto");
   const resetBtn = ptEl("pt-btn-reset");
   const closeBtn = ptEl("pt-modal-close");
   const overlay = ptEl("pt-modal-overlay");
@@ -4105,26 +4671,30 @@ function initPaperTradingPanel(){
   const manualEntry = ptEl("pt-manual-entry");
   const manualSl = ptEl("pt-manual-sl");
   const manualTp = ptEl("pt-manual-tp");
+  const sizeModeAuto = ptEl("pt-size-mode-auto");
+  const sizeModePct = ptEl("pt-size-mode-pct");
+  const sizeModeUsd = ptEl("pt-size-mode-usd");
+  const sizePctInput = ptEl("pt-size-pct");
+  const sizeUsdInput = ptEl("pt-size-usd");
 
   if(longBtn) longBtn.onclick = () => openTradeModal("LONG");
   if(shortBtn) shortBtn.onclick = () => openTradeModal("SHORT");
+  if(autoBtn) autoBtn.onclick = togglePaperAutoMode;
   if(resetBtn) resetBtn.onclick = resetPaperAccount;
   const epTradeBtn = document.getElementById("ep-trade-btn");
   if(epTradeBtn) epTradeBtn.onclick = tradeFromExecutionPlan;
   function updateEpBtnStyle(){
-    const tp1Text = document.getElementById("ep-tp1")?.textContent || "";
-    const entryText = document.getElementById("ep-entry")?.textContent || "";
-    const tp1 = parseFloat(tp1Text.replace(/[$,]/g,""));
-    const parts = entryText.split("-").map(s=>parseFloat(s.replace(/[$,\s]/g,"")));
-    const mid = parts.length===2 ? (parts[0]+parts[1])/2 : tp1;
+    const plan = ptReadExecutionPlanCard();
     const btn = document.getElementById("ep-trade-btn");
     if(!btn) return;
-    if(tp1 < mid){
+    const guard = ptValidateLiveExecution(plan.direction, plan.entryMid, plan.sl, plan.tp, plan.entryLow, plan.entryHigh);
+    btn.disabled = !guard.ok;
+    btn.title = guard.ok ? "Open this execution plan in paper trading" : guard.msg;
+    btn.textContent = guard.ok ? "⚡ Trade This" : "Plan Stale";
+    if(plan.direction === "SHORT"){
       btn.classList.add("ep-short-mode");
-      btn.textContent = "⚡ Trade This";
     } else {
       btn.classList.remove("ep-short-mode");
-      btn.textContent = "⚡ Trade This";
     }
   }
   setInterval(updateEpBtnStyle, 5000);
@@ -4140,6 +4710,36 @@ function initPaperTradingPanel(){
   }
   [manualEntry, manualSl, manualTp].forEach((el) => {
     if(el) el.addEventListener("input", calculateManualRR);
+  });
+  [sizePctInput, sizeUsdInput].forEach((el) => {
+    if(el) el.addEventListener("input", () => {
+      const entry = window._ptModalTab === "manual"
+        ? ptNum(ptEl("pt-manual-entry")?.value, ptNum(window.lastBtcPrice ?? lastPrice, 0))
+        : (_ptModalAutoPlan ? ((_ptModalAutoPlan.entryLow + _ptModalAutoPlan.entryHigh) / 2) : ptNum(window.lastBtcPrice ?? lastPrice, 0));
+      const sl = window._ptModalTab === "manual"
+        ? ptNum(ptEl("pt-manual-sl")?.value, NaN)
+        : ptNum(_ptModalAutoPlan?.sl, NaN);
+      ptUpdateModalSizeDisplay(entry, sl);
+    });
+  });
+  [
+    { el: sizeModeAuto, mode: "auto" },
+    { el: sizeModePct, mode: "pct" },
+    { el: sizeModeUsd, mode: "usd" },
+  ].forEach(({ el, mode }) => {
+    if(!el) return;
+    el.addEventListener("change", () => {
+      if(!el.checked) return;
+      _ptUserSizeMode = mode;
+      ptSyncSizingInputs();
+      const entry = window._ptModalTab === "manual"
+        ? ptNum(ptEl("pt-manual-entry")?.value, ptNum(window.lastBtcPrice ?? lastPrice, 0))
+        : (_ptModalAutoPlan ? ((_ptModalAutoPlan.entryLow + _ptModalAutoPlan.entryHigh) / 2) : ptNum(window.lastBtcPrice ?? lastPrice, 0));
+      const sl = window._ptModalTab === "manual"
+        ? ptNum(ptEl("pt-manual-sl")?.value, NaN)
+        : ptNum(_ptModalAutoPlan?.sl, NaN);
+      ptUpdateModalSizeDisplay(entry, sl);
+    });
   });
   document.addEventListener("keydown", (ev) => {
     if(ev.key === "Escape"){
@@ -4247,7 +4847,7 @@ startFundsPolling();
 
 async function refreshPaperPortfolio(){
   try{
-    // Fetch portfolio + trades in parallel for BTC-only stats
+    // Fetch portfolio + trades in parallel for the active terminal symbol.
     const [raw, tradesRaw] = await Promise.all([
       fetchJSON("/api/paper/portfolio", { noCache: true, ttlMs: 0, timeoutMs: 10000 }),
       fetchJSON("/api/paper/trades?limit=200", { noCache: true, ttlMs: 0, timeoutMs: 10000 }),
@@ -4258,52 +4858,50 @@ async function refreshPaperPortfolio(){
     const m = (raw.capital !== undefined) ? raw : (raw.metrics || {});
     const capital = ptNum(m.capital, ptNum(raw.metrics?.capital, 0));
 
-    // Filter BTC-only closed trades for accurate stats
+    // Filter closed trades for the active terminal symbol.
     const allTrades = Array.isArray(tradesRaw) ? tradesRaw
       : Array.isArray(tradesRaw?.trades) ? tradesRaw.trades
       : Array.isArray(tradesRaw?.closed_trades) ? tradesRaw.closed_trades : [];
-    const btcTrades = allTrades.filter(t =>
-      String(t.ticker || t.asset || "").toUpperCase().includes("BTC")
-    );
+    const symbolTrades = allTrades.filter(ptIsActiveTicker);
 
-    // Recalculate all stats from BTC trades only
-    const btcTotal   = btcTrades.length;
-    const btcWins    = btcTrades.filter(t => ptNum(t.pnl_usd ?? t.pnl, 0) > 0).length;
-    const btcWinRate = btcTotal > 0 ? (btcWins / btcTotal) * 100 : 0;
-    const btcPnl     = btcTrades.reduce((s, t) => s + ptNum(t.pnl_usd ?? t.pnl, 0), 0);
-    const grossWin   = btcTrades.filter(t => ptNum(t.pnl_usd ?? t.pnl, 0) > 0).reduce((s,t)=>s+ptNum(t.pnl_usd??t.pnl,0),0);
-    const grossLoss  = Math.abs(btcTrades.filter(t => ptNum(t.pnl_usd ?? t.pnl, 0) <= 0).reduce((s,t)=>s+ptNum(t.pnl_usd??t.pnl,0),0));
-    const btcPF      = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 999 : 0;
+    const symbolTotal   = symbolTrades.length;
+    const symbolWins    = symbolTrades.filter(t => ptNum(t.pnl_usd ?? t.pnl, 0) > 0).length;
+    const symbolWinRate = symbolTotal > 0 ? (symbolWins / symbolTotal) * 100 : 0;
+    const symbolPnl     = symbolTrades.reduce((s, t) => s + ptNum(t.pnl_usd ?? t.pnl, 0), 0);
+    const grossWin   = symbolTrades.filter(t => ptNum(t.pnl_usd ?? t.pnl, 0) > 0).reduce((s,t)=>s+ptNum(t.pnl_usd??t.pnl,0),0);
+    const grossLoss  = Math.abs(symbolTrades.filter(t => ptNum(t.pnl_usd ?? t.pnl, 0) <= 0).reduce((s,t)=>s+ptNum(t.pnl_usd??t.pnl,0),0));
+    const symbolPF      = grossLoss > 0 ? grossWin / grossLoss : grossWin > 0 ? 999 : 0;
     let avgDurStr = "—";
-    if(btcTotal > 0){
-      const avgHrs = btcTrades.reduce((s,t)=>s+ptNum(t.held_hours,0),0)/btcTotal;
+    if(symbolTotal > 0){
+      const avgHrs = symbolTrades.reduce((s,t)=>s+ptNum(t.held_hours,0),0)/symbolTotal;
       const totalMin = Math.round(avgHrs*60);
       avgDurStr = totalMin>=60 ? `${Math.floor(totalMin/60)}h ${totalMin%60}m` : `${totalMin}m`;
     }
 
-    // Cache BTC-only PnL so refreshPaperPositions (every 5s) doesn't overwrite with all-assets value
-    _btcOnlyTotalPnl = btcPnl;
+    _ptSymbolTotalPnl = symbolPnl;
     const _todayStr  = new Date().toISOString().slice(0,10);
-    _btcOnlyTodayPnl = btcTrades
+    _ptSymbolTodayPnl = symbolTrades
       .filter(t => String(t.closed_at || t.time || "").startsWith(_todayStr))
       .reduce((s,t) => s + ptNum(t.pnl_usd ?? t.pnl, 0), 0);
 
     const data = {
       capital,
-      total_pnl:     btcPnl,
-      today_pnl:     _btcOnlyTodayPnl,
-      win_rate:      btcWinRate,
-      total_trades:  btcTotal,
+      total_pnl:     symbolPnl,
+      today_pnl:     _ptSymbolTodayPnl,
+      win_rate:      symbolWinRate,
+      total_trades:  symbolTotal,
       avg_duration:  avgDurStr,
       sharpe:        ptNum(m.sharpe,         ptNum(raw.metrics?.sharpe_ratio,  0)),
       max_drawdown:  ptNum(m.max_drawdown,   ptNum(raw.metrics?.max_drawdown,  0)),
-      profit_factor: btcPF,
+      profit_factor: symbolPF,
       session_pnl:   m.session_pnl          || {},
       open_positions: Array.isArray(m.open_positions)
                         ? m.open_positions
                         : Array.isArray(raw.open_positions)
                         ? raw.open_positions : [],
     };
+    data.open_positions = data.open_positions.filter(ptIsActiveTicker);
+    ptUpdateAutoButton(raw.mode || data.mode || "manual", raw.auto_running);
     ptUpdateTopbar(data);
 
     const winrateEl = ptEl("pt-winrate");
@@ -4373,7 +4971,7 @@ function renderOpenPositions(positions){
     const row = document.createElement("tr");
     row.innerHTML = `
       <td class="pt-idx">${idx + 1}</td>
-      <td class="pt-ticker">${escapeHtml(position.ticker || "BTCUSDT")}</td>
+      <td class="pt-ticker">${escapeHtml(position.ticker || ptActiveSymbol())}</td>
       <td class="pt-dir"></td>
       <td class="pt-mode"></td>
       <td class="pt-entry">—</td>
@@ -4397,9 +4995,8 @@ async function refreshPaperPositions(){
     const m = (raw.capital !== undefined) ? raw : (raw.metrics || {});
     const data = {
       capital:   ptNum(m.capital, ptNum(raw.metrics?.capital, 0)),
-      // Use BTC-only cached values — prevents 5s timer from overwriting correct BTC-only PnL
-      total_pnl: _btcOnlyTotalPnl,
-      today_pnl: _btcOnlyTodayPnl,
+      total_pnl: _ptSymbolTotalPnl,
+      today_pnl: _ptSymbolTodayPnl,
       open_positions: Array.isArray(m.open_positions) ? m.open_positions
                     : Array.isArray(raw.open_positions) ? raw.open_positions : [],
     };
@@ -4408,7 +5005,7 @@ async function refreshPaperPositions(){
     const body = ptEl("pt-positions-body");
     if(!body) return;
 
-    const positions = Array.isArray(data.open_positions) ? data.open_positions : [];
+    const positions = (Array.isArray(data.open_positions) ? data.open_positions : []).filter(ptIsActiveTicker);
     const rows = Array.from(body.querySelectorAll("tr")).filter(r => r.dataset && r.dataset.ticker);
 
     if(positions.length === 0){
@@ -4456,7 +5053,7 @@ async function executePaperTrade(direction){
   }
   const price = ptNum(window.lastBtcPrice ?? lastPrice, 0);
   if(!Number.isFinite(price) || price <= 0){
-    showPaperToast("⚠️", "Live BTC price unavailable");
+    showPaperToast("⚠️", `Live ${ptActiveShort()} price unavailable`);
     return;
   }
   const ok = window.confirm(`Execute ${side} @ $${price.toLocaleString()}?\nSuggested size from system will be used.`);
@@ -4464,16 +5061,24 @@ async function executePaperTrade(direction){
 
   try{
     const data = await paperPostJSON("/api/paper/execute", {
-      ticker: "BTCUSDT",
+      ticker: ptActiveSymbol(),
       direction: side,
       signal: side,
       entry_price: price,
+      current_price_snapshot: price,
       mode: "manual",
     });
     if(data?.success === false){
       throw new Error(data?.message || data?.error || "Trade execution failed");
     }
-    showPaperToast("✅", side, `@ $${price.toLocaleString()}`, data?.size !== undefined ? `(size ${data.size})` : "");
+    const usedUsd = ptNum(data?.capital_used, ptNum(data?.value, NaN));
+    const usedPct = ptNum(data?.capital_used_pct, NaN);
+    const qty = ptNum(data?.quantity, NaN);
+    const usageText = Number.isFinite(usedUsd)
+      ? `used ${ptMoney(usedUsd, false)}${Number.isFinite(usedPct) ? ` (${usedPct.toFixed(2)}%)` : ""}`
+      : "";
+    const qtyText = Number.isFinite(qty) ? `qty ${qty.toFixed(4)} ${ptActiveShort()}` : "";
+    showPaperToast("✅", side, `@ $${price.toLocaleString()}`, qtyText, usageText);
     setTimeout(() => {
       refreshPaperPortfolio();
       refreshPaperTrades();
@@ -4484,10 +5089,10 @@ async function executePaperTrade(direction){
 }
 
 async function closePaperPosition(ticker){
-  const symbol = String(ticker || "BTCUSDT");
+  const symbol = String(ticker || ptActiveSymbol());
   const price = ptNum(window.lastBtcPrice ?? lastPrice, 0);
   if(!Number.isFinite(price) || price <= 0){
-    showPaperToast("⚠️", "Live BTC price unavailable");
+    showPaperToast("⚠️", `Live ${ptActiveShort()} price unavailable`);
     return;
   }
   const ok = window.confirm(`Close ${symbol} @ $${price.toLocaleString()}?`);
@@ -4506,6 +5111,23 @@ async function closePaperPosition(ticker){
   }
 }
 
+async function togglePaperAutoMode(){
+  const nextMode = _ptAutoMode === "auto" ? "manual" : "auto";
+  const ok = nextMode === "manual" || window.confirm("Turn AUTO paper execution ON?");
+  if(!ok) return;
+  try{
+    const data = await paperPostJSON("/api/paper/mode", { mode: nextMode });
+    if(data?.success === false){
+      throw new Error(data?.message || data?.error || "Mode update failed");
+    }
+    ptUpdateAutoButton(data?.mode || nextMode, data?.auto_running);
+    showPaperToast(nextMode === "auto" ? "✅" : "⚠️", `Paper auto ${nextMode === "auto" ? "enabled" : "disabled"}`);
+    await refreshPaperPortfolio();
+  }catch(err){
+    showPaperToast("❌", "Auto mode failed:", err?.message || "Unknown error");
+  }
+}
+
 async function resetPaperAccount(){
   const ok = window.confirm("Reset paper account? All trades will be cleared.");
   if(!ok) return;
@@ -4521,11 +5143,34 @@ async function resetPaperAccount(){
 
 function ptTradeResultBadge(result){
   const value = String(result || "CLOSED").toUpperCase();
+  if(value === "TP_HIT" || value === "TP") return `<span class="pt-result-tp1">TP_HIT</span>`;
   if(value === "TP1") return `<span class="pt-result-tp1">TP1</span>`;
   if(value === "TP2") return `<span class="pt-result-tp2">TP2</span>`;
   if(value === "TIMEOUT") return `<span class="pt-result-timeout">TIMEOUT</span>`;
-  if(value === "SL") return '<span style="display:inline-block;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700;border:1px solid #ff446655;background:#ff446622;color:#ff4466;">SL</span>';
+  if(value === "SL_HIT" || value === "SL") return '<span style="display:inline-block;padding:2px 6px;border-radius:3px;font-size:10px;font-weight:700;border:1px solid #ff446655;background:#ff446622;color:#ff4466;">SL_HIT</span>';
   return `<span class="pt-result-closed">${escapeHtml(value || "CLOSED")}</span>`;
+}
+
+function ptNormalizeTradeResult(trade){
+  const raw = String(trade?.result || trade?.status || trade?.reason || "CLOSED").toUpperCase();
+  if(!raw) return "CLOSED";
+  if(!(raw === "SL_HIT" || raw === "SL" || raw === "TP_HIT" || raw === "TP" || raw === "TP1" || raw === "TP2")){
+    return raw;
+  }
+  const direction = String(trade?.direction || trade?.signal || "LONG").toUpperCase();
+  const entry = ptNum(trade?.entry_price, NaN);
+  const exit = ptNum(trade?.exit_price, NaN);
+  if(!(Number.isFinite(entry) && entry > 0 && Number.isFinite(exit) && exit > 0)){
+    return raw;
+  }
+  const profitable = direction === "SHORT" ? exit < entry : exit > entry;
+  if((raw === "SL_HIT" || raw === "SL") && profitable){
+    return "TP_HIT";
+  }
+  if((raw === "TP_HIT" || raw === "TP" || raw === "TP1" || raw === "TP2") && !profitable){
+    return "SL_HIT";
+  }
+  return raw;
 }
 
 async function refreshPaperTrades(){
@@ -4543,15 +5188,12 @@ async function refreshPaperTrades(){
       ? raw.closed_trades
       : [];
 
-    // Filter only BTC trades
-    const trades = allTrades.filter(t =>
-      String(t.ticker || t.asset || "").toUpperCase().includes("BTC")
-    );
+    const trades = allTrades.filter(ptIsActiveTicker);
 
     body.innerHTML = "";
 
     if(!trades.length){
-      body.innerHTML = '<tr><td colspan="6" class="pt-empty">No BTC trades yet</td></tr>';
+      body.innerHTML = `<tr><td colspan="6" class="pt-empty">No ${escapeHtml(ptActiveShort())} trades yet</td></tr>`;
       return;
     }
 
@@ -4588,7 +5230,7 @@ async function refreshPaperTrades(){
       const pnlUsd = ptNum(trade.pnl_usd ?? trade.pnl, 0);
       const pnlText  = ptMoney(pnlUsd, true);
       const pnlClass = pnlUsd >= 0 ? "pt-profit pt-pnl-pos" : "pt-loss pt-pnl-neg";
-      const result   = trade.result || trade.status || trade.reason || "CLOSED";
+      const result   = ptNormalizeTradeResult(trade);
 
       // colspan was 5 before, now 6 (added Mode column)
       row.innerHTML = `
@@ -5078,20 +5720,20 @@ async function updatePerfScoreboard(){
         && d.getDate() === now.getDate();
     };
 
-    const btcAlgoToday = allTrades
-      .filter(t => String(t?.ticker || t?.asset || "").toUpperCase().includes("BTC"))
+    const symbolAlgoToday = allTrades
+      .filter(ptIsActiveTicker)
       .filter(isAlgoTrade)
       .map((t) => ({ ...t, _closedMs: tradeClosedMs(t), _pnlUsd: tradePnlUsd(t), _pnlPct: tradePnlPct(t) }))
       .filter(t => isToday(t._closedMs));
 
-    btcAlgoToday.sort((a, b) => b._closedMs - a._closedMs);
+    symbolAlgoToday.sort((a, b) => b._closedMs - a._closedMs);
 
-    const trades = btcAlgoToday.length;
-    const wins = btcAlgoToday.filter(t => t._pnlUsd > 0).length;
+    const trades = symbolAlgoToday.length;
+    const wins = symbolAlgoToday.filter(t => t._pnlUsd > 0).length;
     const wr = trades > 0 ? (wins / trades) * 100 : 0;
 
     let streak = 0;
-    for(const t of btcAlgoToday){
+    for(const t of symbolAlgoToday){
       const s = t._pnlUsd > 0 ? 1 : t._pnlUsd < 0 ? -1 : 0;
       if(s === 0) continue;
       if(streak === 0){
@@ -5105,7 +5747,7 @@ async function updatePerfScoreboard(){
       }
     }
 
-    const chrono = [...btcAlgoToday].sort((a, b) => a._closedMs - b._closedMs);
+    const chrono = [...symbolAlgoToday].sort((a, b) => a._closedMs - b._closedMs);
     const rets = chrono.map(t => t._pnlPct / 100).filter(Number.isFinite);
 
     let equity = 1.0;
@@ -6959,7 +7601,7 @@ function ensureChartLayerPanel(){
 
 async function loadTradeMarkers(){
   try{
-    const history = await fetchJSON("/api/btc/signal/history", { ttlMs: 7000, timeoutMs: 9000 });
+    const history = await fetchJSON("/api/btc/signal/history", { noCache: true, ttlMs: 0, timeoutMs: 9000 });
     const trades = Array.isArray(history) ? history : Array.isArray(history?.signals) ? history.signals : [];
     const tradeMarkers = [];
     for(const trade of trades){
@@ -8000,7 +8642,7 @@ async function loadSignal(){
     openTradeSignal = "LONG";
     const [signalRes, historyRes, intelRes] = await Promise.allSettled([
       fetchJSON(`/api/btc/signal?interval=${encodeURIComponent(sourceTF)}`, { ttlMs: 5000, timeoutMs: 60000 }),
-      fetchJSON('/api/btc/signal/history?limit=20', { ttlMs: 7000, timeoutMs: 8000 }),
+      fetchJSON('/api/btc/signal/history?limit=20', { noCache: true, ttlMs: 0, timeoutMs: 8000 }),
       fetchJSON(`/api/btc/decision-intelligence?interval=${encodeURIComponent(sourceTF)}`, { ttlMs: 9000, timeoutMs: 60000 }),
     ]);
 
@@ -8035,7 +8677,7 @@ async function loadSignal(){
       setIntelPill(intelOk, intelJson?.error, intelDegraded);
     }
     latestDecisionIntel = (intelJson && typeof intelJson === "object" && !intelHasErr) ? intelJson : null;
-    applySignalPayload(s, "btc_intelligence");
+    applySignalPayload(s, s?.source || (window.__ALT_SYMBOL__ ? "altcoin_deep_signal" : "btc_intelligence"));
     updateDecisionIntelPanels(latestDecisionIntel, s, intelJson);
     updateSystemGauges(s);
     await updatePerfScoreboard();
@@ -8102,6 +8744,50 @@ function fmtDuration(seconds){
   return `${h}h ${m}m`;
 }
 
+function historyEventEpochMs(sig){
+  const toMs = (v) => {
+    const n = Number(v);
+    if(Number.isFinite(n) && n > 0){
+      // closed/open timestamps are seconds in this payload
+      return n < 1e12 ? Math.trunc(n * 1000) : Math.trunc(n);
+    }
+    const p = Date.parse(String(v || ""));
+    return Number.isFinite(p) ? p : 0;
+  };
+  const outcome = historyStatus(sig);
+  if(outcome !== "OPEN" && outcome !== "BLOCKED"){
+    const closedMs = toMs(sig?.closed_time ?? sig?.exit_time);
+    if(closedMs > 0) return closedMs;
+  }
+  const openMs = toMs(sig?.open_timestamp);
+  if(openMs > 0) return openMs;
+  const timeMs = toMs(sig?.entry_time ?? sig?.time);
+  if(timeMs > 0) return timeMs;
+  return Number(sig?.id || 0);
+}
+
+function historyDisplayTime(sig, outcome){
+  const toLabel = (raw) => {
+    if(raw == null || raw === "") return "";
+    const n = Number(raw);
+    if(Number.isFinite(n) && n > 0){
+      const ms = n < 1e12 ? n * 1000 : n;
+      return new Date(ms).toISOString().replace("T"," ").replace("Z","").substring(0,19);
+    }
+    const text = String(raw);
+    const parsed = Date.parse(text);
+    if(Number.isFinite(parsed)){
+      return new Date(parsed).toISOString().replace("T"," ").replace("Z","").substring(0,19);
+    }
+    return text.replace("T"," ").replace("Z","").substring(0,19);
+  };
+  if(outcome !== "OPEN" && outcome !== "BLOCKED"){
+    const closedLabel = toLabel(sig?.closed_time ?? sig?.exit_time);
+    if(closedLabel) return closedLabel;
+  }
+  return toLabel(sig?.entry_time ?? sig?.time) || "—";
+}
+
 function historyRowClass(sig){
   const outcome = historyStatus(sig);
   if(outcome === "OPEN") return "history-row-open";
@@ -8111,68 +8797,199 @@ function historyRowClass(sig){
   return "history-row-closed";
 }
 
-async function intel_renderEquityCurve() {
-  try {
-    const r = await fetch('/api/equity-curve');
-    const d = await r.json();
-    console.log('Equity curve data:', d);
-    updateTradeStats(d);
+function buildEquityCurveFromHistory(){
+  const rows = Array.isArray(latestHistorySignals) ? latestHistorySignals : [];
+  const directionalRows = rows
+    .filter(row => {
+      const dir = historyDirection(row);
+      return dir === "LONG" || dir === "SHORT";
+    })
+    .sort((a, b) => historyEventEpochMs(a) - historyEventEpochMs(b));
+  const closed = directionalRows.filter(row => {
+    const st = historyStatus(row);
+    return st !== "OPEN" && st !== "BLOCKED";
+  });
 
-    const canvas = document.getElementById('intel_equity_canvas');
-    if(!canvas) return;
+  const sessions = {
+    asia: { name: "Asia Session", trades: 0, wins: 0, pnl_pct: 0, blocked: 0, open: 0, signals: 0 },
+    london: { name: "London Session", trades: 0, wins: 0, pnl_pct: 0, blocked: 0, open: 0, signals: 0 },
+    ny: { name: "NY Session", trades: 0, wins: 0, pnl_pct: 0, blocked: 0, open: 0, signals: 0 },
+  };
+  const timestamps = [];
+  const cumulative_pnl = [];
+  const drawdown = [];
+  const pnlValues = [];
+  let running = 0;
+  let peak = 0;
+  let durationSum = 0;
 
-    if (!d.cumulative_pnl || d.cumulative_pnl.length === 0) {
-      canvas.style.display = 'none';
-      return;
+  const toMs = (value) => {
+    const n = Number(value);
+    if(Number.isFinite(n) && n > 0) return n < 1e12 ? n * 1000 : n;
+    const p = Date.parse(String(value || ""));
+    return Number.isFinite(p) ? p : 0;
+  };
+  const sessionKeyForRow = (row) => {
+    const entryMs = toMs(row.entry_time ?? row.time ?? row.open_timestamp);
+    const hour = entryMs > 0 ? new Date(entryMs).getUTCHours() : 0;
+    return hour >= 13 && hour < 21 ? "ny" : hour >= 8 && hour < 16 ? "london" : "asia";
+  };
+
+  for(const row of directionalRows){
+    const bucket = sessionKeyForRow(row);
+    const st = historyStatus(row);
+    sessions[bucket].signals += 1;
+    if(st === "BLOCKED") sessions[bucket].blocked += 1;
+    if(st === "OPEN") sessions[bucket].open += 1;
+  }
+
+  for(const row of closed){
+    const pnl = Number(row.pnl_pct || 0);
+    pnlValues.push(pnl);
+    running += pnl;
+    peak = Math.max(peak, running);
+    timestamps.push(new Date(historyEventEpochMs(row) || Date.now()).toISOString());
+    cumulative_pnl.push(Number(running.toFixed(4)));
+    drawdown.push(Number((running - peak).toFixed(4)));
+
+    const bucket = sessionKeyForRow(row);
+    sessions[bucket].trades += 1;
+    sessions[bucket].pnl_pct += pnl;
+    if(pnl > 0) sessions[bucket].wins += 1;
+
+    let dur = Number(row.duration_seconds);
+    if(!Number.isFinite(dur) || dur <= 0){
+      const openMs = toMs(row.open_timestamp ?? row.entry_time ?? row.time);
+      const closeMs = toMs(row.closed_time ?? row.exit_time);
+      dur = closeMs >= openMs && openMs > 0 ? (closeMs - openMs) / 1000 : 0;
     }
-    canvas.style.display = 'block';
+    durationSum += Math.max(0, dur || 0);
+  }
 
-    const ctx = canvas.getContext('2d');
-    if(!ctx || !window.Chart) return;
-
-    if (window.intel_equityChart) {
-      window.intel_equityChart.destroy();
+  const wins = pnlValues.filter(v => v > 0);
+  const losses = pnlValues.filter(v => v < 0);
+  const lossAbs = Math.abs(losses.reduce((s, v) => s + v, 0));
+  const totalTrades = pnlValues.length;
+  if(totalTrades === 0 && directionalRows.length){
+    for(const row of directionalRows){
+      timestamps.push(new Date(historyEventEpochMs(row) || Date.now()).toISOString());
+      cumulative_pnl.push(0);
+      drawdown.push(0);
     }
+  }
+  const sessionPayload = {};
+  Object.keys(sessions).forEach(key => {
+    const s = sessions[key];
+    sessionPayload[key] = {
+      name: s.name,
+      trades: s.trades,
+      signals: s.signals,
+      blocked_signals: s.blocked,
+      open_signals: s.open,
+      win_rate: s.trades ? s.wins / s.trades : 0,
+      pnl_pct: Number(s.pnl_pct.toFixed(4)),
+    };
+  });
 
-    window.intel_equityChart = new Chart(ctx, {
-      type: 'line',
-      data: {
-        labels: d.timestamps.map(t => new Date(t).toLocaleTimeString()),
-        datasets: [{
-          label: 'Cumulative P&L %',
-          data: d.cumulative_pnl,
-          borderColor: '#00ff88',
-          backgroundColor: 'rgba(0,255,136,0.1)',
-          borderWidth: 2,
-          pointRadius: 0,
-          fill: true,
-          tension: 0.4
-        }]
-      },
-      options: {
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: { legend: { display: false }},
-        scales: {
-          x: {
-            display: true,
-            ticks: {
-              color: '#64748b',
-              maxTicksLimit: 8
-            },
-            grid: { color: '#1e293b' }
+  return {
+    timestamps,
+    cumulative_pnl,
+    drawdown,
+    total_pnl: Number(pnlValues.reduce((s, v) => s + v, 0).toFixed(4)),
+    max_drawdown: drawdown.length ? Math.min(...drawdown) : 0,
+    win_rate: totalTrades ? wins.length / totalTrades : 0,
+    total_trades: totalTrades,
+    sharpe_ratio: 0,
+    avg_win: wins.length ? wins.reduce((s, v) => s + v, 0) / wins.length : 0,
+    avg_loss: losses.length ? losses.reduce((s, v) => s + v, 0) / losses.length : 0,
+    profit_factor: lossAbs > 0 ? wins.reduce((s, v) => s + v, 0) / lossAbs : 0,
+    best_trade: pnlValues.length ? Math.max(...pnlValues) : 0,
+    worst_trade: pnlValues.length ? Math.min(...pnlValues) : 0,
+    avg_duration_seconds: totalTrades ? Math.round(durationSum / totalTrades) : 0,
+    open_positions: rows.filter(row => historyStatus(row) === "OPEN").length,
+    sessions: sessionPayload,
+  };
+}
+
+function renderEquityPanel(d){
+  if(!d) return;
+  if(!Array.isArray(d.cumulative_pnl)) d.cumulative_pnl = [];
+  if(!Array.isArray(d.timestamps)) d.timestamps = [];
+
+  updateTradeStats(d);
+
+  const canvas = document.getElementById('intel_equity_canvas');
+  if(!canvas) return;
+
+  if (!d.cumulative_pnl || d.cumulative_pnl.length === 0) {
+    canvas.style.display = 'none';
+    return;
+  }
+  canvas.style.display = 'block';
+
+  const ctx = canvas.getContext('2d');
+  if(!ctx || !window.Chart) return;
+
+  if (window.intel_equityChart) {
+    window.intel_equityChart.destroy();
+  }
+
+  window.intel_equityChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: d.timestamps.map(t => new Date(t).toLocaleTimeString()),
+      datasets: [{
+        label: 'Cumulative P&L %',
+        data: d.cumulative_pnl,
+        borderColor: '#00ff88',
+        backgroundColor: 'rgba(0,255,136,0.1)',
+        borderWidth: 2,
+        pointRadius: d.cumulative_pnl.length < 2 || d.cumulative_pnl.every(v => Number(v || 0) === 0) ? 3 : 0,
+        fill: true,
+        tension: 0.4
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false }},
+      scales: {
+        x: {
+          display: true,
+          ticks: {
+            color: '#64748b',
+            maxTicksLimit: 8
           },
-          y: {
-            display: true,
-            ticks: {
-              color: '#64748b',
-              callback: v => Number(v).toFixed(2) + '%'
-            },
-            grid: { color: '#1e293b' }
-          }
+          grid: { color: '#1e293b' }
+        },
+        y: {
+          display: true,
+          ticks: {
+            color: '#64748b',
+            callback: v => Number(v).toFixed(2) + '%'
+          },
+          grid: { color: '#1e293b' }
         }
       }
-    });
+    }
+  });
+}
+
+async function intel_renderEquityCurve() {
+  try {
+    let d = null;
+    try {
+      const symbol = encodeURIComponent(ptActiveSymbol());
+      const r = await fetch(`/api/equity-curve?ticker=${symbol}`, { cache: 'no-store' });
+      if(r.ok) d = await r.json();
+    } catch(fetchErr) {
+      console.warn('Equity curve API unavailable, using signal history fallback:', fetchErr);
+    }
+    if(latestHistorySignals.length){
+      d = buildEquityCurveFromHistory();
+    }
+    console.log('Equity curve data:', d);
+    renderEquityPanel(d);
   } catch(e) {
     console.error('Equity curve error:', e);
   }
@@ -8196,8 +9013,7 @@ function renderSignalHistoryTable(){
     const conf = Number(sig.confidence ?? 0);
     const pnlNum = Number(sig.pnl_pct);
     const pnlColor = Number.isNaN(pnlNum) ? '#8b949e' : pnlNum > 0 ? '#00c853' : pnlNum < 0 ? '#ff1744' : '#8b949e';
-    const timeRaw = String(sig.entry_time || sig.time || "");
-    const timeLabel = timeRaw ? timeRaw.replace("T"," ").replace("Z","").substring(0,19) : "—";
+    const timeLabel = historyDisplayTime(sig, outcome);
     const resultColor = outcome.startsWith("TP") ? "#00c853" : outcome === "SL" ? "#ff4444" : outcome === "OPEN" ? "#58a6ff" : outcome === "TIMEOUT" ? "#94a3b8" : outcome === "BLOCKED" ? "#6b7280" : "#9ca3af";
     const directionColor = direction === "LONG" ? "#00e676" : direction === "SHORT" ? "#ff6b7a" : "#ffd60a";
     // Handle both SQLite (entry_price, sl) and JSON (entry, stop_loss) field names
@@ -8235,6 +9051,42 @@ function renderSignalHistoryTable(){
 }
 
 
+function applySignalHistorySummary(stats, signals){
+  const el = (id) => document.getElementById(id);
+  const rows = Array.isArray(signals) ? signals : [];
+  const payload = (stats && typeof stats === "object") ? stats : {};
+  const asInt = (value, fallback = 0) => {
+    const n = Number(value);
+    if(!Number.isFinite(n)) return Math.max(0, Math.trunc(fallback));
+    return Math.max(0, Math.trunc(n));
+  };
+  const inferredClosed = rows.filter((row) => {
+    const st = historyStatus(row);
+    return st !== "OPEN" && st !== "BLOCKED";
+  }).length;
+  const inferredBlocked = rows.filter((row) => historyStatus(row) === "BLOCKED").length;
+  const inferredOpen = rows.filter((row) => historyStatus(row) === "OPEN").length;
+
+  const executed = asInt(payload.total, inferredClosed);
+  const blockedTotal = asInt(payload.blocked_total, inferredBlocked);
+  const blockedToday = asInt(payload.blocked_today, blockedTotal);
+  const openSignals = asInt(payload.open_signals, inferredOpen);
+
+  if(el("stat-total-trades")) el("stat-total-trades").textContent = String(executed);
+  if(el("stat-blocked-signals")) el("stat-blocked-signals").textContent = String(blockedToday);
+  if(el("stat-open-positions")) el("stat-open-positions").textContent = String(openSignals);
+  if(el("eq-trades")) el("eq-trades").textContent = String(executed);
+  if(el("eq-blocked")) el("eq-blocked").textContent = String(blockedToday);
+  if(el("eq-open-signals")) el("eq-open-signals").textContent = String(openSignals);
+
+  const title = `Executed: ${executed} | Blocked today: ${blockedToday} | Blocked total: ${blockedTotal} | Open signals: ${openSignals}`;
+  ["stat-total-trades","stat-blocked-signals","stat-open-positions","eq-trades","eq-blocked","eq-open-signals"].forEach((id) => {
+    const node = el(id);
+    if(node) node.title = title;
+  });
+}
+
+
 function updateTradeStats(eq){
   if(!eq) return;
   const el = (id) => document.getElementById(id);
@@ -8245,9 +9097,9 @@ function updateTradeStats(eq){
   if(el("eq-win-rate")) el("eq-win-rate").textContent = ratioPct(eq.win_rate);
   if(el("eq-max-dd")) el("eq-max-dd").textContent = pct(eq.max_drawdown, 2);
   if(el("eq-sharpe")) el("eq-sharpe").textContent = fmtNum(eq.sharpe_ratio, 2);
-  if(el("eq-trades")) el("eq-trades").textContent = String(eq.total_trades || 0);
+  if(!latestHistoryStats && el("eq-trades")) el("eq-trades").textContent = String(eq.total_trades || 0);
 
-  if(el("stat-total-trades")) el("stat-total-trades").textContent = String(eq.total_trades || 0);
+  if(!latestHistoryStats && el("stat-total-trades")) el("stat-total-trades").textContent = String(eq.total_trades || 0);
   if(el("stat-win-rate")) el("stat-win-rate").textContent = ratioPct(eq.win_rate);
   if(el("stat-total-pnl")) el("stat-total-pnl").textContent = pct(eq.total_pnl, 2);
   if(el("stat-avg-win")) el("stat-avg-win").textContent = pct(eq.avg_win, 2);
@@ -8258,18 +9110,25 @@ function updateTradeStats(eq){
   if(el("stat-best-trade")) el("stat-best-trade").textContent = pct(eq.best_trade, 2);
   if(el("stat-worst-trade")) el("stat-worst-trade").textContent = pct(eq.worst_trade, 2);
   if(el("stat-avg-duration")) el("stat-avg-duration").textContent = fmtDuration(eq.avg_duration_seconds || 0);
-  if(el("stat-open-positions")) el("stat-open-positions").textContent = String(eq.open_positions || 0);
+  if(!latestHistoryStats && el("stat-open-positions")) el("stat-open-positions").textContent = String(eq.open_positions || 0);
 
   const sessions = eq.sessions || {};
   const setSession = (key, prefix) => {
     const row = sessions[key] || {};
-    if(el(`session-${prefix}-trades`)) el(`session-${prefix}-trades`).textContent = `Trades: ${Number(row.trades || 0)}`;
+    const trades = Number(row.trades || 0);
+    const blocked = Number(row.blocked_signals || 0);
+    const open = Number(row.open_signals || 0);
+    let activityText = `Trades: ${trades}`;
+    if(blocked > 0) activityText += ` | Blocked: ${blocked}`;
+    if(open > 0) activityText += ` | Open: ${open}`;
+    if(el(`session-${prefix}-trades`)) el(`session-${prefix}-trades`).textContent = activityText;
     if(el(`session-${prefix}-win`)) el(`session-${prefix}-win`).textContent = `Win%: ${(Number(row.win_rate || 0) * 100).toFixed(1)}%`;
     if(el(`session-${prefix}-pnl`)) el(`session-${prefix}-pnl`).textContent = `P&L: ${pct(row.pnl_pct, 2)}`;
   };
   setSession("asia", "asia");
   setSession("london", "london");
   setSession("ny", "ny");
+  applySignalHistorySummary(latestHistoryStats, latestHistorySignals);
 }
 
 function exportHistoryCsv(){
@@ -8328,10 +9187,16 @@ function bindExportCsv(){
 
 async function loadSignalHistory(){
   try{
-    const historyData = await fetchJSON('/api/btc/signal/history?limit=200', { ttlMs: 7000, timeoutMs: 9000 });
+    const symbol = encodeURIComponent(ptActiveSymbol());
+    const historyData = await fetchJSON(`/api/btc/signal/history?limit=200&symbol=${symbol}`, { noCache: true, ttlMs: 0, timeoutMs: 9000 });
     const signals = Array.isArray(historyData) ? historyData : Array.isArray(historyData?.signals) ? historyData.signals : [];
-    latestHistorySignals = [...signals].reverse();
+    latestHistoryStats = (historyData && typeof historyData === "object" && !Array.isArray(historyData) && historyData.stats && typeof historyData.stats === "object")
+      ? historyData.stats
+      : null;
+    latestHistorySignals = [...signals].sort((a, b) => historyEventEpochMs(b) - historyEventEpochMs(a));
     renderSignalHistoryTable();
+    applySignalHistorySummary(latestHistoryStats, latestHistorySignals);
+    renderEquityPanel(buildEquityCurveFromHistory());
   }catch(e){
     console.warn('History fetch failed:', e);
   }

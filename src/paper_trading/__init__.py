@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -12,6 +13,8 @@ _paper_engine: PaperTradingEngine | None = None
 _auto_executor: AutoExecutor | None = None
 _paper_engines_by_user: dict[str, PaperTradingEngine] = {}
 _auto_executors_by_user: dict[str, AutoExecutor] = {}
+_LEGACY_PAPER_FILE = Path("data") / "paper_trading.json"
+_LEGACY_USER_KEYS = {"local-default", "default", "anonymous"}
 
 
 def _safe_user_key(user_id: str) -> str:
@@ -24,7 +27,46 @@ def _safe_user_key(user_id: str) -> str:
 
 def _paper_state_path_for_user(user_id: str) -> Path:
     key = _safe_user_key(user_id)
-    return Path("data") / "paper_trading_users" / f"{key}.json"
+    user_scoped_path = Path("data") / "paper_trading_users" / f"{key}.json"
+    if key not in _LEGACY_USER_KEYS:
+        return user_scoped_path
+
+    # Backward-compatibility path chooser for anonymous/local users:
+    # - Prefer whichever state file already has trades/open positions.
+    # - Fall back to the existing file when both are empty.
+    # This keeps older single-file installs working without hiding newer per-user data.
+    if _paper_state_has_data(user_scoped_path):
+        return user_scoped_path
+    if _paper_state_has_data(_LEGACY_PAPER_FILE):
+        return _LEGACY_PAPER_FILE
+    if user_scoped_path.exists():
+        return user_scoped_path
+    return _LEGACY_PAPER_FILE
+
+
+def _paper_state_has_data(path: Path) -> bool:
+    if not path.exists():
+        return False
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    closed = payload.get("closed_trades")
+    if isinstance(closed, list) and len(closed) > 0:
+        return True
+    positions = payload.get("positions")
+    if isinstance(positions, dict) and len(positions) > 0:
+        return True
+    stats = payload.get("stats")
+    if isinstance(stats, dict):
+        try:
+            if int(stats.get("total_trades", 0) or 0) > 0:
+                return True
+        except Exception:
+            return False
+    return False
 
 
 def get_paper_engine() -> PaperTradingEngine:

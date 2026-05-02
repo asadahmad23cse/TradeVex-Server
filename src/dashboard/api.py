@@ -17,6 +17,7 @@ import os
 import sqlite3
 import threading
 import time
+from contextlib import closing
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -36,7 +37,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response  # type: igno
 from fastapi.staticfiles import StaticFiles  # type: ignore[import]
 from starlette.middleware.base import BaseHTTPMiddleware  # type: ignore[import]
 from src.data.news_feed import get_btc_news
-from src.data.signal_history import get_history as get_signal_history, get_stats as get_signal_stats
+from src.data.signal_history import get_history as get_signal_history
 from src.dashboard.btc_service import INTERVAL_TO_MS, BitcoinMarketService
 from src.dashboard.altcoin_service import AltcoinMarketService
 from src.dashboard.focus_engine import FocusQuantEngine
@@ -579,7 +580,7 @@ _response_cache_ttl = {
     "/api/btc/market-context": 10,
     "/api/btc/system-report": 10,
     "/api/btc/signal": 10,
-    "/api/btc/signal/history": 10,
+    "/api/btc/signal/history": 0,
     "/api/btc/decision-intelligence": 10,
     "/api/btc/probability": 10,
     "/api/btc/execution-plan": 10,
@@ -651,7 +652,7 @@ def _fetch_sqlite_signal_rows(limit: int = 200) -> list[dict[str, Any]]:
         return []
     out: list[dict[str, Any]] = []
     try:
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             cols = {str(r[1]) for r in cur.execute("PRAGMA table_info(signals)").fetchall()}
@@ -770,6 +771,107 @@ def _normalize_direction(raw_signal: Any) -> str:
     return s or "HOLD"
 
 
+def _epoch_or_iso_to_iso(value: Any) -> str:
+    if value is None or value == "":
+        return ""
+    try:
+        n = float(value)
+        if n > 0:
+            if n > 1e12:
+                n /= 1000.0
+            return datetime.fromtimestamp(n, tz=timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    except Exception:
+        pass
+    dt = _parse_utc(value)
+    return _iso_utc(dt) if dt is not None else str(value)
+
+
+def _history_ticker_key(value: Any, default: str = "BTCUSDT") -> str:
+    raw = str(value or default).strip().upper()
+    if not raw:
+        return ""
+    compact = raw.replace("-", "")
+    if compact in {"BTC", "BTCUSDT", "ETH", "ETHUSDT", "SOL", "SOLUSDT"} or compact.endswith("USDT"):
+        return _normalize_crypto_symbol(compact)
+    return raw
+
+
+def _history_signal_id(raw: Any, ticker: Any, fallback: Any) -> str:
+    ticker_key = _history_ticker_key(ticker)
+    prefix = _asset_short(ticker_key) or "BTC"
+    existing = str(raw or "").strip()
+    if existing:
+        if ticker_key != "BTCUSDT" and existing.upper().startswith("BTC-"):
+            return f"{prefix}-{existing.split('-', 1)[1]}"
+        if not existing.isdigit():
+            return existing
+    try:
+        numeric = int(existing or fallback)
+        return f"{prefix}-{numeric:03d}"
+    except Exception:
+        return f"{prefix}-{str(fallback or existing or '000')}"
+
+
+def _signal_history_report_rows(limit: int = 5000, ticker: str | None = None) -> list[dict[str, Any]]:
+    """Normalize signal_history.json rows for equity/session reporting."""
+    try:
+        history_rows = get_signal_history(limit)
+    except Exception as exc:
+        logger.warning("Failed to read signal_history rows for equity curve: %s", exc)
+        return []
+
+    ticker_norm = _history_ticker_key(ticker, "") if ticker else ""
+    out: list[dict[str, Any]] = []
+    for idx, rec in enumerate(history_rows, start=1):
+        if not isinstance(rec, dict):
+            continue
+        rec_ticker = _history_ticker_key(rec.get("ticker") or "BTCUSDT")
+        if ticker_norm and rec_ticker != ticker_norm:
+            continue
+
+        direction = _normalize_direction(rec.get("signal") or rec.get("direction"))
+        if direction not in {"LONG", "SHORT"}:
+            continue
+
+        status = str(rec.get("status") or rec.get("result") or rec.get("outcome") or "OPEN").upper()
+        result = str(rec.get("result") or rec.get("outcome") or status).upper()
+        entry_time = _epoch_or_iso_to_iso(rec.get("time") or rec.get("entry_time") or rec.get("open_timestamp"))
+        exit_time = "" if status in {"OPEN", "BLOCKED"} else _epoch_or_iso_to_iso(rec.get("closed_time") or rec.get("exit_time") or rec.get("time"))
+
+        opened = _safe_float(rec.get("open_timestamp"), 0.0)
+        closed = _safe_float(rec.get("closed_time"), 0.0)
+        duration = int(_safe_float(rec.get("duration_seconds"), 0.0))
+        if duration <= 0 and opened > 0 and closed >= opened:
+            duration = int(round(closed - opened))
+
+        signal_id = _history_signal_id(rec.get("signal_id") or rec.get("id"), rec_ticker, idx)
+
+        out.append(
+            {
+                "signal_id": signal_id,
+                "trade_id": str(rec.get("trade_id") or ""),
+                "ticker": rec_ticker,
+                "direction": direction,
+                "entry_time": entry_time,
+                "exit_time": exit_time,
+                "entry_price": round(_safe_float(rec.get("entry_price", rec.get("entry")), 0.0), 4),
+                "exit_price": round(_safe_float(rec.get("exit_price", rec.get("exit")), 0.0), 4),
+                "sl": round(_safe_float(rec.get("sl", rec.get("stop_loss")), 0.0), 4),
+                "tp1": round(_safe_float(rec.get("tp1", rec.get("take_profit")), 0.0), 4),
+                "confidence": round(_safe_float(rec.get("confidence"), 0.0), 2),
+                "outcome": result,
+                "status": status,
+                "pnl_pct": round(_safe_float(rec.get("pnl_pct"), 0.0), 4),
+                "mfe_pct": round(max(0.0, _safe_float(rec.get("mfe_pct"), 0.0)), 4),
+                "mae_pct": round(max(0.0, _safe_float(rec.get("mae_pct"), 0.0)), 4),
+                "duration_seconds": duration,
+                "rr_achieved": round(_safe_float(rec.get("rr_achieved", rec.get("risk_reward")), 0.0), 4),
+                "size_multiplier": round(_safe_float(rec.get("size_multiplier"), 1.0), 4),
+            }
+        )
+    return out
+
+
 def _fetch_trade_report_rows(limit: int = 200, ticker: str | None = None) -> list[dict[str, Any]]:
     db_path = _db_sqlite_path()
     if not db_path.exists():
@@ -777,7 +879,7 @@ def _fetch_trade_report_rows(limit: int = 200, ticker: str | None = None) -> lis
 
     out: list[dict[str, Any]] = []
     try:
-        with sqlite3.connect(db_path) as conn:
+        with closing(sqlite3.connect(db_path)) as conn:
             conn.row_factory = sqlite3.Row
             cur = conn.cursor()
             table_names = {str(r[0]) for r in cur.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
@@ -816,9 +918,9 @@ def _fetch_trade_report_rows(limit: int = 200, ticker: str | None = None) -> lis
 
             where_sql = ""
             params: list[Any] = []
-            ticker_norm = str(ticker or "").upper().strip()
+            ticker_norm = _history_ticker_key(ticker, "") if ticker else ""
             if ticker_norm:
-                where_sql = f"WHERE UPPER({ticker_expr}) = ?"
+                where_sql = f"WHERE REPLACE(UPPER({ticker_expr}), '-', '') = ?"
                 params.append(ticker_norm)
             params.append(int(limit))
 
@@ -885,8 +987,9 @@ def _fetch_trade_report_rows(limit: int = 200, ticker: str | None = None) -> lis
 
                 out.append(
                     {
-                        "signal_id": str(r.get("signal_id") or f"BTC-{int(r.get('rowid') or 0):03d}"),
-                        "ticker": str(r.get("ticker") or "BTCUSDT").upper(),
+                        "signal_id": _history_signal_id(r.get("signal_id"), r.get("ticker") or "BTCUSDT", r.get("rowid")),
+                        "trade_id": str(r.get("trade_id") or ""),
+                        "ticker": _history_ticker_key(r.get("ticker") or "BTCUSDT"),
                         "direction": direction,
                         "entry_time": entry_time_raw,
                         "exit_time": exit_time,
@@ -907,6 +1010,257 @@ def _fetch_trade_report_rows(limit: int = 200, ticker: str | None = None) -> lis
     except Exception as exc:
         logger.warning("Failed to build trade report rows: %s", exc)
     return out
+
+
+def _paper_trade_outcome(reason: Any, pnl_pct: float) -> str:
+    reason_l = str(reason or "").strip().lower()
+    if reason_l in {"tp", "tp_hit", "tp1", "tp1_hit"}:
+        return "TP1"
+    if reason_l in {"tp2", "tp2_hit"}:
+        return "TP2"
+    if reason_l in {"tp3", "tp3_hit"}:
+        return "TP3"
+    if reason_l in {"sl", "stop", "sl_hit", "stop_loss"}:
+        return "SL"
+    if pnl_pct > 0:
+        return "WIN"
+    if pnl_pct < 0:
+        return "LOSS"
+    return "FLAT"
+
+
+def _paper_trade_report_rows(engine: Any, limit: int = 5000, ticker: str | None = None) -> list[dict[str, Any]]:
+    """Normalize paper-trading open/closed rows into the Signal History shape."""
+    if engine is None:
+        return []
+    lim = max(1, min(int(limit), 5000))
+    ticker_norm = _history_ticker_key(ticker, "") if ticker else ""
+    out: list[dict[str, Any]] = []
+
+    def include_symbol(value: Any) -> tuple[bool, str]:
+        key = _history_ticker_key(value or "BTCUSDT")
+        return (not ticker_norm or key == ticker_norm), key
+
+    try:
+        closed_rows = engine.get_closed_trades(lim) or []
+    except Exception as exc:
+        logger.debug("Paper closed trades unavailable for history: %s", exc)
+        closed_rows = []
+
+    for idx, row in enumerate(closed_rows, start=1):
+        if not isinstance(row, dict):
+            continue
+        ok, row_ticker = include_symbol(row.get("ticker") or row.get("asset") or row.get("symbol"))
+        if not ok:
+            continue
+        direction = _normalize_direction(row.get("direction") or row.get("signal"))
+        if direction not in {"LONG", "SHORT"}:
+            continue
+        entry = _safe_float(row.get("entry_price") or row.get("entry"), 0.0)
+        exit_price = _safe_float(row.get("exit_price") or row.get("exit"), 0.0)
+        pnl_pct = _safe_float(row.get("pnl_pct"), 0.0)
+        outcome = _paper_trade_outcome(row.get("reason") or row.get("result") or row.get("status"), pnl_pct)
+        opened_at = _epoch_or_iso_to_iso(row.get("opened_at") or row.get("entry_time") or row.get("time"))
+        closed_at = _epoch_or_iso_to_iso(row.get("closed_at") or row.get("exit_time") or row.get("closed_time"))
+        duration = int(round(max(0.0, _safe_float(row.get("held_hours"), 0.0) * 3600.0)))
+        if duration <= 0:
+            opened_dt = _history_dt(opened_at)
+            closed_dt = _history_dt(closed_at)
+            if opened_dt is not None and closed_dt is not None and closed_dt >= opened_dt:
+                duration = int(round((closed_dt - opened_dt).total_seconds()))
+        risk_pct = abs((entry - _safe_float(row.get("stop_loss") or row.get("sl"), 0.0)) / entry) * 100.0 if entry > 0 else 0.0
+        rr = (pnl_pct / risk_pct) if risk_pct > 0 else 0.0
+        trade_id = str(row.get("trade_id") or "")
+        out.append(
+            {
+                "signal_id": _history_signal_id(row.get("signal_id") or trade_id, row_ticker, idx),
+                "trade_id": trade_id,
+                "ticker": row_ticker,
+                "direction": direction,
+                "entry_time": opened_at,
+                "exit_time": closed_at,
+                "entry_price": round(entry, 4),
+                "exit_price": round(exit_price, 4),
+                "sl": round(_safe_float(row.get("stop_loss") or row.get("sl"), 0.0), 4),
+                "tp1": round(_safe_float(row.get("take_profit") or row.get("tp1") or row.get("tp"), 0.0), 4),
+                "confidence": round(_safe_float(row.get("confidence"), 0.0), 2),
+                "outcome": outcome,
+                "status": "CLOSED",
+                "pnl_pct": round(pnl_pct, 4),
+                "mfe_pct": max(0.0, round(pnl_pct, 4)),
+                "mae_pct": max(0.0, round(-pnl_pct, 4)),
+                "duration_seconds": duration,
+                "rr_achieved": round(rr, 4),
+                "size_multiplier": 1.0,
+                "source": "paper_trading",
+                "mode": str(row.get("mode") or "").upper() or "MANUAL",
+            }
+        )
+
+    try:
+        open_rows = engine.get_open_positions() or []
+    except Exception as exc:
+        logger.debug("Paper open positions unavailable for history: %s", exc)
+        open_rows = []
+
+    for idx, row in enumerate(open_rows, start=1):
+        if not isinstance(row, dict):
+            continue
+        ok, row_ticker = include_symbol(row.get("ticker") or row.get("asset") or row.get("symbol"))
+        if not ok:
+            continue
+        direction = _normalize_direction(row.get("direction") or row.get("signal"))
+        if direction not in {"LONG", "SHORT"}:
+            continue
+        trade_id = str(row.get("trade_id") or "")
+        out.append(
+            {
+                "signal_id": _history_signal_id(row.get("signal_id") or trade_id, row_ticker, f"O{idx}"),
+                "trade_id": trade_id,
+                "ticker": row_ticker,
+                "direction": direction,
+                "entry_time": _epoch_or_iso_to_iso(row.get("opened_at") or row.get("entry_time") or row.get("time")),
+                "exit_time": "",
+                "entry_price": round(_safe_float(row.get("entry_price") or row.get("entry"), 0.0), 4),
+                "exit_price": round(_safe_float(row.get("current_price"), 0.0), 4),
+                "sl": round(_safe_float(row.get("stop_loss") or row.get("sl"), 0.0), 4),
+                "tp1": round(_safe_float(row.get("take_profit") or row.get("tp1") or row.get("tp"), 0.0), 4),
+                "confidence": round(_safe_float(row.get("confidence"), 0.0), 2),
+                "outcome": "OPEN",
+                "status": "OPEN",
+                "pnl_pct": round(_safe_float(row.get("unrealized_pnl_pct") or row.get("pnl_pct"), 0.0), 4),
+                "mfe_pct": 0.0,
+                "mae_pct": 0.0,
+                "duration_seconds": int(round(max(0.0, _safe_float(row.get("held_hours"), 0.0) * 3600.0))),
+                "rr_achieved": 0.0,
+                "size_multiplier": 1.0,
+                "source": "paper_trading",
+                "mode": str(row.get("mode") or "").upper() or "MANUAL",
+            }
+        )
+
+    return out
+
+
+def _history_status(row: dict[str, Any]) -> str:
+    return str(row.get("outcome") or row.get("status") or row.get("result") or "OPEN").upper()
+
+
+def _history_dt(value: Any) -> datetime | None:
+    if value is None or value == "":
+        return None
+    try:
+        n = float(value)
+        if n > 0:
+            if n > 1e12:
+                n /= 1000.0
+            return datetime.fromtimestamp(n, tz=timezone.utc)
+    except Exception:
+        pass
+    dt = _parse_utc(value)
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _history_event_dt(row: dict[str, Any]) -> datetime | None:
+    status = _history_status(row)
+    if status not in {"OPEN", "BLOCKED"}:
+        dt = _history_dt(row.get("closed_time") or row.get("exit_time"))
+        if dt is not None:
+            return dt
+    return _history_dt(row.get("open_timestamp") or row.get("entry_time") or row.get("time"))
+
+
+def _history_dedupe_key(row: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    trade_id = str(row.get("trade_id") or "").strip()
+    ticker_key = _history_ticker_key(row.get("ticker") or "BTCUSDT")
+    direction = _normalize_direction(row.get("direction") or row.get("signal"))
+    if trade_id:
+        return (ticker_key, trade_id, "", direction, "")
+    event_dt = _history_event_dt(row)
+    event_key = event_dt.isoformat() if event_dt is not None else str(row.get("entry_time") or row.get("time") or "")
+    return (
+        ticker_key,
+        str(row.get("signal_id") or row.get("id") or ""),
+        event_key,
+        direction,
+        _history_status(row),
+    )
+
+
+def _combined_signal_history_rows(limit: int = 200, ticker: str | None = None, paper_engine: Any | None = None) -> list[dict[str, Any]]:
+    lim = max(1, min(int(limit), 5000))
+    rows: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str, str, str]] = set()
+
+    # signal_history.json carries live signal events; SQLite and paper state carry executed trades.
+    source_rows = (
+        _signal_history_report_rows(limit=lim, ticker=ticker)
+        + _fetch_trade_report_rows(limit=lim, ticker=ticker)
+        + _paper_trade_report_rows(paper_engine, limit=lim, ticker=ticker)
+    )
+    for row in source_rows:
+        if not isinstance(row, dict):
+            continue
+        key = _history_dedupe_key(row)
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(row)
+
+    rows.sort(key=lambda row: (_history_event_dt(row) or datetime.min.replace(tzinfo=timezone.utc)).timestamp(), reverse=True)
+    return rows[:lim]
+
+
+def _signal_history_stats_from_rows(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    closed = [row for row in rows if _history_status(row) not in {"OPEN", "BLOCKED"}]
+    blocked = [row for row in rows if _history_status(row) == "BLOCKED"]
+    open_rows = [row for row in rows if _history_status(row) == "OPEN"]
+    wins = [row for row in closed if _safe_float(row.get("pnl_pct"), 0.0) > 0]
+    losses = [row for row in closed if _safe_float(row.get("pnl_pct"), 0.0) <= 0]
+    total_pnl = sum(_safe_float(row.get("pnl_pct"), 0.0) for row in closed)
+    today = datetime.now(timezone.utc).date()
+
+    def is_today(row: dict[str, Any]) -> bool:
+        dt = _history_event_dt(row)
+        return bool(dt and dt.date() == today)
+
+    directional_today = [
+        row
+        for row in rows
+        if is_today(row)
+        and _normalize_direction(row.get("direction") or row.get("signal")) in {"LONG", "SHORT"}
+        and _history_status(row) != "BLOCKED"
+    ]
+    long_closed = [row for row in closed if _normalize_direction(row.get("direction") or row.get("signal")) == "LONG"]
+    short_closed = [row for row in closed if _normalize_direction(row.get("direction") or row.get("signal")) == "SHORT"]
+    long_wins = [row for row in long_closed if _safe_float(row.get("pnl_pct"), 0.0) > 0]
+    short_wins = [row for row in short_closed if _safe_float(row.get("pnl_pct"), 0.0) > 0]
+    long_pnl = sum(_safe_float(row.get("pnl_pct"), 0.0) for row in long_closed)
+    short_pnl = sum(_safe_float(row.get("pnl_pct"), 0.0) for row in short_closed)
+
+    return {
+        "total": len(closed),
+        "wins": len(wins),
+        "losses": len(losses),
+        "win_rate": round(len(wins) / len(closed) * 100, 1) if closed else 0,
+        "total_pnl": round(total_pnl, 2),
+        "avg_pnl": round(total_pnl / len(closed), 2) if closed else 0,
+        "open_signals": len(open_rows),
+        "blocked_total": len(blocked),
+        "blocked_today": len([row for row in blocked if is_today(row)]),
+        "long_total": len(long_closed),
+        "short_total": len(short_closed),
+        "long_signals_today": len([row for row in directional_today if _normalize_direction(row.get("direction") or row.get("signal")) == "LONG"]),
+        "short_signals_today": len([row for row in directional_today if _normalize_direction(row.get("direction") or row.get("signal")) == "SHORT"]),
+        "long_win_rate": round(len(long_wins) / len(long_closed) * 100, 1) if long_closed else 0,
+        "short_win_rate": round(len(short_wins) / len(short_closed) * 100, 1) if short_closed else 0,
+        "long_pnl": round(long_pnl, 2),
+        "short_pnl": round(short_pnl, 2),
+    }
 
 
 def _proxy_cache_get(name: str) -> dict[str, Any] | None:
@@ -2267,19 +2621,28 @@ def get_btc_market_context(interval: str = "5m", symbol: str = "BTCUSDT"):
 
 
 @app.get("/api/btc/signal/history")
-def signal_history(limit: int = 50, symbol: str = "BTCUSDT"):
-    signals = get_signal_history(limit)
+def signal_history(request: Request, response: Response, limit: int = 50, symbol: str = "BTCUSDT"):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
     sym = _normalize_crypto_symbol(symbol)
-    if _is_alt_symbol(sym):
-        signals = [s for s in signals if str(s.get("ticker", "")).upper() == sym]
-    elif sym == "BTCUSDT":
-        signals = [s for s in signals if str(s.get("ticker", "BTCUSDT")).upper() == "BTCUSDT"]
-    return {"signals": signals, "stats": get_signal_stats()}
+    ticker_filter = sym if (_is_alt_symbol(sym) or sym == "BTCUSDT") else None
+    lim = max(1, min(int(limit), 1000))
+    stats_rows = _combined_signal_history_rows(
+        limit=max(lim, 5000),
+        ticker=ticker_filter,
+        paper_engine=_paper_engine_for_request(request),
+    )
+    return {"signals": stats_rows[:lim], "stats": _signal_history_stats_from_rows(stats_rows)}
 
 
 @app.get("/api/btc/signal/stats")
-def signal_stats():
-    return get_signal_stats()
+def signal_stats(response: Response):
+    response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    rows = _combined_signal_history_rows(limit=5000, ticker="BTCUSDT")
+    return _signal_history_stats_from_rows(rows)
 
 
 @app.get("/api/btc/system-report")
@@ -4043,58 +4406,178 @@ def _paper_executor_for_request(request: Request):
     return get_user_auto_executor(_paper_user_key(request))
 
 
+def _start_paper_executor_if_needed(executor: Any) -> None:
+    if bool(getattr(executor, "_running", False)):
+        return
+    import threading
+
+    thread = threading.Thread(target=executor.start, daemon=True, name="paper-auto-executor")
+    thread.start()
+
+
+def _ensure_paper_auto_runtime(engine: Any, executor: Any) -> None:
+    try:
+        if str(getattr(engine, "mode", "manual")).lower() == "auto":
+            _start_paper_executor_if_needed(executor)
+    except Exception as exc:
+        logger.debug("Paper auto runtime ensure skipped: %s", exc)
+
+
+def _live_btc_mark_price(interval: str = "5m") -> float | None:
+    """Best-effort live BTC price used to guard paper execution and refresh PnL."""
+    try:
+        if _btc_service is None:
+            return None
+        sig = _btc_service.get_realtime_signal(interval=interval) or {}
+        candidates = [
+            sig.get("mark_price"),
+            ((sig.get("market_context") or {}).get("futures") or {}).get("mark_price"),
+            sig.get("current_price"),
+            sig.get("price"),
+            sig.get("last_price"),
+            sig.get("close"),
+        ]
+        for candidate in candidates:
+            try:
+                px = float(candidate)
+            except Exception:
+                px = 0.0
+            if px > 0:
+                return px
+    except Exception as exc:
+        logger.debug("Live BTC mark lookup skipped: %s", exc)
+    return None
+
+
+def _live_crypto_mark_price(symbol: str = "BTCUSDT", interval: str = "5m") -> float | None:
+    sym = _normalize_crypto_symbol(symbol)
+    if sym == "BTCUSDT":
+        return _live_btc_mark_price(interval=interval)
+    if not _is_alt_symbol(sym):
+        return None
+    try:
+        svc = _ensure_altcoin_service()
+        if svc is None:
+            return None
+        sig = svc.get_realtime_signal(symbol=sym, interval=interval) or {}
+        candidates = [
+            sig.get("mark_price"),
+            sig.get("current_price"),
+            sig.get("entry_price"),
+            sig.get("entry"),
+            sig.get("price"),
+            sig.get("close"),
+        ]
+        for candidate in candidates:
+            try:
+                px = float(candidate)
+            except Exception:
+                px = 0.0
+            if px > 0:
+                return px
+        candles = svc.get_recent_candles(symbol=sym, interval=interval, limit=80) or {}
+        data = candles.get("data") if isinstance(candles, dict) else []
+        if isinstance(data, list) and data:
+            px = float(data[-1].get("close", 0.0) or 0.0)
+            return px if px > 0 else None
+    except Exception as exc:
+        logger.debug("Live %s mark lookup skipped: %s", sym, exc)
+    return None
+
+
+def _paper_execution_market_guard(
+    signal: dict[str, Any],
+    live_price: float | None,
+    *,
+    entry_zone_low: Any = None,
+    entry_zone_high: Any = None,
+    enforce_entry_zone: bool = False,
+) -> str | None:
+    try:
+        live = float(live_price or 0.0)
+    except Exception:
+        live = 0.0
+    if live <= 0:
+        return None
+
+    symbol = _normalize_crypto_symbol(str(signal.get("ticker") or "BTCUSDT"))
+    symbol_label = _asset_short(symbol)
+    direction = str(signal.get("signal") or signal.get("direction") or "").strip().upper()
+    try:
+        entry = float(signal.get("entry_price") or 0.0)
+        stop = float(signal.get("stop_loss") or 0.0)
+        take_profit = float(signal.get("take_profit") or 0.0)
+    except Exception:
+        return None
+    if entry <= 0 or stop <= 0 or take_profit <= 0:
+        return None
+
+    min_tolerance = 5.0 if symbol == "BTCUSDT" else 0.01
+    tolerance = max(abs(entry) * 0.0005, min_tolerance)
+    if enforce_entry_zone:
+        try:
+            zone_low = float(entry_zone_low or 0.0)
+            zone_high = float(entry_zone_high or 0.0)
+        except Exception:
+            zone_low = 0.0
+            zone_high = 0.0
+        if zone_low > 0 and zone_high > 0:
+            low, high = sorted((zone_low, zone_high))
+            if live < low - tolerance or live > high + tolerance:
+                return (
+                    f"Live {symbol_label} price {live:.2f} is outside execution entry zone "
+                    f"{low:.2f}-{high:.2f}. Refresh the plan before trading."
+                )
+
+    if direction == "LONG":
+        if live <= stop:
+            return f"Live {symbol_label} price {live:.2f} is already at/below LONG stop loss {stop:.2f}."
+        if live >= take_profit:
+            return f"Live {symbol_label} price {live:.2f} is already at/above LONG take profit {take_profit:.2f}."
+    elif direction == "SHORT":
+        if live >= stop:
+            return f"Live {symbol_label} price {live:.2f} is already at/above SHORT stop loss {stop:.2f}."
+        if live <= take_profit:
+            return f"Live {symbol_label} price {live:.2f} is already at/below SHORT take profit {take_profit:.2f}."
+    return None
+
+
 @app.get("/api/paper/portfolio")
 def paper_portfolio(request: Request):
     """Live portfolio metrics + positions."""
     try:
         engine = _paper_engine_for_request(request)
+        executor = _paper_executor_for_request(request)
+        _ensure_paper_auto_runtime(engine, executor)
 
-        # Push live BTC mark price into paper engine so SL/TP auto-close works for manual trades.
+        # Push live crypto marks into paper engine so SL/TP auto-close works for manual trades.
         try:
-            live_price = None
-            if _btc_service is not None:
-                sig = _btc_service.get_realtime_signal(interval="5m") or {}
-                candidates = [
-                    sig.get("mark_price"),
-                    ((sig.get("market_context") or {}).get("futures") or {}).get("mark_price"),
-                    sig.get("current_price"),
-                    sig.get("price"),
-                    sig.get("entry_price"),
-                ]
-                for candidate in candidates:
-                    try:
-                        px = float(candidate)
-                    except Exception:
-                        px = 0.0
-                    if px > 0:
-                        live_price = px
-                        break
-
-            if live_price and live_price > 0:
-                open_rows = engine.get_open_positions()
-                price_map: dict[str, float] = {}
-                for row in open_rows:
-                    ticker = str(row.get("ticker", "")).upper().strip()
-                    if not ticker:
-                        continue
-                    # BTC panel/manual flow is BTCUSDT/BTC-USDT; keep aliases for safety.
-                    if "BTC" in ticker:
-                        price_map[ticker] = live_price
-                        price_map[ticker.replace("-", "")] = live_price
-                        if ticker == "BTCUSDT":
-                            price_map["BTC-USDT"] = live_price
-                if price_map:
-                    closed_rows = engine.update_prices(price_map) or []
-                    for closed in closed_rows:
-                        push_broadcast_threadsafe(
-                            {
-                                "type": "paper_trade_update",
-                                "action": "closed",
-                                "ticker": str(closed.get("ticker", "")),
-                                "pnl_usd": float(closed.get("pnl", 0.0) or 0.0),
-                                "reason": str(closed.get("reason", "")),
-                            },
-                        )
+            open_rows = engine.get_open_positions()
+            price_map: dict[str, float] = {}
+            for row in open_rows:
+                ticker_raw = str(row.get("ticker", "")).upper().strip()
+                if not ticker_raw:
+                    continue
+                sym = _normalize_crypto_symbol(ticker_raw.replace("-", ""))
+                live_price = _live_crypto_mark_price(sym, interval="5m")
+                if live_price and live_price > 0:
+                    price_map[ticker_raw] = live_price
+                    price_map[ticker_raw.replace("-", "")] = live_price
+                    if sym.endswith("USDT"):
+                        price_map[sym] = live_price
+                        price_map[f"{sym[:-4]}-USDT"] = live_price
+            if price_map:
+                closed_rows = engine.update_prices(price_map) or []
+                for closed in closed_rows:
+                    push_broadcast_threadsafe(
+                        {
+                            "type": "paper_trade_update",
+                            "action": "closed",
+                            "ticker": str(closed.get("ticker", "")),
+                            "pnl_usd": float(closed.get("pnl", 0.0) or 0.0),
+                            "reason": str(closed.get("reason", "")),
+                        },
+                    )
         except Exception as sync_exc:
             logger.debug("Paper price sync skipped: %s", sync_exc)
 
@@ -4167,6 +4650,7 @@ def paper_portfolio(request: Request):
             "metrics": metrics,
             "open_positions": positions,
             "mode": engine._state.get("mode", "manual"),
+            "auto_running": bool(getattr(executor, "_running", False)),
             "success": True,
         }
     except Exception as e:
@@ -4212,7 +4696,8 @@ async def paper_execute(payload: dict, request: Request):
     """
     Manually execute a paper trade.
     Body: { ticker, direction|signal, entry_price, stop_loss|sl,
-            take_profit|tp1|tp, confidence, asset_class, mode }
+            take_profit|tp1|tp, confidence, asset_class, mode,
+            sizing_mode, capital_to_use, capital_pct }
     """
     engine = _paper_engine_for_request(request)
     mode = "auto" if str(payload.get("mode", "manual")).lower() == "auto" else "manual"
@@ -4223,11 +4708,57 @@ async def paper_execute(payload: dict, request: Request):
         "stop_loss": payload.get("stop_loss", payload.get("sl")),
         "take_profit": payload.get("take_profit", payload.get("tp1", payload.get("tp"))),
         "confidence": payload.get("confidence"),
+        "alpha_score": payload.get("alpha_score", payload.get("confidence")),
+        "regime": payload.get("regime"),
         "asset_class": payload.get("asset_class", "crypto"),
         "strength": payload.get("strength"),
+        "sizing_mode": payload.get("sizing_mode"),
+        "capital_to_use": payload.get("capital_to_use", payload.get("trade_capital_usd")),
+        "capital_pct": payload.get("capital_pct", payload.get("trade_capital_pct")),
+        "position_size_pct": payload.get("position_size_pct"),
+        "position_sizing": payload.get("position_sizing"),
+        "meta_controls": payload.get("meta_controls"),
+        "last_calibration_timestamp": payload.get("last_calibration_timestamp"),
     }
+    signal["ticker"] = _normalize_crypto_symbol(signal["ticker"] or "BTCUSDT")
+    before_metrics = engine.get_portfolio_metrics()
+    capital_before = float(before_metrics.get("capital", 0.0) or 0.0)
+    try:
+        payload_price = float(payload.get("current_price_snapshot") or payload.get("market_price") or 0.0)
+    except Exception:
+        payload_price = 0.0
+    if _is_alt_symbol(signal["ticker"]) and payload_price > 0:
+        live_price = payload_price
+    else:
+        live_price = _live_crypto_mark_price(signal["ticker"], interval="5m")
+        if live_price is None and payload_price > 0:
+            live_price = payload_price
+    guard_msg = _paper_execution_market_guard(
+        signal,
+        live_price,
+        entry_zone_low=payload.get("entry_zone_low"),
+        entry_zone_high=payload.get("entry_zone_high"),
+        enforce_entry_zone=str(payload.get("execution_source") or "").strip().lower() == "execution_plan",
+    )
+    if guard_msg:
+        return {
+            "success": False,
+            "message": guard_msg,
+            "live_price": round(float(live_price or 0.0), 2),
+            "blocked_by": "live_price_guard",
+        }
     result = engine.execute_trade(signal, mode=mode)
     if result.get("success"):
+        used_capital = float(result.get("value", 0.0) or 0.0)
+        after_metrics = engine.get_portfolio_metrics()
+        capital_after = float(after_metrics.get("capital", 0.0) or 0.0)
+        base_capital = capital_before if capital_before > 0 else (capital_after + used_capital)
+        result["capital_before"] = round(base_capital, 4)
+        result["capital_after"] = round(capital_after, 4)
+        result["capital_used"] = round(used_capital, 4)
+        result["capital_used_pct"] = round(((used_capital / base_capital) * 100.0) if base_capital > 0 else 0.0, 4)
+        result["risk_budget"] = round(base_capital * 0.02, 4)
+        result["max_trade_value"] = round(base_capital * 0.10, 4)
         try:
             nm = NotificationManager((_dashboard_cfg or {}).get("notifications", {}))
             nm.notify(
@@ -4317,21 +4848,18 @@ async def paper_set_mode(payload: dict, request: Request):
     Set auto/manual mode.
     Body: { mode: "auto" | "manual" }
     """
-    import threading
-
     mode = str(payload.get("mode", "manual")).lower()
     mode = "auto" if mode == "auto" else "manual"
     engine = _paper_engine_for_request(request)
     engine.set_mode(mode)
 
     executor = _paper_executor_for_request(request)
-    if mode == "auto" and not executor._running:
-        t = threading.Thread(target=executor.start, daemon=True)
-        t.start()
+    if mode == "auto":
+        _start_paper_executor_if_needed(executor)
     elif mode == "manual":
         executor.stop()
 
-    return {"mode": mode, "success": True}
+    return {"mode": mode, "auto_running": bool(getattr(executor, "_running", False)), "success": True}
 
 
 @app.post("/api/paper/reset")
@@ -4345,7 +4873,10 @@ async def paper_reset(payload: dict, request: Request):
 @app.get("/api/paper/pending")
 def paper_pending(request: Request):
     """Get signals waiting for manual approval."""
-    return _paper_executor_for_request(request).get_pending_signals()
+    engine = _paper_engine_for_request(request)
+    executor = _paper_executor_for_request(request)
+    _ensure_paper_auto_runtime(engine, executor)
+    return executor.get_pending_signals()
 
 
 @app.post("/api/paper/approve")
@@ -4539,11 +5070,18 @@ def get_history(limit: int = 100, tab: str = "all", ticker: str | None = None):
 
 
 @app.get("/api/equity-curve")
-def get_equity_curve(limit: int = 5000, ticker: str | None = None):
+def get_equity_curve(request: Request, limit: int = 5000, ticker: str | None = None):
     lim = max(1, min(int(limit), 20000))
-    rows = _fetch_trade_report_rows(limit=lim, ticker=ticker)
-    closed_outcomes = {"TP1", "TP2", "TP3", "SL", "CLOSED"}
-    closed = [r for r in rows if str(r.get("outcome", "")).upper() in closed_outcomes]
+    rows = _combined_signal_history_rows(
+        limit=min(lim, 5000),
+        ticker=ticker,
+        paper_engine=_paper_engine_for_request(request),
+    )
+    closed = [
+        r
+        for r in rows
+        if str(r.get("status") or r.get("outcome") or "").upper() not in {"OPEN", "BLOCKED"}
+    ]
     closed.sort(key=lambda x: str(x.get("exit_time") or x.get("entry_time") or ""))
 
     pnl_values = [float(r.get("pnl_pct") or 0.0) for r in closed]
@@ -5652,6 +6190,17 @@ def _read_html(name: str) -> str:
     return _inject_html_auth_bootstrap(raw)
 
 
+_DASHBOARD_HTML_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
+
+
+def _html_response(html: str) -> HTMLResponse:
+    return HTMLResponse(content=html, headers=dict(_DASHBOARD_HTML_HEADERS))
+
+
 def _render_asset_terminal_html(symbol: str = "ETHUSDT") -> str:
     sym = _normalize_crypto_symbol(symbol)
     if sym not in {"ETHUSDT", "SOLUSDT"}:
@@ -5729,6 +6278,15 @@ def _render_asset_terminal_html(symbol: str = "ETHUSDT") -> str:
       if(chartHead){{
         chartHead.textContent = ALT_SYMBOL + " Trading Chart";
       }}
+      const oiUnit = document.getElementById("open-interest-unit");
+      if(oiUnit){{
+        oiUnit.textContent = ALT_SHORT;
+      }}
+      const newsTitle = Array.from(document.querySelectorAll(".panel-title"))
+        .find((el) => String(el.textContent || "").trim() === "Live BTC News");
+      if(newsTitle){{
+        newsTitle.textContent = "Live " + ALT_SHORT + " News";
+      }}
       const modalTitle = document.getElementById("pt-modal-title");
       if(modalTitle){{
         modalTitle.textContent = "▲ LONG " + ALT_SYMBOL;
@@ -5743,50 +6301,50 @@ def _render_asset_terminal_html(symbol: str = "ETHUSDT") -> str:
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return _read_html("index.html")
+    return _html_response(_read_html("index.html"))
 
 
 @app.get("/terminal", response_class=HTMLResponse)
 def terminal_page():
-    return _read_html("terminal.html")
+    return _html_response(_read_html("terminal.html"))
 
 
 @app.get("/crypto-terminal", response_class=HTMLResponse)
 def crypto_terminal_page():
-    return _read_html("crypto_terminal.html")
+    return _html_response(_read_html("crypto_terminal.html"))
 
 
 @app.get("/asset-terminal", response_class=HTMLResponse)
 def asset_terminal_page(symbol: str = "ETHUSDT"):
-    return _render_asset_terminal_html(symbol)
+    return _html_response(_render_asset_terminal_html(symbol))
 
 
 @app.get("/portfolio", response_class=HTMLResponse)
 def portfolio_page():
-    return _read_html("portfolio.html")
+    return _html_response(_read_html("portfolio.html"))
 
 
 @app.get("/history", response_class=HTMLResponse)
 def history_page():
-    return _read_html("history.html")
+    return _html_response(_read_html("history.html"))
 
 
 @app.get("/factors", response_class=HTMLResponse)
 def factors_page():
-    return _read_html("factors.html")
+    return _html_response(_read_html("factors.html"))
 
 
 @app.get("/regime", response_class=HTMLResponse)
 def regime_page():
-    return _read_html("regime.html")
+    return _html_response(_read_html("regime.html"))
 
 
 @app.get("/focus", response_class=HTMLResponse)
 def focus_page():
-    return _read_html("focus.html")
+    return _html_response(_read_html("focus.html"))
 
 
 @app.get("/stock-terminal", response_class=HTMLResponse)
 def stock_terminal_page():
-    return _read_html("stock_terminal.html")
+    return _html_response(_read_html("stock_terminal.html"))
 

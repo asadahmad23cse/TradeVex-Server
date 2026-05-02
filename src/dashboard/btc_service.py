@@ -16,6 +16,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import requests
+import urllib3
 
 from src.alpha.factor_model import AlphaFactorModel, _rolling_ic
 from src.api.data_quality import DataAnomalyDetector
@@ -27,12 +28,16 @@ from src.data.futures_data import get_futures_sentiment
 from src.dashboard.mtf_bias import MTFBiasFilter
 from src.data.signal_history import check_open_signals, record_signal
 from src.features.engineer import FeatureEngineer
+from src.meta.calibration_freshness import CalibrationFreshnessGuard
+from src.meta.config import load_meta_controls_config, module_enabled
+from src.meta.data_confidence import DataConfidenceEngine
+from src.meta.regime_explainer import RegimeBlockExplainer
 from src.risk.cost_model import CostModel
 from src.risk.kelly_warm_start import BTCKellyWarmStart
 
 logger = logging.getLogger(__name__)
 _last_signal_time: dict[str, float] = {}  # {"LONG": ts, "SHORT": ts, "__ANY__": ts}
-COOLDOWN_MINUTES = {
+DEFAULT_COOLDOWN_MINUTES = {
     "same_direction": 45,
     "any_signal": 10,
 }
@@ -117,6 +122,70 @@ class BitcoinMarketService:
         self._mtf_bias = MTFBiasFilter(self)
         self._kelly = BTCKellyWarmStart()
         self._config = config
+        self._cooldown_minutes = {
+            "same_direction": max(
+                0.0,
+                float(signal_cfg.get("cooldown_same_direction_min", DEFAULT_COOLDOWN_MINUTES["same_direction"])),
+            ),
+            "any_signal": max(
+                0.0,
+                float(signal_cfg.get("cooldown_any_signal_min", DEFAULT_COOLDOWN_MINUTES["any_signal"])),
+            ),
+        }
+
+    def _attach_meta_controls(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Attach optional meta-control metadata without mutating raw signal fields."""
+        try:
+            meta_cfg = load_meta_controls_config(self._config)
+            if not bool(meta_cfg.get("enabled", False)):
+                return payload
+
+            shadow_mode = bool(meta_cfg.get("shadow_mode", True))
+            enforce_execution_gates = bool(meta_cfg.get("enforce_execution_gates", False))
+            meta_out = payload.get("meta_controls") if isinstance(payload.get("meta_controls"), dict) else {}
+            meta_out = dict(meta_out)
+
+            if module_enabled(meta_cfg, "data_confidence"):
+                feed_status = DataConfidenceEngine.status_from_signal_payload(payload)
+                dc_result = DataConfidenceEngine(
+                    meta_cfg.get("data_confidence", {}) or {},
+                    shadow_mode=shadow_mode,
+                    enforce_execution_gates=enforce_execution_gates,
+                ).evaluate(feed_status)
+                dc_payload = dc_result.to_dict()
+                meta_out["data_confidence"] = dc_payload
+                payload["data_confidence_score"] = dc_payload["data_confidence_score"]
+                payload["data_confidence_degraded"] = dc_payload["degraded"]
+                payload["data_confidence_blocked"] = dc_payload["blocked"]
+
+            if module_enabled(meta_cfg, "calibration_freshness"):
+                cal_result = CalibrationFreshnessGuard(
+                    meta_cfg.get("calibration_freshness", {}) or {},
+                    shadow_mode=shadow_mode,
+                    enforce_execution_gates=enforce_execution_gates,
+                ).evaluate(
+                    payload.get("last_calibration_timestamp"),
+                    checkpoint_path=(meta_cfg.get("calibration_freshness") or {}).get(
+                        "checkpoint_path",
+                        CalibrationFreshnessGuard.DEFAULT_CHECKPOINT_PATH,
+                    ),
+                )
+                cal_payload = cal_result.to_dict()
+                meta_out["calibration_freshness"] = cal_payload
+                payload["calibration_status"] = cal_payload["calibration_status"]
+                payload["calibration_warning"] = cal_payload["calibration_warning"]
+
+            if module_enabled(meta_cfg, "regime_explainer"):
+                detail = RegimeBlockExplainer(meta_cfg.get("regime_explainer", {}) or {}).explain(payload)
+                if detail is not None:
+                    payload["block_reason_detail"] = detail
+                    meta_out["regime_block"] = detail
+
+            if meta_out:
+                payload["meta_controls"] = meta_out
+        except Exception as exc:
+            logger.debug("Meta-control attachment skipped: %s", exc)
+        return payload
 
     def get_all_time_history(self, interval: str = "1d") -> dict[str, Any]:
         interval = interval if interval in INTERVAL_TO_MS else "1d"
@@ -184,6 +253,7 @@ class BitcoinMarketService:
                 "reason": "Insufficient Binance candles",
                 "as_of_utc": datetime.now(timezone.utc).isoformat(),
             }
+            payload = self._attach_meta_controls(payload)
             self._signal_cache.set(cache_key, payload, ttl_seconds=5)
             return payload
 
@@ -201,6 +271,7 @@ class BitcoinMarketService:
                 "data_quality": dq.to_dict(),
                 "as_of_utc": datetime.now(timezone.utc).isoformat(),
             }
+            payload = self._attach_meta_controls(payload)
             self._signal_cache.set(cache_key, payload, ttl_seconds=5)
             return payload
 
@@ -265,7 +336,7 @@ class BitcoinMarketService:
         requested_signal = signal if signal in {"LONG", "SHORT"} else None
         reason = ""
         blocked_by: str | None = None
-        regime = self._infer_regime(feat, funding_rate_z=funding_rate_z)
+        regime = self._infer_regime(feat, funding_rate_z=funding_rate_z, funding_rate_pct=funding_rate)
 
         # Direction-aware regime threshold:
         #   WITH-TREND  (SHORT in BEARISH / LONG in BULLISH / LONG in CAPITULATION
@@ -459,10 +530,10 @@ class BitcoinMarketService:
                 signal = "HOLD"
                 reason = "HOLD: SHORT signal rejected - price above EMA21 > EMA50 (bullish structure)"
 
-        if signal == "LONG" and funding_sentiment == "OVERLEVERAGED_LONG":
+        if signal == "LONG" and funding_sentiment == "OVERLEVERAGED_LONG" and funding_rate >= 0.03:
             signal = "HOLD"
             reason = f"HOLD: LONG blocked - funding rate {funding_rate:+.4f}% (overleveraged longs, squeeze risk)"
-        if signal == "SHORT" and funding_sentiment == "OVERLEVERAGED_SHORT":
+        if signal == "SHORT" and funding_sentiment == "OVERLEVERAGED_SHORT" and funding_rate <= -0.03:
             signal = "HOLD"
             reason = f"HOLD: SHORT blocked - funding rate {funding_rate:+.4f}% (overleveraged shorts, squeeze risk)"
 
@@ -476,11 +547,14 @@ class BitcoinMarketService:
             elapsed_same = now_ts - _last_signal_time.get(signal, 0.0)
             elapsed_any = now_ts - _last_signal_time.get("__ANY__", 0.0)
 
-            if _last_signal_time.get(signal) and elapsed_same < COOLDOWN_MINUTES["same_direction"] * 60:
+            same_direction_cd = float(self._cooldown_minutes.get("same_direction", DEFAULT_COOLDOWN_MINUTES["same_direction"]))
+            any_signal_cd = float(self._cooldown_minutes.get("any_signal", DEFAULT_COOLDOWN_MINUTES["any_signal"]))
+
+            if _last_signal_time.get(signal) and elapsed_same < same_direction_cd * 60:
                 signal = "WAIT"
                 reason = f"cooldown: same direction {signal_for_cooldown} fired {elapsed_same / 60.0:.1f} min ago"
                 blocked_by = blocked_by or "cooldown_same_direction"
-            elif _last_signal_time.get("__ANY__") and elapsed_any < COOLDOWN_MINUTES["any_signal"] * 60:
+            elif _last_signal_time.get("__ANY__") and elapsed_any < any_signal_cd * 60:
                 signal = "WAIT"
                 reason = f"cooldown: signal fired {elapsed_any / 60.0:.1f} min ago"
                 blocked_by = blocked_by or "cooldown_any_signal"
@@ -830,6 +904,7 @@ class BitcoinMarketService:
             "as_of_utc": datetime.now(timezone.utc).isoformat(),
             "algo": "quant_alpha_factor_model_v1",
         }
+        payload = self._attach_meta_controls(payload)
         # Track signal outcomes
         check_open_signals(
             entry,
@@ -1142,7 +1217,7 @@ class BitcoinMarketService:
         }
 
     @staticmethod
-    def _infer_regime(feat: pd.DataFrame, funding_rate_z: float = 0.0) -> str:
+    def _infer_regime(feat: pd.DataFrame, funding_rate_z: float = 0.0, funding_rate_pct: float = 0.0) -> str:
         """
         Infer BTC market regime from price structure + on-chain sentiment.
 
@@ -1177,16 +1252,19 @@ class BitcoinMarketService:
         bearish_structure = close < ema_21 < ema_50
         bullish_structure = close > ema_21 > ema_50
 
+        extreme_negative_funding = funding_rate_z < -1.5 and funding_rate_pct <= -0.03
+        extreme_positive_funding = funding_rate_z > 1.5 and funding_rate_pct >= 0.03
+
         # CAPITULATION: bearish EMA structure + extremely negative funding
         # Funding rate Z < -1.5 means shorts are paying longs a premium →
         # overleveraged short positioning historically precedes sharp reversals.
-        if bearish_structure and funding_rate_z < -1.5:
+        if bearish_structure and extreme_negative_funding:
             return "CAPITULATION"
 
         # DISTRIBUTION: bullish EMA structure + extremely positive funding
         # Funding rate Z > 1.5 means longs are paying shorts a premium →
         # overleveraged long positioning historically precedes sharp sell-offs.
-        if bullish_structure and funding_rate_z > 1.5:
+        if bullish_structure and extreme_positive_funding:
             return "DISTRIBUTION"
 
         if bullish_structure:
@@ -1328,7 +1406,16 @@ class BitcoinMarketService:
 
         url = f"{BINANCE_REST}/api/v3/klines"
         try:
-            resp = self._session.get(url, params=params, timeout=BINANCE_HTTP_TIMEOUT_SECONDS)
+            try:
+                resp = self._session.get(url, params=params, timeout=BINANCE_HTTP_TIMEOUT_SECONDS)
+            except requests.exceptions.SSLError:
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                resp = self._session.get(
+                    url,
+                    params=params,
+                    timeout=BINANCE_HTTP_TIMEOUT_SECONDS,
+                    verify=False,
+                )
             resp.raise_for_status()
             data = resp.json()
             return data if isinstance(data, list) else []

@@ -59,6 +59,8 @@ signal:
   min_confidence: 50.0
   min_sqs: 55
   dedup_hours: 4
+  cooldown_same_direction_min: 12
+  cooldown_any_signal_min: 3
   min_holding_candles: 2
 
 force_signals_outside_hours: true
@@ -336,3 +338,25 @@ webhook:
   outgoing_url: ""
   rate_limit_per_min: 60
   max_webhook_kelly: 0.05
+
+meta_controls:
+  enabled: true
+  shadow_mode: true
+  enforce_execution_gates: false
+  data_confidence:
+    enabled: true
+    block_threshold: 0.5
+    degrade_threshold: 0.7
+    cache_ttl_seconds: 60
+  kelly_shrinkage:
+    enabled: true
+    max_equity_pct_per_trade: 2.0
+  calibration_freshness:
+    enabled: true
+    stale_days: 14
+    critical_days: 30
+  alert_filter:
+    enabled: true
+    active_assets: ["BTC"]
+  regime_explainer:
+    enabled: true

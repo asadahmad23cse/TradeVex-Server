@@ -122,7 +122,7 @@ slippage:
   forex_minor: 0.0001
 dashboard:
   host: 0.0.0.0
-  port: 8000
+  port: 8001
   auth:
     enabled: false
     provider: supabase
@@ -302,4 +302,26 @@ optuna:
   alpha_trials: 30
   timeout_sec: 600
   db_path: data/optuna_study.db
+
+meta_controls:
+  enabled: true
+  shadow_mode: true
+  enforce_execution_gates: false
+  data_confidence:
+    enabled: true
+    block_threshold: 0.5
+    degrade_threshold: 0.7
+    cache_ttl_seconds: 60
+  kelly_shrinkage:
+    enabled: true
+    max_equity_pct_per_trade: 2.0
+  calibration_freshness:
+    enabled: true
+    stale_days: 14
+    critical_days: 30
+  alert_filter:
+    enabled: true
+    active_assets: ["BTC"]
+  regime_explainer:
+    enabled: true
 

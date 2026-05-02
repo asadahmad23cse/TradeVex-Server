@@ -92,3 +92,27 @@ Two auth modes are supported via `dashboard.auth.provider`:
 - `supabase`: set `enabled: true`, `provider: supabase`, and configure `SUPABASE_URL` + `SUPABASE_ANON_KEY` (or in config).  
   Login/Signup UI is auto-injected on dashboard pages and API/`/ws` are protected by Supabase access token.
   To restrict access to specific users only, set `dashboard.auth.allowed_emails` and/or `DASHBOARD_ALLOWED_EMAILS` (comma-separated).
+
+## 8) Hetzner SSH Deploy (No GitHub Pull)
+
+Use this when server is managed by direct SSH copy instead of git pull:
+
+```powershell
+cd c:\Users\ASAD AHMAD\OneDrive\Desktop\Trading
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy_hetzner.ps1
+```
+
+What it does:
+- Copies updated files to `/home/asad/TradeVex-Server` via `scp`
+- Restarts live process (`main.py --mode live --config config.yaml`)
+- Verifies local server health (`/api/health`)
+- Verifies public signal API (`https://terminal.tradevex.live/api/btc/signal?interval=15m`)
+
+Optional custom run:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\deploy_hetzner.ps1 `
+  -Files @("src/dashboard/btc_service.py","tests/test_btc_service.py") `
+  -Host "178.104.199.55" `
+  -User "asad"
+```

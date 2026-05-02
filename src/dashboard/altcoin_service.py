@@ -19,13 +19,14 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import requests
+import urllib3
 
 try:
     from dotenv import load_dotenv
 except ImportError:  # pragma: no cover - optional dependency
     load_dotenv = None  # type: ignore[assignment]
 
-from src.alpha.factor_model import AlphaFactorModel, _rolling_ic
+from src.alpha.factor_model import AlphaFactorModel, _latest_usable_ic, _rolling_ic
 from src.api.data_quality import DataAnomalyDetector
 from src.api.rate_limiter import TTLCache
 from src.features.engineer import FeatureEngineer
@@ -160,8 +161,10 @@ class AltcoinMarketService:
         confidence = float(score["confidence"])
         adjusted_threshold = self._regime_threshold(signal, regime)
 
-        net_alpha, cost_pct, cost_ok = self._cost.net_alpha(
-            alpha_score=float(score["alpha_score"]),
+        alpha_score = float(score["alpha_score"])
+        signal_edge = abs(alpha_score) if signal in {"LONG", "SHORT"} else 0.0
+        net_edge, cost_pct, cost_ok = self._cost.net_alpha(
+            alpha_score=signal_edge,
             asset_class="crypto",
             position_size_pct=1.0,
             daily_vol=max(float(volatility_20), 0.05),
@@ -169,6 +172,7 @@ class AltcoinMarketService:
             regime=regime,
             low_liquidity=volume_ratio < 0.8,
         )
+        net_alpha = net_edge if alpha_score >= 0 else -net_edge
 
         onchain = self._onchain_snapshot(sym)
         liquidity = self._liquidity_snapshot(sym)
@@ -201,7 +205,7 @@ class AltcoinMarketService:
         if validated:
             reason = (
                 f"{sym} {validated_signal} validated | {regime} | conf {confidence:.1f}% | "
-                f"net alpha {net_alpha:+.4f}"
+                f"net edge {net_edge:+.4f}"
             )
         elif signal in {"LONG", "SHORT"}:
             reason = "Signal blocked: " + ", ".join(failed) if failed else "Signal blocked by validation"
@@ -247,7 +251,8 @@ class AltcoinMarketService:
             "ai_confidence": round(confidence, 2),
             "adjusted_confidence_threshold": round(adjusted_threshold, 2),
             "alpha_score": round(float(score["alpha_score"]), 4),
-            "net_alpha_score": round(float(net_alpha), 4),
+            "net_alpha_score": round(float(net_edge), 4),
+            "signed_net_alpha_score": round(float(net_alpha), 4),
             "entry_price": round(float(entry_price), 4) if entry_price is not None else None,
             "entry": round(float(entry_price), 4) if entry_price is not None else None,
             "stop_loss": round(float(stop_loss), 4) if stop_loss is not None else None,
@@ -264,7 +269,8 @@ class AltcoinMarketService:
                 "score": validation_score,
                 "checks": checks,
                 "cost_pct": round(float(cost_pct), 5),
-                "net_alpha_score": round(float(net_alpha), 4),
+                "net_alpha_score": round(float(net_edge), 4),
+                "signed_net_alpha_score": round(float(net_alpha), 4),
             },
             "pipeline": {
                 "raw_signal": signal,
@@ -272,7 +278,7 @@ class AltcoinMarketService:
                 "confidence_val": round(confidence, 2),
                 "confidence_threshold": round(adjusted_threshold, 2),
                 "confidence_gate": "PASS" if checks["confidence_gate"] else "FAIL",
-                "cost_gate_val": round(float(net_alpha), 4),
+                "cost_gate_val": round(float(net_edge), 4),
                 "cost_gate": "PASS" if checks["cost_gate"] else "FAIL",
                 "output": validated_signal,
             },
@@ -303,12 +309,23 @@ class AltcoinMarketService:
             headers["X-MBX-APIKEY"] = self._binance_api_key
 
         try:
-            res = self._session.get(
-                f"{BINANCE_SPOT_REST}/api/v3/klines",
-                params={"symbol": symbol, "interval": interval, "limit": int(limit)},
-                timeout=8,
-                headers=headers or None,
-            )
+            url = f"{BINANCE_SPOT_REST}/api/v3/klines"
+            try:
+                res = self._session.get(
+                    url,
+                    params={"symbol": symbol, "interval": interval, "limit": int(limit)},
+                    timeout=8,
+                    headers=headers or None,
+                )
+            except requests.exceptions.SSLError:
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+                res = self._session.get(
+                    url,
+                    params={"symbol": symbol, "interval": interval, "limit": int(limit)},
+                    timeout=8,
+                    headers=headers or None,
+                    verify=False,
+                )
             res.raise_for_status()
             rows = res.json()
             if not isinstance(rows, list):
@@ -367,7 +384,7 @@ class AltcoinMarketService:
         latest_map: dict[str, float] = {}
         for name, factor in factors.items():
             ic_series = _rolling_ic(factor, fwd_ret, self._alpha.ic_window)
-            ic = float(ic_series.iloc[-1]) if len(ic_series) else 0.0
+            ic = _latest_usable_ic(ic_series)
             if not np.isfinite(ic):
                 ic = 0.0
             lv = float(factor.iloc[-1]) if len(factor) else 0.0
@@ -378,7 +395,7 @@ class AltcoinMarketService:
 
         denom = max(sum(abs(v) for v in ic_map.values()), 0.1)
         alpha_score = float(sum(ic_map[k] * latest_map[k] for k in ic_map) / denom)
-        confidence = float(np.clip(50.0 + 50.0 * np.tanh(alpha_score), 0.0, 100.0))
+        confidence = float(np.clip(50.0 + 50.0 * np.tanh(abs(alpha_score)), 0.0, 100.0))
 
         if alpha_score > self._alpha.alpha_threshold:
             signal = "BUY"

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import random
 import threading
@@ -10,6 +11,13 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+from src.meta.calibration_freshness import CalibrationFreshnessGuard
+from src.meta.config import enforcement_active, load_meta_controls_config, module_enabled
+from src.meta.data_confidence import DataConfidenceEngine
+from src.meta.kelly_shrinkage import KellyShrinkageController
+
+logger = logging.getLogger(__name__)
 
 
 class PaperTradingEngine:
@@ -27,6 +35,89 @@ class PaperTradingEngine:
         if not self._state:
             self._state = self._fresh_state(initial_capital=initial_capital)
             self._save()
+
+    def _total_trade_count(self) -> int:
+        stats = self._state.get("stats") if isinstance(self._state.get("stats"), dict) else {}
+        try:
+            total = int(stats.get("total_trades", 0) or 0)
+        except Exception:
+            total = 0
+        closed = self._state.get("closed_trades")
+        if isinstance(closed, list):
+            total = max(total, len(closed))
+        return max(0, total)
+
+    def _meta_execution_review(self, signal: dict[str, Any]) -> dict[str, Any]:
+        try:
+            meta_cfg = load_meta_controls_config()
+            if not bool(meta_cfg.get("enabled", False)):
+                return {"enabled": False}
+
+            shadow_mode = bool(meta_cfg.get("shadow_mode", True))
+            enforce_execution_gates = bool(meta_cfg.get("enforce_execution_gates", False))
+            enforced = enforcement_active(meta_cfg)
+            total_trades = self._total_trade_count()
+            out: dict[str, Any] = {
+                "enabled": True,
+                "shadow_mode": shadow_mode,
+                "enforced": enforced,
+                "execution_position_multiplier": 1.0,
+                "execution_confidence_multiplier": 1.0,
+                "block_new_execution": False,
+            }
+
+            if module_enabled(meta_cfg, "data_confidence"):
+                embedded = signal.get("meta_controls") if isinstance(signal.get("meta_controls"), dict) else {}
+                embedded_dc = embedded.get("data_confidence") if isinstance(embedded.get("data_confidence"), dict) else {}
+                feed_status = embedded_dc.get("feed_status") if isinstance(embedded_dc.get("feed_status"), dict) else None
+                dc_result = DataConfidenceEngine(
+                    meta_cfg.get("data_confidence", {}) or {},
+                    shadow_mode=shadow_mode,
+                    enforce_execution_gates=enforce_execution_gates,
+                ).evaluate(feed_status or DataConfidenceEngine.status_from_signal_payload(signal))
+                dc_payload = dc_result.to_dict()
+                out["data_confidence"] = dc_payload
+                out["execution_position_multiplier"] = min(
+                    float(out["execution_position_multiplier"]),
+                    float(dc_payload.get("execution_position_multiplier", 1.0)),
+                )
+                out["block_new_execution"] = bool(out["block_new_execution"] or dc_payload.get("execution_block_new_trades", False))
+
+            if module_enabled(meta_cfg, "calibration_freshness"):
+                cal_result = CalibrationFreshnessGuard(
+                    meta_cfg.get("calibration_freshness", {}) or {},
+                    shadow_mode=shadow_mode,
+                    enforce_execution_gates=enforce_execution_gates,
+                ).evaluate(
+                    signal.get("last_calibration_timestamp"),
+                    checkpoint_path=(meta_cfg.get("calibration_freshness") or {}).get(
+                        "checkpoint_path",
+                        CalibrationFreshnessGuard.DEFAULT_CHECKPOINT_PATH,
+                    ),
+                )
+                cal_payload = cal_result.to_dict()
+                out["calibration_freshness"] = cal_payload
+                out["execution_confidence_multiplier"] = min(
+                    float(out["execution_confidence_multiplier"]),
+                    float(cal_payload.get("execution_confidence_multiplier", 1.0)),
+                )
+                out["execution_position_multiplier"] = min(
+                    float(out["execution_position_multiplier"]),
+                    float(cal_payload.get("execution_position_multiplier", 1.0)),
+                )
+
+            if module_enabled(meta_cfg, "kelly_shrinkage"):
+                kelly_result = KellyShrinkageController.from_position_sizing(
+                    signal,
+                    total_trade_count=total_trades,
+                    config=meta_cfg.get("kelly_shrinkage", {}) or {},
+                )
+                out["kelly_shrinkage"] = kelly_result.to_dict()
+
+            return out
+        except Exception as exc:
+            logger.debug("Paper meta-control review skipped: %s", exc)
+            return {"enabled": False, "error": str(exc)}
 
     @property
     def mode(self) -> str:
@@ -68,23 +159,78 @@ class PaperTradingEngine:
             take_profit = self._to_float(signal.get("take_profit"), 0.0)
             if entry_price <= 0 or stop_loss <= 0 or take_profit <= 0:
                 return {"success": False, "message": "Invalid entry/SL/TP prices"}
+            if direction == "LONG" and not (stop_loss < entry_price < take_profit):
+                return {
+                    "success": False,
+                    "message": "Invalid LONG setup: Stop Loss must be below entry and Take Profit above entry",
+                }
+            if direction == "SHORT" and not (stop_loss > entry_price > take_profit):
+                return {
+                    "success": False,
+                    "message": "Invalid SHORT setup: Stop Loss must be above entry and Take Profit below entry",
+                }
+
+            meta_controls = self._meta_execution_review(signal)
+            if bool(meta_controls.get("block_new_execution", False)):
+                return {
+                    "success": False,
+                    "message": "Blocked by data confidence gate",
+                    "blocked_by": "data_confidence",
+                    "meta_controls": meta_controls,
+                }
 
             capital = self._to_float(self._state.get("capital"), 0.0)
             risk_amount = capital * 0.02
+            max_value = capital * 0.10
             risk_dist = abs(entry_price - stop_loss)
             if risk_dist <= 0:
                 return {"success": False, "message": "Invalid risk distance"}
 
-            position_size = risk_amount / risk_dist
-            max_value = capital * 0.10
-            max_qty = max_value / entry_price if entry_price > 0 else 0.0
-            quantity = min(position_size, max_qty)
+            sizing_mode_raw = str(signal.get("sizing_mode") or "auto").strip().lower()
+            custom_usd = self._to_float(signal.get("capital_to_use"), 0.0)
+            custom_pct = self._to_float(signal.get("capital_pct"), 0.0)
+
+            if sizing_mode_raw in {"usd", "fixed", "custom_usd"}:
+                if custom_usd <= 0:
+                    return {"success": False, "message": "Invalid custom capital amount"}
+                if custom_usd > capital:
+                    return {"success": False, "message": "Requested capital exceeds available paper capital"}
+                quantity = custom_usd / entry_price
+                sizing_mode = "user-usd"
+            elif sizing_mode_raw in {"pct", "percent", "percentage", "custom_pct"}:
+                if custom_pct <= 0:
+                    return {"success": False, "message": "Invalid custom capital percentage"}
+                if custom_pct > 100:
+                    return {"success": False, "message": "Capital percentage cannot exceed 100%"}
+                value_target = capital * (custom_pct / 100.0)
+                quantity = value_target / entry_price
+                sizing_mode = "user-pct"
+            else:
+                position_size = risk_amount / risk_dist
+                max_qty = max_value / entry_price if entry_price > 0 else 0.0
+                quantity = min(position_size, max_qty)
+                sizing_mode = "auto-risk" if position_size <= max_qty else "auto-cap"
+            if bool(meta_controls.get("enforced", False)):
+                position_multiplier = self._to_float(meta_controls.get("execution_position_multiplier"), 1.0)
+                if 0.0 < position_multiplier < 1.0:
+                    quantity *= position_multiplier
+                    sizing_mode = f"{sizing_mode}+meta"
+                kelly_meta = meta_controls.get("kelly_shrinkage") if isinstance(meta_controls.get("kelly_shrinkage"), dict) else {}
+                effective_kelly = self._to_float(kelly_meta.get("effective_kelly_fraction"), 0.0)
+                if effective_kelly > 0:
+                    kelly_qty_cap = (capital * effective_kelly) / entry_price
+                    if kelly_qty_cap > 0 and quantity > kelly_qty_cap:
+                        quantity = kelly_qty_cap
+                        sizing_mode = f"{sizing_mode}+kelly"
             if quantity <= 0:
                 return {"success": False, "message": "Calculated quantity is zero"}
 
             value = quantity * entry_price
             if value > capital:
                 return {"success": False, "message": "Insufficient capital"}
+            capital_used_pct = (value / capital * 100.0) if capital > 0 else 0.0
+            risk_at_sl = quantity * risk_dist
+            risk_pct_at_sl = (risk_at_sl / capital * 100.0) if capital > 0 else 0.0
 
             trade_id = self._generate_trade_id()
             now = datetime.now(timezone.utc).isoformat()
@@ -106,8 +252,12 @@ class PaperTradingEngine:
                 "opened_ts": time.time(),
                 "asset_class": str(signal.get("asset_class") or "unknown"),
                 "confidence": self._to_float(signal.get("confidence"), 0.0),
+                "alpha_score": self._to_float(signal.get("alpha_score"), self._to_float(signal.get("confidence"), 0.0)),
+                "regime": str(signal.get("regime") or ""),
                 "strength": str(signal.get("strength") or ""),
                 "mode": mode,
+                "sizing_mode": sizing_mode,
+                "meta_controls": meta_controls,
             }
             self._save()
             return {
@@ -118,10 +268,15 @@ class PaperTradingEngine:
                 "entry_price": entry_price,
                 "quantity": quantity,
                 "value": value,
+                "capital_used_pct": capital_used_pct,
                 "stop_loss": stop_loss,
                 "take_profit": take_profit,
+                "risk_at_sl": risk_at_sl,
+                "risk_pct_at_sl": risk_pct_at_sl,
+                "sizing_mode": sizing_mode,
                 "timestamp": now,
                 "message": f"Paper trade executed for {ticker}",
+                "meta_controls": meta_controls,
             }
 
     def close_position(self, ticker: str, exit_price: float, reason: str = "manual") -> dict | None:
@@ -157,6 +312,12 @@ class PaperTradingEngine:
                 "held_hours": float(round(held_hours, 4)),
                 "asset_class": pos.get("asset_class", "unknown"),
                 "confidence": self._to_float(pos.get("confidence"), 0.0),
+                "alpha_score": self._to_float(pos.get("alpha_score"), self._to_float(pos.get("confidence"), 0.0)),
+                "regime": str(pos.get("regime", "")),
+                "stop_loss": self._to_float(pos.get("stop_loss"), 0.0),
+                "take_profit": self._to_float(pos.get("take_profit"), 0.0),
+                "mode": str(pos.get("mode", "manual")),
+                "sizing_mode": str(pos.get("sizing_mode", "auto")),
             }
             self._state["closed_trades"].append(closed)
             self._state["capital"] = self._to_float(self._state.get("capital"), 0.0) + entry_value + pnl
@@ -175,7 +336,10 @@ class PaperTradingEngine:
             stats["max_drawdown"] = min(self._to_float(stats.get("max_drawdown"), 0.0), drawdown)
 
             self._save()
+            if str(pos.get("mode", "manual")).lower() == "auto":
+                self._record_auto_closed_trade_signal(pos=pos, closed=closed)
             return {
+                "trade_id": str(pos.get("trade_id", "")),
                 "ticker": ticker,
                 "entry_price": entry,
                 "exit_price": float(exit_price),
@@ -185,6 +349,8 @@ class PaperTradingEngine:
                 "direction": direction,
                 "reason": reason,
                 "held_hours": float(round(held_hours, 4)),
+                "mode": str(pos.get("mode", "manual")),
+                "regime": str(pos.get("regime", "")),
             }
 
     def check_sl_tp(self, ticker: str, current_price: float) -> dict | None:
@@ -310,6 +476,7 @@ class PaperTradingEngine:
                         "asset_class": str(p.get("asset_class", "unknown")),
                         "confidence": self._to_float(p.get("confidence"), 0.0),
                         "trade_id": str(p.get("trade_id", "")),
+                        "mode": str(p.get("mode", "manual")),
                     }
                 )
             out.sort(key=lambda x: str(x.get("opened_at", "")), reverse=True)
@@ -420,4 +587,39 @@ class PaperTradingEngine:
         if s in {"SELL", "SHORT"}:
             return "SHORT"
         return "HOLD"
+
+    def _record_auto_closed_trade_signal(self, pos: dict[str, Any], closed: dict[str, Any]) -> None:
+        try:
+            from src.data.signal_history import record_closed_trade
+
+            entry = self._to_float(closed.get("entry_price"), 0.0)
+            stop = self._to_float(pos.get("stop_loss"), self._to_float(closed.get("stop_loss"), 0.0))
+            tp1 = self._to_float(pos.get("take_profit"), self._to_float(closed.get("take_profit"), 0.0))
+            risk = abs(entry - stop)
+            reward = abs(tp1 - entry)
+            rr_ratio = (reward / risk) if risk > 0 and reward > 0 else 0.0
+
+            record_closed_trade(
+                {
+                    "trade_id": str(closed.get("trade_id", "")),
+                    "ticker": str(closed.get("ticker") or pos.get("ticker") or "BTCUSDT"),
+                    "signal": str(closed.get("direction") or pos.get("direction") or "HOLD"),
+                    "confidence": self._to_float(pos.get("confidence"), 0.0),
+                    "alpha_score": self._to_float(pos.get("alpha_score"), self._to_float(pos.get("confidence"), 0.0)),
+                    "entry_price": entry,
+                    "exit_price": self._to_float(closed.get("exit_price"), 0.0),
+                    "stop_loss": stop,
+                    "tp1": tp1,
+                    "risk_reward": rr_ratio,
+                    "pnl_pct": self._to_float(closed.get("pnl_pct"), 0.0),
+                    "reason": str(closed.get("reason", "")),
+                    "regime": str(pos.get("regime", "")),
+                    "opened_at": pos.get("opened_at"),
+                    "closed_at": closed.get("closed_at"),
+                    "source": "paper_trading_auto",
+                    "mode": "ALGO",
+                }
+            )
+        except Exception as exc:
+            logger.debug("paper auto trade sync to signal_history skipped: %s", exc)
 

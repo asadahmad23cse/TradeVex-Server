@@ -36,6 +36,7 @@ class BTCKellyWarmStart:
     def __init__(self, buckets_file: str | None = None, history_path: str = "data/signal_history.json") -> None:
         self._buckets_file = Path(buckets_file or self.BUCKETS_FILE)
         self._history_path = Path(history_path)
+        self._explicit_history_path = str(history_path) != "data/signal_history.json"
         self.buckets: dict[str, dict[str, Any]] = {}
         self._bucket_records: dict[str, list[dict[str, float]]] = {}
         self.total_trades = 0
@@ -323,7 +324,7 @@ class BTCKellyWarmStart:
 
         # Fallback: rebuild from signal history
         self._load_from_history_impl(self._history_path, verbose=False)
-        if self.total_trades == 0:
+        if self.total_trades == 0 and not self._explicit_history_path:
             # Try alternate history paths
             alt_paths = [
                 Path("data/signal_history.json"),

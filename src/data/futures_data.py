@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 import requests
+import urllib3
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +26,16 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 
 def _get_json(base: str, path: str, params: dict[str, Any] | None = None) -> Any:
-    resp = requests.get(f"{base}{path}", params=params or {}, timeout=REQUEST_TIMEOUT_SECONDS)
+    try:
+        resp = requests.get(f"{base}{path}", params=params or {}, timeout=REQUEST_TIMEOUT_SECONDS)
+    except requests.exceptions.SSLError:
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+        resp = requests.get(
+            f"{base}{path}",
+            params=params or {},
+            timeout=REQUEST_TIMEOUT_SECONDS,
+            verify=False,
+        )
     resp.raise_for_status()
     return resp.json()
 

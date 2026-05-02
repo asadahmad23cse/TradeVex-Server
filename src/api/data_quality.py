@@ -15,7 +15,7 @@ import io
 import logging
 import zipfile
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
@@ -31,7 +31,7 @@ class DataQualityReport:
     asset: str
     asset_class: str
     timeframe: str
-    timestamp: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    timestamp: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     stale_price_rows: int = 0
     spike_rows: int = 0
     zero_volume_rows: int = 0

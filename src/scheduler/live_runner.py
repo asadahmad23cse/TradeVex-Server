@@ -41,6 +41,11 @@ from src.research.lookahead import LookaheadBiasAuditor
 from src.research.stress import HistoricalStressTester
 from src.research.capital_validation import PaperToLiveGraduator, LivePerformanceTracker
 from src.execution.async_executor import AsyncExecutionPipeline
+from src.meta.alert_filter import AlertNoiseFilter
+from src.meta.calibration_freshness import CalibrationFreshnessGuard
+from src.meta.config import enforcement_active, load_meta_controls_config, module_enabled
+from src.meta.data_confidence import DataConfidenceEngine
+from src.meta.kelly_shrinkage import KellyShrinkageController
 from src.signals.engine import SignalEngine
 from src.signals.store import SignalStore
 from src.risk.kelly import KellyCalculator, PortfolioRiskGuard
@@ -298,6 +303,139 @@ class LiveRunner:
             "mode": "live" if is_live else "paper",
         }
 
+    def _meta_cfg(self) -> dict:
+        return load_meta_controls_config(self.cfg)
+
+    def _meta_enforcement_allowed(self, meta_cfg: dict) -> bool:
+        broker_mode = str(self.cfg.get("execution", {}).get("broker", "paper")).lower()
+        paper_mode = broker_mode in {"paper", "sim", "simulator"}
+        return bool(enforcement_active(meta_cfg) and paper_mode)
+
+    def _meta_execution_review_for_signal(self, sig) -> dict:
+        try:
+            meta_cfg = self._meta_cfg()
+            if not bool(meta_cfg.get("enabled", False)):
+                return {"enabled": False}
+
+            shadow_mode = bool(meta_cfg.get("shadow_mode", True))
+            enforce_for_paper = self._meta_enforcement_allowed(meta_cfg)
+            total_trades = int(getattr(sig, "kelly_bucket_trade_count", 0) or 0)
+            out: dict = {
+                "enabled": True,
+                "shadow_mode": shadow_mode,
+                "enforced": enforce_for_paper,
+                "execution_position_multiplier": 1.0,
+                "execution_confidence_multiplier": 1.0,
+                "block_new_execution": False,
+            }
+
+            payload = sig.to_dict() if hasattr(sig, "to_dict") else {}
+            if module_enabled(meta_cfg, "data_confidence"):
+                dc_result = DataConfidenceEngine(
+                    meta_cfg.get("data_confidence", {}) or {},
+                    shadow_mode=shadow_mode,
+                    enforce_execution_gates=enforce_for_paper,
+                ).evaluate(DataConfidenceEngine.status_from_signal_payload(payload))
+                dc_payload = dc_result.to_dict()
+                out["data_confidence"] = dc_payload
+                out["execution_position_multiplier"] = min(
+                    float(out["execution_position_multiplier"]),
+                    float(dc_payload.get("execution_position_multiplier", 1.0)),
+                )
+                out["block_new_execution"] = bool(out["block_new_execution"] or dc_payload.get("execution_block_new_trades", False))
+
+            if module_enabled(meta_cfg, "calibration_freshness"):
+                cal_result = CalibrationFreshnessGuard(
+                    meta_cfg.get("calibration_freshness", {}) or {},
+                    shadow_mode=shadow_mode,
+                    enforce_execution_gates=enforce_for_paper,
+                ).evaluate(
+                    getattr(sig, "last_calibration_timestamp", None),
+                    checkpoint_path=(meta_cfg.get("calibration_freshness") or {}).get(
+                        "checkpoint_path",
+                        CalibrationFreshnessGuard.DEFAULT_CHECKPOINT_PATH,
+                    ),
+                )
+                cal_payload = cal_result.to_dict()
+                out["calibration_freshness"] = cal_payload
+                out["execution_confidence_multiplier"] = min(
+                    float(out["execution_confidence_multiplier"]),
+                    float(cal_payload.get("execution_confidence_multiplier", 1.0)),
+                )
+                out["execution_position_multiplier"] = min(
+                    float(out["execution_position_multiplier"]),
+                    float(cal_payload.get("execution_position_multiplier", 1.0)),
+                )
+
+            if module_enabled(meta_cfg, "kelly_shrinkage"):
+                kelly_result = KellyShrinkageController(meta_cfg.get("kelly_shrinkage", {}) or {}).adjust(
+                    getattr(sig, "raw_kelly_fraction", getattr(sig, "kelly_fraction", 0.0)),
+                    total_trades,
+                    already_effective=True,
+                    existing_effective_fraction=getattr(sig, "position_size_pct", 0.0),
+                )
+                out["kelly_shrinkage"] = kelly_result.to_dict()
+
+            return out
+        except Exception as exc:
+            logger.debug("Live meta-control review skipped: %s", exc)
+            return {"enabled": False, "error": str(exc)}
+
+    @staticmethod
+    def _fraction_value(value: float) -> tuple[float, bool]:
+        val = float(value or 0.0)
+        is_percent = val > 1.0
+        return (val / 100.0 if is_percent else val), is_percent
+
+    def _apply_meta_execution_sizing(self, sig, meta_controls: dict) -> None:
+        if not bool(meta_controls.get("enforced", False)):
+            return
+        current_fraction, was_percent = self._fraction_value(float(getattr(sig, "position_size_pct", 0.0) or 0.0))
+        if current_fraction <= 0:
+            return
+        multiplier = float(meta_controls.get("execution_position_multiplier", 1.0) or 1.0)
+        target = current_fraction * max(0.0, min(multiplier, 1.0))
+        kelly_meta = meta_controls.get("kelly_shrinkage") if isinstance(meta_controls.get("kelly_shrinkage"), dict) else {}
+        effective_kelly = float(kelly_meta.get("effective_kelly_fraction", 0.0) or 0.0)
+        if effective_kelly > 0:
+            target = min(target, effective_kelly)
+        sig.position_size_pct = round(target * 100.0, 6) if was_percent else round(target, 6)
+        setattr(sig, "meta_controls", meta_controls)
+
+    def _filter_alert_event(self, event: dict) -> dict:
+        try:
+            meta_cfg = self._meta_cfg()
+            if not module_enabled(meta_cfg, "alert_filter"):
+                return event
+            details_raw = event.get("details")
+            details = json.loads(details_raw) if isinstance(details_raw, str) and details_raw else details_raw
+            if not isinstance(details, dict):
+                details = {}
+            alert = dict(event)
+            alert["details"] = details
+            filtered = AlertNoiseFilter(
+                meta_cfg.get("alert_filter", {}) or {},
+                shadow_mode=bool(meta_cfg.get("shadow_mode", True)),
+                enforce=enforcement_active(meta_cfg),
+            ).filter_alert(alert)
+            out = dict(filtered.alert if filtered.enforced else event)
+            if filtered.downgraded:
+                details["_alert_filter"] = {
+                    "downgraded": filtered.downgraded,
+                    "asset": filtered.asset,
+                    "original_level": filtered.original_level,
+                    "filtered_level": filtered.filtered_level,
+                    "shadow_mode": filtered.shadow_mode,
+                    "enforced": filtered.enforced,
+                }
+                out["details"] = json.dumps(details)
+            elif isinstance(out.get("details"), dict):
+                out["details"] = json.dumps(out.get("details") or {})
+            return out
+        except Exception as exc:
+            logger.debug("Alert filter skipped: %s", exc)
+            return event
+
     def _log_health(self, component: str, status: str, message: str, details: dict | None = None) -> None:
         event = {
             "health_id": str(uuid.uuid4()),
@@ -307,30 +445,32 @@ class LiveRunner:
             "details": json.dumps(details or {}),
             "timestamp": datetime.utcnow().isoformat(),
         }
+        event = self._filter_alert_event(event)
         self.store.save_system_health(event)
-        if status.upper() in {"CRITICAL", "WARNING"}:
-            self.notifier.notify(f"{component}: {status}", message, severity=status)
+        filtered_status = str(event.get("status", status)).upper()
+        if filtered_status.startswith("CRITICAL") or filtered_status.startswith("WARNING"):
+            self.notifier.notify(f"{component}: {event.get('status', status)}", message, severity=event.get("status", status))
 
     def _save_data_quality(self, report) -> None:
         if not report.issue_types:
             return
-        self.store.save_data_quality_event(
-            {
-                "event_id": str(uuid.uuid4()),
-                "asset": report.asset,
-                "asset_class": report.asset_class,
-                "timeframe": report.timeframe,
-                "severity": "CRITICAL" if report.severe else "WARNING",
-                "issue_types": json.dumps(report.issue_types),
-                "details": json.dumps(report.to_dict()),
-                "timestamp": report.timestamp,
-            }
-        )
-        if report.severe:
+        event = {
+            "event_id": str(uuid.uuid4()),
+            "asset": report.asset,
+            "asset_class": report.asset_class,
+            "timeframe": report.timeframe,
+            "severity": "CRITICAL" if report.severe else "WARNING",
+            "issue_types": json.dumps(report.issue_types),
+            "details": json.dumps(report.to_dict()),
+            "timestamp": report.timestamp,
+        }
+        event = self._filter_alert_event(event)
+        self.store.save_data_quality_event(event)
+        if str(event.get("severity", "")).upper() == "CRITICAL":
             self.notifier.notify(
                 f"Data anomaly: {report.asset}",
                 f"{report.issue_types} on {report.asset} ({report.timeframe})",
-                severity="CRITICAL",
+                severity=str(event.get("severity", "CRITICAL")),
             )
 
     def _save_model_validation(self, model_name: str, asset_class: str, metrics: dict, top_features: list | None = None) -> None:
@@ -347,23 +487,23 @@ class LiveRunner:
 
     def _save_reconciliation(self, event) -> None:
         data = event.to_dict() if hasattr(event, "to_dict") else dict(event)
-        self.store.save_reconciliation_event(
-            {
-                "event_id": str(uuid.uuid4()),
-                "scope": data.get("scope", "reconciliation"),
-                "asset": data.get("asset", ""),
-                "status": data.get("status", "UNKNOWN"),
-                "severity": data.get("severity", "INFO"),
-                "message": data.get("message", ""),
-                "details": json.dumps(data.get("details", {})),
-                "timestamp": data.get("timestamp", datetime.utcnow().isoformat()),
-            }
-        )
-        if data.get("severity", "INFO").upper() == "CRITICAL":
+        rec_event = {
+            "event_id": str(uuid.uuid4()),
+            "scope": data.get("scope", "reconciliation"),
+            "asset": data.get("asset", ""),
+            "status": data.get("status", "UNKNOWN"),
+            "severity": data.get("severity", "INFO"),
+            "message": data.get("message", ""),
+            "details": json.dumps(data.get("details", {})),
+            "timestamp": data.get("timestamp", datetime.utcnow().isoformat()),
+        }
+        rec_event = self._filter_alert_event(rec_event)
+        self.store.save_reconciliation_event(rec_event)
+        if str(rec_event.get("severity", "INFO")).upper() == "CRITICAL":
             self.notifier.notify(
-                f"Reconciliation: {data.get('status', 'UNKNOWN')}",
-                data.get("message", ""),
-                severity="CRITICAL",
+                f"Reconciliation: {rec_event.get('status', 'UNKNOWN')}",
+                rec_event.get("message", ""),
+                severity=str(rec_event.get("severity", "CRITICAL")),
             )
 
     def _record_order(self, signal, receipt) -> OrderStateRecord:
@@ -513,6 +653,16 @@ class LiveRunner:
             return df
 
     def _execute_and_track(self, sig) -> bool:
+        meta_controls = self._meta_execution_review_for_signal(sig)
+        if bool(meta_controls.get("block_new_execution", False)):
+            self._log_health(
+                "meta_controls",
+                "WARNING",
+                f"Execution blocked by data confidence for {sig.asset}",
+                {"asset": sig.asset, "meta_controls": meta_controls},
+            )
+            return False
+        self._apply_meta_execution_sizing(sig, meta_controls)
         receipt = self.executor.execute(sig)
         order_record = self._record_order(sig, receipt)
 
@@ -918,6 +1068,8 @@ class LiveRunner:
                 if sig is None:
                     logger.info(f"SKIP {ticker}: signal engine returned None")
                     continue
+                setattr(sig, "kelly_bucket_trade_count", int(bucket.get("total", 0) or 0))
+                setattr(sig, "raw_kelly_fraction", kelly_result.get("kelly_fraction", 0.0))
 
                 open_pos = self.store.get_open_signals()
                 with self._price_history_lock:
@@ -1201,6 +1353,8 @@ class LiveRunner:
                     volume_ratio=volume_ratio,
                 )
                 if sig:
+                    setattr(sig, "kelly_bucket_trade_count", int(bucket.get("total", 0) or 0))
+                    setattr(sig, "raw_kelly_fraction", kelly_result.get("kelly_fraction", 0.0))
                     open_pos = self.store.get_open_signals()
                     with self._price_history_lock:
                         price_history_snapshot = dict(self._price_history)
