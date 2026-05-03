@@ -89,6 +89,7 @@ _connected_ws: List[WebSocket] = []
 _binance_account_cache: dict[str, Any] = {}   # { user_key: {"ts": float, "data": dict} }
 _BINANCE_ACCOUNT_CACHE_TTL = 12.0              # seconds
 _app_loop: asyncio.AbstractEventLoop | None = None
+_btc_signal_task: asyncio.Task | None = None
 _dashboard_cfg: dict = {}
 _options_engine: OptionsEngine | None = None
 _expiry_tracker = ExpiryTracker()
@@ -2227,9 +2228,62 @@ def push_broadcast_threadsafe(data: dict) -> None:
     asyncio.run_coroutine_threadsafe(broadcast(data), loop)  # type: ignore[arg-type]
 
 
+def _btc_background_signal_enabled() -> bool:
+    dashboard_cfg = (_dashboard_cfg.get("dashboard") or {}) if isinstance(_dashboard_cfg, dict) else {}
+    raw = dashboard_cfg.get("btc_background_signal_enabled", True)
+    if isinstance(raw, str):
+        return raw.strip().lower() not in {"0", "false", "no", "off"}
+    return bool(raw)
+
+
+def _btc_background_signal_interval_seconds() -> float:
+    dashboard_cfg = (_dashboard_cfg.get("dashboard") or {}) if isinstance(_dashboard_cfg, dict) else {}
+    try:
+        return max(5.0, float(dashboard_cfg.get("btc_background_signal_seconds", 15)))
+    except Exception:
+        return 15.0
+
+
+def _btc_background_signal_intervals() -> list[str]:
+    dashboard_cfg = (_dashboard_cfg.get("dashboard") or {}) if isinstance(_dashboard_cfg, dict) else {}
+    raw = dashboard_cfg.get("btc_background_signal_intervals", ["15m"])
+    if isinstance(raw, str):
+        values = [part.strip() for part in raw.split(",")]
+    elif isinstance(raw, list):
+        values = [str(part or "").strip() for part in raw]
+    else:
+        values = ["15m"]
+    allowed = [value for value in values if value in INTERVAL_TO_MS]
+    return allowed or ["15m"]
+
+
+async def _btc_background_signal_loop() -> None:
+    """Keep BTC signal/history warm even when no browser tab is polling."""
+    await asyncio.sleep(3)
+    logger.info(
+        "BTC background signal poller started: intervals=%s every=%.1fs",
+        ",".join(_btc_background_signal_intervals()),
+        _btc_background_signal_interval_seconds(),
+    )
+    while True:
+        try:
+            svc = _btc_service
+            if svc is not None:
+                for interval in _btc_background_signal_intervals():
+                    payload = await asyncio.to_thread(svc.get_realtime_signal, interval=interval)
+                    signal = str((payload or {}).get("signal") or "HOLD").upper()
+                    validated = bool((payload or {}).get("validated", False))
+                    logger.debug("BTC background signal tick: interval=%s signal=%s validated=%s", interval, signal, validated)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning("BTC background signal poll failed: %s", exc)
+        await asyncio.sleep(_btc_background_signal_interval_seconds())
+
+
 @app.on_event("startup")
 async def _capture_loop() -> None:
-    global _app_loop, _btc_service, _altcoin_service
+    global _app_loop, _btc_service, _altcoin_service, _btc_signal_task
     _app_loop = asyncio.get_running_loop()
     # Auto-init BTC service when running standalone via uvicorn (without main.py)
     if _btc_service is None:
@@ -2244,11 +2298,21 @@ async def _capture_loop() -> None:
         except Exception as exc:  # pragma: no cover
             import logging
             logging.getLogger(__name__).warning("Altcoin service auto-init failed: %s", exc)
+    if _btc_background_signal_enabled() and _btc_signal_task is None:
+        _btc_signal_task = asyncio.create_task(_btc_background_signal_loop())
 
 
 @app.on_event("shutdown")
 async def _shutdown_live_runner() -> None:
     """Ensure scheduler/broker loop is stopped when the API server exits."""
+    global _btc_signal_task
+    if _btc_signal_task is not None:
+        _btc_signal_task.cancel()
+        try:
+            await _btc_signal_task
+        except asyncio.CancelledError:
+            pass
+        _btc_signal_task = None
     runner = _live_runner
     if runner is None:
         return
