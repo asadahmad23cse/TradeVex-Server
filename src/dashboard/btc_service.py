@@ -233,6 +233,8 @@ class BitcoinMarketService:
             return cached
         rows = self._fetch_klines(interval=interval, limit=limit)
         df = self._klines_to_df(rows)
+        if df.empty:
+            df = self._fetch_yfinance_recent_frame(interval=interval, limit=limit)
         self._recent_cache.set(cache_key, df, ttl_seconds=8)
         return df
 
@@ -1422,6 +1424,65 @@ class BitcoinMarketService:
         except Exception as exc:
             logger.warning("Binance klines fetch failed: %s", exc)
             return []
+
+    @staticmethod
+    def _fetch_yfinance_recent_frame(interval: str, limit: int = 1000) -> pd.DataFrame:
+        yf_interval_map = {
+            "1m": "1m",
+            "3m": "5m",
+            "5m": "5m",
+            "15m": "15m",
+            "30m": "30m",
+            "1h": "60m",
+            "2h": "60m",
+            "4h": "60m",
+            "6h": "60m",
+            "8h": "60m",
+            "12h": "60m",
+            "1d": "1d",
+            "3d": "1d",
+            "1w": "1wk",
+            "1M": "1mo",
+        }
+        yf_interval = yf_interval_map.get(interval, "15m")
+        if yf_interval == "1m":
+            period = "7d"
+        elif yf_interval in {"5m", "15m", "30m", "60m"}:
+            period = "60d"
+        elif yf_interval == "1d":
+            period = "2y"
+        else:
+            period = "10y"
+        try:
+            import yfinance as yf  # type: ignore[import]
+
+            raw = yf.download(
+                "BTC-USD",
+                interval=yf_interval,
+                period=period,
+                progress=False,
+                auto_adjust=False,
+                threads=False,
+            )
+            if raw is None or raw.empty:
+                return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+            if isinstance(raw.columns, pd.MultiIndex):
+                raw.columns = raw.columns.get_level_values(0)
+            keep = raw.rename(columns={c: str(c).title() for c in raw.columns})
+            keep = keep[[c for c in ["Open", "High", "Low", "Close", "Volume"] if c in keep.columns]].copy()
+            for col in ["Open", "High", "Low", "Close", "Volume"]:
+                if col not in keep.columns:
+                    keep[col] = 0.0
+                keep[col] = pd.to_numeric(keep[col], errors="coerce")
+            keep = keep.dropna(subset=["Open", "High", "Low", "Close"]).tail(int(max(1, limit)))
+            if keep.index.tz is None:
+                keep.index = keep.index.tz_localize("UTC")
+            else:
+                keep.index = keep.index.tz_convert("UTC")
+            return keep[["Open", "High", "Low", "Close", "Volume"]]
+        except Exception as exc:
+            logger.warning("yfinance BTC fallback failed: %s", exc)
+            return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
 
     @staticmethod
     def _klines_to_df(rows: list[list[Any]]) -> pd.DataFrame:
