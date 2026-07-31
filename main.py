@@ -12,6 +12,7 @@ Modes:
 
 import argparse
 import logging
+import os
 import sys
 import threading
 
@@ -26,6 +27,24 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 
+def apply_runtime_dashboard_overrides(cfg: dict) -> dict:
+    """Allow cloud hosts such as Render to provide bind host/port via env."""
+    dashboard_cfg = cfg.setdefault("dashboard", {})
+
+    host = os.getenv("HOST")
+    if host:
+        dashboard_cfg["host"] = host
+
+    port = os.getenv("PORT")
+    if port:
+        try:
+            dashboard_cfg["port"] = int(port)
+        except ValueError:
+            logger.warning("Ignoring invalid PORT value: %s", port)
+
+    return cfg
+
+
 def run_live(config_path: str) -> None:
     """Start the full live trading system + dashboard."""
     from src.dashboard.api import app, init_dashboard, push_broadcast_threadsafe, set_live_runner  # type: ignore[import]
@@ -33,6 +52,7 @@ def run_live(config_path: str) -> None:
 
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
+    cfg = apply_runtime_dashboard_overrides(cfg)
 
     runner = LiveRunner(config_path=config_path)
     init_dashboard(
@@ -78,6 +98,7 @@ def run_dashboard(config_path: str) -> None:
 
     with open(config_path) as f:
         cfg = yaml.safe_load(f)
+    cfg = apply_runtime_dashboard_overrides(cfg)
 
     db_url = cfg.get("database", {}).get("url", "data/signals.db")
     store = SignalStore(db_url)

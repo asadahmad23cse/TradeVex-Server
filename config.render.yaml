@@ -1,0 +1,85 @@
+dashboard:
+  host: "0.0.0.0"
+  port: 10000
+  auth:
+    enabled: true
+    provider: "supabase"
+    allowed_emails: []
+    require_active_subscription: false
+    username: "admin"
+    password: "change-me"
+    jwt_secret: "change-this-secret"
+
+portfolio:
+  initial_capital: 100000.0
+
+database:
+  url: "data/signals.db"
+
+signal:
+  alpha_score_threshold: 0.15
+  ic_window: 60
+  min_confidence: 50.0
+  min_sqs: 55
+  dedup_hours: 4
+  cooldown_same_direction_min: 12
+  cooldown_any_signal_min: 3
+
+risk:
+  max_daily_drawdown_pct: 5.0
+  max_open_positions: 8
+  max_position_size_pct: 5.0
+  cold_start_position_pct: 2.0
+  kelly_fraction: 0.25
+  min_kelly_trades: 30
+
+cost_model:
+  market_impact_coefficient: 0.6
+  half_spread:
+    indian_stock: 0.0002
+    us_stock: 0.0001
+    forex: 0.00005
+
+focus_assets:
+  - symbol: XAUUSD
+    yf_ticker: GC=F
+    name: Gold
+    market: metals
+    quote_currency: USD
+  - symbol: XAGUSD
+    yf_ticker: SI=F
+    name: Silver
+    market: metals
+    quote_currency: USD
+  - symbol: BTCUSD
+    yf_ticker: BTC-USD
+    name: Bitcoin
+    market: crypto
+    quote_currency: USD
+
+focus_validation:
+  horizons:
+    - interval: "5m"
+      period: "5d"
+    - interval: "15m"
+      period: "5d"
+    - interval: "1h"
+      period: "1mo"
+
+eth_quant_v2:
+  enabled: false
+
+fund_mode:
+  enabled: false
+
+options_intelligence:
+  enabled: false
+
+webhook:
+  enabled: false
+  secret_token: "CHANGE_ME"
+
+meta_controls:
+  enabled: true
+  shadow_mode: true
+  enforce_execution_gates: false

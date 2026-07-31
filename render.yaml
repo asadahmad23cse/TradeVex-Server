@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: tradevex-terminal
+    runtime: python
+    plan: free
+    buildCommand: "pip install --upgrade pip && pip install -r requirements-render.txt"
+    startCommand: "python main.py --mode dashboard --config config.render.yaml"
+    healthCheckPath: "/"
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: HOST
+        value: "0.0.0.0"
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: DASHBOARD_ALLOWED_EMAILS
+        value: ""
+      - key: DASHBOARD_REQUIRE_ACTIVE_SUBSCRIPTION
+        value: "false"
