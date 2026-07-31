@@ -608,17 +608,42 @@ def _open_dashboard_paths() -> set[str]:
     }
 
 
+def _open_dashboard_readonly_prefixes() -> tuple[str, ...]:
+    return (
+        "/api/btc/candles",
+        "/api/btc/markers",
+        "/api/btc/sr-levels",
+        "/api/btc/liquidity-zones",
+        "/api/btc/market-context",
+        "/api/btc/signal",
+        "/api/btc/orderflow",
+        "/api/btc/volume",
+        "/api/btc/volatility",
+        "/api/btc/decision-intelligence",
+        "/api/btc/probability",
+        "/api/btc/execution-plan",
+        "/api/btc/news",
+        "/api/crypto/candles",
+        "/api/crypto/market-context",
+        "/api/crypto/deep-signal",
+    )
+
 class DashboardAuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):  # type: ignore[no-untyped-def]
         if not _auth_enabled():
             return await call_next(request)
         open_paths = _open_dashboard_paths()
+        open_readonly = (
+            request.method.upper() in {"GET", "HEAD", "OPTIONS"}
+            and request.url.path.startswith(_open_dashboard_readonly_prefixes())
+        )
         if (
             request.url.path.startswith("/static")
             or request.url.path.startswith("/webhook")
             or request.url.path == "/api/options-intelligence"
             or request.url.path == "/favicon.ico"
             or request.url.path in open_paths
+            or open_readonly
         ):
             return await call_next(request)
         token = _extract_auth_token(request)
