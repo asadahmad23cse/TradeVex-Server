@@ -5841,6 +5841,7 @@ def _supabase_auth_bootstrap() -> str:
 
   const projectRef = projectRefFromUrl(SUPABASE_URL);
   const storageKey = projectRef ? ("sb-" + projectRef + "-auth-token") : "";
+  const portalForwardKey = "tradevex-terminal-portal-forwarded";
 
   function readStoredToken() {
     if (!storageKey) return "";
@@ -5875,7 +5876,27 @@ def _supabase_auth_bootstrap() -> str:
   }
 
   function shouldForcePortalEntry(handoff) {
-    return window.location.hostname === "terminal.tradevex.live" && !hasCompleteHandoff(handoff);
+    const host = String(window.location.hostname || "").toLowerCase();
+    const isTerminalHost = host === "terminal.tradevex.live" || host.endsWith(".onrender.com");
+    if (!isTerminalHost || hasCompleteHandoff(handoff) || currentToken) return false;
+    try {
+      return sessionStorage.getItem(portalForwardKey) !== "1";
+    } catch (_err) {
+      return true;
+    }
+  }
+
+  function portalEntryUrl() {
+    const portal = new URL("https://tradevex.live/terminal");
+    try {
+      const current = new URL(window.location.href);
+      current.hash = "";
+      current.searchParams.delete("access_token");
+      current.searchParams.delete("refresh_token");
+      current.searchParams.delete("source");
+      portal.searchParams.set("target", current.pathname + current.search);
+    } catch (_err) {}
+    return portal.toString();
   }
 
   function clearHandoffTokens() {
@@ -6156,7 +6177,8 @@ def _supabase_auth_bootstrap() -> str:
       if (shouldForcePortalEntry(handoff)) {
         currentToken = "";
         clearHandoffTokens();
-        setMessage("Please sign in to open the terminal.", true);
+        try { sessionStorage.setItem(portalForwardKey, "1"); } catch (_err) {}
+        window.location.replace(portalEntryUrl());
         return;
       }
       if (handoff.accessToken && handoff.refreshToken) {
