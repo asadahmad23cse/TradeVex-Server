@@ -5924,7 +5924,7 @@ def _supabase_auth_bootstrap() -> str:
     uiReady = true;
     const style = document.createElement("style");
     style.textContent = `
-      .sb-auth-overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:#020617;z-index:2147483647}
+      .sb-auth-overlay{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#020617;z-index:2147483647}
       .sb-auth-card{width:min(420px,92vw);padding:20px;border-radius:14px;border:1px solid rgba(148,163,184,.3);background:#0f172a;color:#e2e8f0;font-family:system-ui,sans-serif}
       .sb-auth-title{font-size:18px;font-weight:700;margin:0 0 8px}
       .sb-auth-sub{font-size:12px;color:#94a3b8;margin:0 0 14px}
@@ -6020,6 +6020,7 @@ def _supabase_auth_bootstrap() -> str:
       </div>
     `);
     document.body.classList.add("sb-auth-locked");
+    setMessage("Opening secure terminal...", false);
   }
 
   function setMessage(msg, isError) {
@@ -6052,7 +6053,12 @@ def _supabase_auth_bootstrap() -> str:
     currentToken = session && session.access_token ? session.access_token : "";
     
     if (!session) {
-      window.location.href = "https://tradevex.live/terminal";
+      if (overlay) overlay.style.display = "flex";
+      if (document.body) document.body.classList.add("sb-auth-locked");
+      if (userChip) userChip.style.display = "none";
+      if (profileOpen) profileOpen.style.display = "none";
+      if (profilePanel) profilePanel.style.display = "none";
+      setMessage("Your terminal session is not available. Please sign in below.", true);
       return;
     }
 
@@ -6063,7 +6069,12 @@ def _supabase_auth_bootstrap() -> str:
         await c.auth.signOut();
       } catch (_err) {}
       currentToken = "";
-      window.location.href = "https://tradevex.live/terminal?error=unauthorized";
+      if (overlay) overlay.style.display = "flex";
+      if (document.body) document.body.classList.add("sb-auth-locked");
+      if (userChip) userChip.style.display = "none";
+      if (profileOpen) profileOpen.style.display = "none";
+      if (profilePanel) profilePanel.style.display = "none";
+      setMessage("This terminal session could not be verified. Please sign in again.", true);
       return;
     }
 
@@ -6081,8 +6092,15 @@ def _supabase_auth_bootstrap() -> str:
     if (supabaseClient) return supabaseClient;
     if (!supabasePromise) {
       supabasePromise = new Promise(function (resolve, reject) {
+        const timeout = window.setTimeout(function () {
+          reject(new Error("Supabase SDK load timed out"));
+        }, 15000);
+        function finish(callback) {
+          window.clearTimeout(timeout);
+          callback();
+        }
         if (window.supabase && typeof window.supabase.createClient === "function") {
-          resolve(window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY));
+          finish(function () { resolve(window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)); });
           return;
         }
         const script = document.createElement("script");
@@ -6090,12 +6108,12 @@ def _supabase_auth_bootstrap() -> str:
         script.async = true;
         script.onload = function () {
           if (!window.supabase || typeof window.supabase.createClient !== "function") {
-            reject(new Error("Supabase SDK unavailable"));
+            finish(function () { reject(new Error("Supabase SDK unavailable")); });
             return;
           }
-          resolve(window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY));
+          finish(function () { resolve(window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY)); });
         };
-        script.onerror = function () { reject(new Error("Failed to load Supabase SDK")); };
+        script.onerror = function () { finish(function () { reject(new Error("Failed to load Supabase SDK")); }); };
         document.head.appendChild(script);
       });
     }
@@ -6112,14 +6130,33 @@ def _supabase_auth_bootstrap() -> str:
       return;
     }
     try {
-      const client = await loadSupabaseClient();
       const handoff = readHandoffTokens();
       if (shouldForcePortalEntry(handoff)) {
-        try { await client.auth.signOut(); } catch (_err) {}
         currentToken = "";
-        window.location.replace("https://tradevex.live/");
+        clearHandoffTokens();
+        setMessage("Please sign in to open the terminal.", true);
         return;
       }
+      if (handoff.accessToken && handoff.refreshToken) {
+        currentToken = handoff.accessToken;
+        clearHandoffTokens();
+        if (await verifyDashboardAccess(currentToken)) {
+          await renderSession({ access_token: currentToken, user: { email: "Authenticated terminal user" } });
+          void loadSupabaseClient().then(function (handoffClient) {
+            return handoffClient.auth.setSession({
+              access_token: handoff.accessToken,
+              refresh_token: handoff.refreshToken,
+            });
+          }).catch(function (err) { console.warn("Terminal session persistence unavailable", err); });
+          return;
+        }
+        currentToken = "";
+        setMessage("This secure terminal link has expired. Please sign in again.", true);
+      } else if (handoff.accessToken || handoff.refreshToken) {
+        clearHandoffTokens();
+        setMessage("Incomplete terminal handoff. Please sign in again.", true);
+      }
+      const client = await loadSupabaseClient();
       if (handoff.accessToken || handoff.refreshToken) {
         if (handoff.accessToken && handoff.refreshToken) {
           const handoffRes = await client.auth.setSession({
@@ -6359,7 +6396,10 @@ def _supabase_auth_bootstrap() -> str:
         void renderSession(session);
       });
     } catch (err) {
-      setMessage("Supabase auth init failed.", true);
+      const overlay = document.getElementById("sb-auth-overlay");
+      if (overlay) overlay.style.display = "flex";
+      if (document.body) document.body.classList.add("sb-auth-locked");
+      setMessage("Terminal sign-in could not start. Please reload and try again.", true);
       console.error(err);
     }
   }
