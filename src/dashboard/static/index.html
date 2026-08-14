@@ -8644,7 +8644,7 @@ async function loadSignal(){
     openTradeSignal = "LONG";
     const [signalRes, historyRes, intelRes] = await Promise.allSettled([
       fetchJSON(`/api/btc/signal?interval=${encodeURIComponent(sourceTF)}`, { ttlMs: 5000, timeoutMs: 60000 }),
-      fetchJSON('/api/btc/signal/history?limit=20', { noCache: true, ttlMs: 0, timeoutMs: 8000 }),
+      fetchJSON('/api/btc/signal/history?limit=20', { noCache: true, ttlMs: 0, timeoutMs: 30000 }),
       fetchJSON(`/api/btc/decision-intelligence?interval=${encodeURIComponent(sourceTF)}`, { ttlMs: 9000, timeoutMs: 60000 }),
     ]);
 
@@ -9190,7 +9190,7 @@ function bindExportCsv(){
 async function loadSignalHistory(){
   try{
     const symbol = encodeURIComponent(ptActiveSymbol());
-    const historyData = await fetchJSON(`/api/btc/signal/history?limit=200&symbol=${symbol}`, { noCache: true, ttlMs: 0, timeoutMs: 9000 });
+    const historyData = await fetchJSON(`/api/btc/signal/history?limit=200&symbol=${symbol}`, { noCache: true, ttlMs: 0, timeoutMs: 30000 });
     const signals = Array.isArray(historyData) ? historyData : Array.isArray(historyData?.signals) ? historyData.signals : [];
     latestHistoryStats = (historyData && typeof historyData === "object" && !Array.isArray(historyData) && historyData.stats && typeof historyData.stats === "object")
       ? historyData.stats
