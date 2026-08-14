@@ -352,6 +352,35 @@ async def _verify_supabase_profile_access(conf: dict[str, str], token: str, user
         return False
 
 
+def _verify_supabase_jwt_via_jwks(conf: dict[str, str], token: str) -> tuple[str, str] | None:
+    """Verify an asymmetric Supabase access token without trusting its payload."""
+    if not _JWT or jwt is None:
+        return None
+    try:
+        header = jwt.get_unverified_header(token)
+        algorithm = str(header.get("alg") or "")
+        if algorithm not in {"RS256", "ES256", "ES384", "EdDSA"} or not header.get("kid"):
+            return None
+        jwks_url = f"{conf['url']}/auth/v1/.well-known/jwks.json"
+        signing_key = jwt.PyJWKClient(jwks_url, cache_jwk_set=True, lifespan=300).get_signing_key_from_jwt(token)
+        claims = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=[algorithm],
+            audience="authenticated",
+            issuer=f"{conf['url']}/auth/v1",
+            leeway=30,
+        )
+        user_id = str(claims.get("sub") or "").strip()
+        email = str(claims.get("email") or "").strip().lower()
+        if not user_id:
+            return None
+        return user_id, email
+    except Exception as exc:
+        logger.info("Supabase JWKS token verification failed: %s", exc)
+        return None
+
+
 def _email_from_jwt_unverified(token: str) -> str:
     try:
         parts = str(token or "").split(".")
@@ -423,11 +452,19 @@ async def _verify_supabase_token(token: str) -> bool:
                     "apikey": conf["anon_key"],
                 },
             )
-        if res.status_code != 200:
-            return False
-        payload = res.json() if res.content else {}
-        user_id = str(payload.get("id") or "")
-        email = str(payload.get("email") or "").strip().lower()
+        if res.status_code == 200:
+            payload = res.json() if res.content else {}
+            user_id = str(payload.get("id") or "")
+            email = str(payload.get("email") or "").strip().lower()
+        else:
+            # Some Supabase deployments reject /auth/v1/user even after a
+            # successful browser sign-in.  Accept only a JWT whose signature,
+            # issuer, audience and expiry verify against the project's JWKS.
+            verified = _verify_supabase_jwt_via_jwks(conf, token)
+            if verified is None:
+                logger.info("Supabase user verification rejected token: status=%s", res.status_code)
+                return False
+            user_id, email = verified
         if not email:
             email = _email_from_jwt_unverified(token)
         if not user_id:
