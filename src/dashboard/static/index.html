@@ -8214,7 +8214,9 @@ async function loadCandles(noCache = false){
   const limit = computeCandleLimit(activeTF, activeRange);
   const resolvedRange = resolveRange(activeRange, activeTF);
   const url = `/api/btc/candles?interval=${encodeURIComponent(sourceTF)}&limit=${limit}`;
-  const json = await fetchJSON(url, { ttlMs: 15000, timeoutMs: 9000, noCache });
+  // A cold Render request can first receive Binance's geo-block response and
+  // then fall back to Coinbase.  Give that safe fallback time to complete.
+  const json = await fetchJSON(url, { ttlMs: 15000, timeoutMs: 30000, noCache });
   if(!json) throw new Error("candles fetch failed");
   const data=(json.data||[]).map(d=>({
     time:Number(d.time),

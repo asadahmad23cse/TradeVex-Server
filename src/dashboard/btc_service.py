@@ -111,6 +111,7 @@ class BitcoinMarketService:
         self._recent_cache = TTLCache()
         self._signal_cache = TTLCache()
         self._marker_cache = TTLCache()
+        self._binance_blocked_until = 0.0
 
         self._engineer = FeatureEngineer()
         self._alpha = AlphaFactorModel(
@@ -233,8 +234,11 @@ class BitcoinMarketService:
         cached = self._recent_cache.get(cache_key)
         if cached is not None:
             return cached
-        rows = self._fetch_klines(interval=interval, limit=limit)
-        df = self._klines_to_df(rows)
+        if _time.time() < self._binance_blocked_until:
+            df = self._fetch_coinbase_recent_frame(interval=interval, limit=limit)
+        else:
+            rows = self._fetch_klines(interval=interval, limit=limit)
+            df = self._klines_to_df(rows)
         if df.empty:
             df = self._fetch_coinbase_recent_frame(interval=interval, limit=limit)
         if df.empty:
@@ -1422,6 +1426,10 @@ class BitcoinMarketService:
                     timeout=BINANCE_HTTP_TIMEOUT_SECONDS,
                     verify=False,
                 )
+            if resp.status_code == 451:
+                # Render's current region is blocked by Binance.  Avoid making
+                # every chart and signal request wait for the same rejection.
+                self._binance_blocked_until = _time.time() + 300.0
             resp.raise_for_status()
             data = resp.json()
             return data if isinstance(data, list) else []
