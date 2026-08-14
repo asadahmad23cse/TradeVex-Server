@@ -3110,6 +3110,28 @@ async def btc_decision_intelligence_proxy(interval: str = Query("15m"), symbol: 
         return normalized
 
     iv = interval if interval in INTERVAL_TO_MS else "15m"
+    # Render hosts only run this dashboard process; the old Hetzner-side
+    # intelligence process at :9000 is not available there.  Build a safe,
+    # explicitly-degraded decision payload from the in-process signal first
+    # instead of spending the frontend timeout on an unreachable localhost.
+    if _btc_service is not None:
+        try:
+            live_sig = _btc_service.get_realtime_signal(interval=iv)
+            if isinstance(live_sig, dict) and (
+                live_sig.get("signal") is not None
+                or "confidence" in live_sig
+                or isinstance(live_sig.get("probability"), dict)
+            ):
+                payload = _minimal_decision_intelligence_from_signal(
+                    live_sig,
+                    source="dashboard_signal_fallback",
+                    stale=False,
+                    degraded=True,
+                )
+                return _normalize_decision_intelligence_payload(payload)
+        except Exception as exc:
+            logger.warning("decision-intelligence in-process fallback failed: %s", exc)
+
     payload = await _btc_proxy_payload(
         name="decision_intelligence",
         redis_key=["btc:intelligence", "btc:decision", "btc:signal"],

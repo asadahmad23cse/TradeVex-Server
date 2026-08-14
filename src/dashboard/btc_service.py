@@ -76,9 +76,11 @@ SHORT_SETUP_TP3_PCT = 0.0140
 OI_EXTREME_NEG_DELTA_PCT = -2.0
 
 BINANCE_REST = "https://api.binance.com"
+COINBASE_CANDLES_URL = "https://api.exchange.coinbase.com/products/BTC-USD/candles"
 BTC_SYMBOL = "BTCUSDT"
 BINANCE_BTC_EARLIEST_MS = 1502942400000  # 2017-08-17T04:00:00Z approx listing start
 BINANCE_HTTP_TIMEOUT_SECONDS = 6
+COINBASE_HTTP_TIMEOUT_SECONDS = 6
 
 INTERVAL_TO_MS = {
     "1m": 60_000,
@@ -233,6 +235,8 @@ class BitcoinMarketService:
             return cached
         rows = self._fetch_klines(interval=interval, limit=limit)
         df = self._klines_to_df(rows)
+        if df.empty:
+            df = self._fetch_coinbase_recent_frame(interval=interval, limit=limit)
         if df.empty:
             df = self._fetch_yfinance_recent_frame(interval=interval, limit=limit)
         self._recent_cache.set(cache_key, df, ttl_seconds=8)
@@ -1424,6 +1428,62 @@ class BitcoinMarketService:
         except Exception as exc:
             logger.warning("Binance klines fetch failed: %s", exc)
             return []
+
+    def _fetch_coinbase_recent_frame(self, interval: str, limit: int = 1000) -> pd.DataFrame:
+        """Fallback OHLCV feed for hosts where Binance blocks server-side traffic."""
+        granularity_by_interval = {
+            "1m": 60,
+            "3m": 300,
+            "5m": 300,
+            "15m": 900,
+            "30m": 900,
+            "1h": 3600,
+            "2h": 21600,
+            "4h": 21600,
+            "6h": 21600,
+            "8h": 21600,
+            "12h": 21600,
+            "1d": 86400,
+            "3d": 86400,
+            "1w": 86400,
+            "1M": 86400,
+        }
+        granularity = granularity_by_interval.get(interval, 900)
+        try:
+            response = self._session.get(
+                COINBASE_CANDLES_URL,
+                params={"granularity": granularity},
+                headers={"User-Agent": "TradeVex market-data fallback/1.0"},
+                timeout=COINBASE_HTTP_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            rows = response.json()
+            if not isinstance(rows, list):
+                return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+            records: list[dict[str, Any]] = []
+            for row in rows:
+                if not isinstance(row, list) or len(row) < 6:
+                    continue
+                try:
+                    records.append(
+                        {
+                            "time": pd.to_datetime(int(row[0]), unit="s", utc=True),
+                            "Low": float(row[1]),
+                            "High": float(row[2]),
+                            "Open": float(row[3]),
+                            "Close": float(row[4]),
+                            "Volume": float(row[5]),
+                        }
+                    )
+                except (TypeError, ValueError, OverflowError):
+                    continue
+            if not records:
+                return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+            frame = pd.DataFrame(records).drop_duplicates(subset=["time"]).set_index("time").sort_index()
+            return frame[["Open", "High", "Low", "Close", "Volume"]].tail(min(max(1, limit), 300))
+        except Exception as exc:
+            logger.warning("Coinbase candle fallback failed: %s", exc)
+            return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
 
     @staticmethod
     def _fetch_yfinance_recent_frame(interval: str, limit: int = 1000) -> pd.DataFrame:
